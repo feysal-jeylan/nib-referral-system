@@ -4,8 +4,9 @@
  * Router for all /api/agents endpoints.
  *
  * Current endpoints:
+ *   GET  /api/agents          — List all agents with referral stats and reward tier.
  *   POST /api/agents          — Create a new agent.
- *   GET  /api/agents/:id/stats — Get an agent's referral count and current reward tier.
+ *   GET  /api/agents/:id/stats — Get a single agent's referral count and reward tier.
  *
  * Per RULES.md:
  *   - All inputs are validated server-side before touching the database.
@@ -19,6 +20,93 @@ const express = require('express');
 const pool    = require('../db');
 
 const router = express.Router();
+
+// ---------------------------------------------------------------------------
+// GET /api/agents
+// Return every agent together with their SUCCESSFUL referral count
+// and the highest reward tier they currently qualify for.
+//
+// Success response — 200 OK (array, newest agent first):
+//   [
+//     {
+//       "id":                  1,
+//       "name":                "Abebe Kebede",
+//       "referral_code":       "NIB-X7KP2A",
+//       "successful_referrals": 4,
+//       "current_reward":       "Bronze"
+//     },
+//     ...
+//   ]
+//
+// Error responses:
+//   500 Server Error — unexpected DB failure
+// ---------------------------------------------------------------------------
+router.get('/', async (req, res, next) => {
+  try {
+    // This single query does everything in one round-trip:
+    //
+    // 1. For each agent (LEFT JOIN so agents with zero referrals appear too),
+    //    COUNT only the referral rows where status = 'SUCCESSFUL'.
+    //    The FILTER clause is a conditional aggregate — it counts a row only
+    //    when the WHERE condition is true. Equivalent to:
+    //      COUNT(CASE WHEN r.status = 'SUCCESSFUL' THEN 1 END)
+    //
+    // 2. Find the highest qualifying reward tier with a correlated subquery:
+    //    MAX(min_referrals) WHERE min_referrals <= successful_count
+    //    then LEFT JOIN reward_rules on that threshold to get the reward_name.
+    //    LEFT JOIN means the row is still returned with reward_name = NULL
+    //    when no tier is met (0 successful referrals).
+    //
+    // GROUP BY a.id groups one result row per agent so COUNT operates per-agent.
+    // ORDER BY a.created_at DESC shows newest agents first.
+    // We use a derived table (sub) so that the per-agent SUCCESSFUL count is
+    // computed once and can be referenced cleanly in the LEFT JOIN.
+    // PostgreSQL does not allow referencing an aggregate from the same SELECT
+    // level inside a subquery of that same SELECT, so we must materialise it
+    // in an inner query first — identical to the /:id/stats pattern.
+    const result = await pool.query(`
+      SELECT
+        sub.id,
+        sub.name,
+        sub.referral_code,
+        sub.successful_count,
+        rr.reward_name AS current_reward
+      FROM (
+        SELECT
+          a.id,
+          a.name,
+          a.referral_code,
+          a.created_at,
+          COUNT(r.id) FILTER (WHERE r.status = 'SUCCESSFUL') AS successful_count
+        FROM agents a
+        LEFT JOIN referrals r ON r.agent_id = a.id
+        GROUP BY a.id, a.name, a.referral_code, a.created_at
+      ) sub
+      LEFT JOIN reward_rules rr
+        ON rr.min_referrals = (
+          SELECT MAX(min_referrals)
+          FROM   reward_rules
+          WHERE  min_referrals <= sub.successful_count
+        )
+      ORDER BY sub.created_at DESC
+    `);
+
+    const agents = result.rows.map(row => ({
+      id:                   row.id,
+      name:                 row.name,
+      referral_code:        row.referral_code,
+      // COUNT returns a PG bigint which arrives as a string — coerce to number.
+      successful_referrals: parseInt(row.successful_count, 10),
+      current_reward:       row.current_reward ?? null,
+    }));
+
+    return res.status(200).json(agents);
+
+  } catch (err) {
+    console.error('[GET /api/agents] Unexpected DB error:', err.message);
+    next(err);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Helper: generate a unique referral code in the format NIB-XXXXXX
