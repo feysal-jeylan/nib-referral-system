@@ -4,7 +4,8 @@
  * Router for all /api/referrals endpoints.
  *
  * Current endpoints:
- *   POST /api/referrals  — Register a new customer referral using an agent's code.
+ *   POST  /api/referrals           — Register a new customer referral using an agent's code.
+ *   PATCH /api/referrals/:id/status — Update the status of an existing referral.
  *
  * Per RULES.md:
  *   - All inputs are validated server-side before touching the database.
@@ -183,6 +184,106 @@ router.post('/', async (req, res, next) => {
     // This runs whether we committed, rolled back, or threw an error.
     // Without this, the pool leaks connections and will eventually hang.
     client.release();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/referrals/:id/status
+// Update the status of an existing referral.
+//
+// URL parameter:
+//   :id  — the integer primary key of the referral row to update.
+//
+// Request body (JSON):
+//   { "status": "SUCCESSFUL" }   or   { "status": "REJECTED" }
+//
+// Success response — 200 OK:
+//   {
+//     "referral_id": 7,
+//     "agent_id":    3,
+//     "customer_id": 12,
+//     "status":      "SUCCESSFUL",
+//     "created_at":  "2026-10-25T08:00:00.000Z"
+//   }
+//
+// Error responses:
+//   400 Bad Request — status is missing or not one of the allowed values
+//   404 Not Found   — no referral row exists with the given :id
+//   500 Server Error — unexpected DB failure
+// ---------------------------------------------------------------------------
+router.patch('/:id/status', async (req, res, next) => {
+  // ── Step 1: Parse and validate the URL parameter ──────────────────────────
+  // parseInt() converts the string ':id' from the URL into an integer.
+  // If the user passes something like '/abc/status', parseInt returns NaN,
+  // which we catch immediately to avoid passing garbage to the DB.
+  const referralId = parseInt(req.params.id, 10);
+
+  if (isNaN(referralId)) {
+    return res.status(400).json({
+      error: 'Referral ID must be a valid integer.',
+      code:  'INVALID_ID',
+    });
+  }
+
+  // ── Step 2: Validate the status value ────────────────────────────────────
+  //
+  // Our schema has a CHECK constraint that only allows 'PENDING', 'SUCCESSFUL',
+  // or 'REJECTED'. We also whitelist at the application layer for two reasons:
+  //   1. It lets us return a clear 400 instead of a raw constraint-violation error.
+  //   2. It keeps the API contract explicit — callers cannot set status to 'PENDING'
+  //      (that is set automatically on creation).
+  //
+  // Using an array + includes() makes it trivial to add more statuses later.
+  const ALLOWED_STATUSES = ['SUCCESSFUL', 'REJECTED'];
+  const status = req.body.status?.trim().toUpperCase();
+
+  if (!status || !ALLOWED_STATUSES.includes(status)) {
+    return res.status(400).json({
+      error: `status must be one of: ${ALLOWED_STATUSES.join(', ')}.`,
+      code:  'INVALID_STATUS',
+    });
+  }
+
+  // ── Step 3: Run the UPDATE query ─────────────────────────────────────────
+  //
+  // UPDATE ... WHERE id = $2 — we only touch the one row identified by :id.
+  // RETURNING lets us send the full updated record back in one round-trip,
+  // without needing a second SELECT.
+  //
+  // This is a single-table write, so no transaction is needed here.
+  try {
+    const result = await pool.query(
+      `UPDATE referrals
+       SET    status = $1
+       WHERE  id     = $2
+       RETURNING id, agent_id, customer_id, status, created_at`,
+      [status, referralId]
+    );
+
+    // ── Step 4: Check if the row actually existed ─────────────────────────
+    //
+    // If rowCount === 0, the UPDATE ran successfully but matched no rows —
+    // meaning there is no referral with that id. We return 404, not 500.
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        error: `Referral with id ${referralId} not found.`,
+        code:  'REFERRAL_NOT_FOUND',
+      });
+    }
+
+    const updated = result.rows[0];
+
+    return res.status(200).json({
+      referral_id: updated.id,
+      agent_id:    updated.agent_id,
+      customer_id: updated.customer_id,
+      status:      updated.status,
+      created_at:  updated.created_at,
+    });
+
+  } catch (err) {
+    console.error('[PATCH /api/referrals/:id/status] Unexpected DB error:', err.message);
+    next(err);
   }
 });
 

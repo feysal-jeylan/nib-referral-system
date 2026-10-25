@@ -4,7 +4,8 @@
  * Router for all /api/agents endpoints.
  *
  * Current endpoints:
- *   POST /api/agents  — Create a new agent (this file handles the path after /api/agents)
+ *   POST /api/agents          — Create a new agent.
+ *   GET  /api/agents/:id/stats — Get an agent's referral count and current reward tier.
  *
  * Per RULES.md:
  *   - All inputs are validated server-side before touching the database.
@@ -125,6 +126,113 @@ router.post('/', async (req, res, next) => {
     // For any other unexpected DB error, log it server-side and pass to
     // the global error handler in index.js. The client gets a safe 500.
     console.error('[POST /api/agents] Unexpected DB error:', err.message);
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/agents/:id/stats
+// Return an agent's SUCCESSFUL referral count and current reward tier.
+//
+// URL parameter:
+//   :id  — the integer primary key of the agent.
+//
+// Success response — 200 OK:
+//   {
+//     "agent_id":             1,
+//     "successful_referrals": 4,
+//     "current_reward":       "Bronze"   // null when 0 qualifying referrals
+//   }
+//
+// Error responses:
+//   400 Bad Request  — :id is not a valid integer
+//   404 Not Found    — no agent exists with that id
+//   500 Server Error — unexpected DB failure
+// ---------------------------------------------------------------------------
+router.get('/:id/stats', async (req, res, next) => {
+  // ── Step 1: Parse and validate the URL parameter ──────────────────────────
+  const agentId = parseInt(req.params.id, 10);
+
+  if (isNaN(agentId)) {
+    return res.status(400).json({
+      error: 'Agent ID must be a valid integer.',
+      code:  'INVALID_ID',
+    });
+  }
+
+  try {
+    // ── Step 2: Verify the agent exists ─────────────────────────────────
+    //
+    // We check the agents table first so we can return a meaningful 404 if
+    // the agent does not exist, rather than just returning 0 successful referrals
+    // (which would be misleading for a non-existent agent).
+    const agentCheck = await pool.query(
+      'SELECT id, name FROM agents WHERE id = $1',
+      [agentId]
+    );
+
+    if (agentCheck.rows.length === 0) {
+      return res.status(404).json({
+        error: `Agent with id ${agentId} not found.`,
+        code:  'AGENT_NOT_FOUND',
+      });
+    }
+
+    // ── Step 3: Count SUCCESSFUL referrals and find the top reward tier ────
+    //
+    // This single query does two things at once:
+    //
+    // Part A — COUNT(r.id) FILTER (WHERE r.status = 'SUCCESSFUL')
+    //   Counts only the rows where status = 'SUCCESSFUL'. The FILTER clause
+    //   is a PostgreSQL shorthand for a conditional aggregate; it is equivalent
+    //   to COUNT(CASE WHEN r.status = 'SUCCESSFUL' THEN 1 END).
+    //   We alias it as "successful_count" for use in the JOIN below.
+    //
+    // Part B — LEFT JOIN reward_rules rr ON rr.min_referrals <= successful_count
+    //   Joins every reward tier whose minimum threshold is <= the agent's count.
+    //   For example, if count = 4:
+    //     Bronze  (min 3)  ✔ qualifies  → joined
+    //     Silver  (min 5)  ✖ too high   → not joined
+    //     Gold    (min 10) ✖ too high   → not joined
+    //   This gives us potentially multiple matching rows, so we use MAX() on
+    //   min_referrals to pick only the highest qualifying tier.
+    //
+    // LEFT JOIN ensures we still get a row back (with reward_name = NULL)
+    // when the agent has 0 successful referrals and qualifies for nothing.
+    //
+    // Using a subquery (the inner SELECT) lets us reference successful_count
+    // in the JOIN condition, which is not possible when it is just a column alias
+    // in the outer SELECT.
+    const statsResult = await pool.query(
+      `SELECT
+         sub.successful_count,
+         rr.reward_name        AS current_reward
+       FROM (
+         SELECT COUNT(r.id) FILTER (WHERE r.status = 'SUCCESSFUL') AS successful_count
+         FROM   referrals r
+         WHERE  r.agent_id = $1
+       ) sub
+       LEFT JOIN reward_rules rr
+         ON  rr.min_referrals = (
+           SELECT MAX(min_referrals)
+           FROM   reward_rules
+           WHERE  min_referrals <= sub.successful_count
+         )`,
+      [agentId]
+    );
+
+    const row = statsResult.rows[0];
+
+    return res.status(200).json({
+      agent_id:             agentId,
+      // COUNT() in PostgreSQL returns a string (bigint). Coerce to a JS number.
+      successful_referrals: parseInt(row.successful_count, 10),
+      // LEFT JOIN returns NULL when no tier qualifies; surface that as null.
+      current_reward:       row.current_reward ?? null,
+    });
+
+  } catch (err) {
+    console.error('[GET /api/agents/:id/stats] Unexpected DB error:', err.message);
     next(err);
   }
 });
