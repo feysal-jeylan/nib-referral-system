@@ -14,10 +14,13 @@
 
 'use strict';
 
-const express = require('express');
-const helmet  = require('helmet');
-const cors    = require('cors');
+const express      = require('express');
+const helmet       = require('helmet');
+const cors         = require('cors');
 require('dotenv').config();
+
+// ─── Route Imports ────────────────────────────────────────────────────────────
+const agentsRouter = require('./routes/agents');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -53,9 +56,10 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// TODO: Mount feature routers here as they are built.
-// Example: app.use('/api/agents',   require('./routes/agents'));
-//          app.use('/api/referrals', require('./routes/referrals'));
+// Mount feature routers.
+// Each router handles all sub-routes under its prefix.
+app.use('/api/agents', agentsRouter);
+// Future: app.use('/api/referrals', referralsRouter);
 
 // ─── Error Handling Middleware ─────────────────────────────────────────────────
 /**
