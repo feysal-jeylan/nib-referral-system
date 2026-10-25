@@ -3,20 +3,39 @@
  * ─────────────────────────
  * Nib International Bank — Internal Referral Dashboard
  *
+ * Auth integration:
+ *   - useAuth() provides { user, loading, logout } from AuthContext.
+ *   - If loading: show full-page spinner (prevents login-screen flash).
+ *   - If user is null: render <Login /> (not authenticated).
+ *   - If user exists: render the full dashboard.
+ *
+ * Security: EVERY fetch call includes `credentials: 'include'` so the
+ * browser attaches the HttpOnly JWT cookie automatically. No token is
+ * ever stored in JavaScript — it lives only in the browser's cookie jar.
+ *
  * Sections:
  *   1. Primitive UI components (Toast, StatusPill, RewardBadge, Spinner)
  *   2. AgentForm       — register a new agent (POST /api/agents)
  *   3. AgentTable      — shows all agents with reward tier
  *   4. ReferralForm    — register a new referral (POST /api/referrals)
  *   5. ReferralTable   — shows all referrals with approve/reject actions
- *   6. App (root)      — orchestrates state, data fetching, toasts
+ *   6. App (root)      — auth gate, orchestrates state, data fetching, toasts
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
+import './Login.css';
+import { useAuth } from './AuthContext';
+import Login from './Login';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const API = '/api'; // Vite dev-proxy rewrites /api → http://localhost:3000
+
+// ─── Shared fetch options — ALWAYS include credentials ───────────────────────
+// credentials: 'include' tells the browser to attach all cookies (including
+// the HttpOnly JWT token) to every request. Without this, the API returns 401.
+// We define it once here and spread it into every fetch() call below.
+const FETCH_OPTS = { credentials: 'include' };
 
 // ─── Reward badge metadata ────────────────────────────────────────────────────
 const REWARD_META = {
@@ -84,10 +103,16 @@ function AgentForm({ onCreated, onToast }) {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(form),
+        ...FETCH_OPTS,  // credentials: 'include' — sends the HttpOnly JWT cookie
       });
       const data = await res.json();
 
       if (!res.ok) {
+        // 401/403 means the session expired while the user was on the page
+        if (res.status === 401 || res.status === 403) {
+          onToast({ type: 'error', message: '🔒 Your session has expired. Please log in again.' });
+          return;
+        }
         const msg = res.status === 409
           ? '⚠️ An agent with this phone number or email already exists.'
           : (data.error ?? 'Something went wrong. Please try again.');
@@ -206,10 +231,15 @@ function ReferralForm({ onCreated, onToast }) {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(form),
+        ...FETCH_OPTS,  // credentials: 'include' — sends the HttpOnly JWT cookie
       });
       const data = await res.json();
 
       if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          onToast({ type: 'error', message: '🔒 Your session has expired. Please log in again.' });
+          return;
+        }
         let msg;
         if (res.status === 404) msg = '⚠️ Invalid referral code — no agent found with that code.';
         else if (res.status === 409) msg = '⚠️ A customer with this phone number is already registered.';
@@ -352,6 +382,9 @@ function ReferralTable({ referrals, loading, onStatusChange }) {
 
 // ─── 6. App (root) ────────────────────────────────────────────────────────────
 export default function App() {
+  // ── Auth state from context ──────────────────────────────────────────────
+  const { user, loading, logout } = useAuth();
+
   const [agents,     setAgents]     = useState([]);
   const [referrals,  setReferrals]  = useState([]);
   const [agentsLoading,    setAgentsLoading]    = useState(true);
@@ -359,13 +392,70 @@ export default function App() {
   const [toast,      setToast]      = useState(null);
   const toastTimer = useRef(null);
 
+  // ── Gate 1: Auth loading — show spinner while /api/auth/me is in-flight ──
+  //
+  // Without this, React would render the <Login /> screen for a brief moment
+  // on every page refresh, even for users with a valid session cookie.
+  // This "flash" would be confusing and looks broken. The spinner prevents it.
+  if (loading) {
+    return (
+      <div className="auth-loading" role="status" aria-label="Checking authentication…">
+        <div className="auth-loading__spinner" aria-hidden="true" />
+        <p className="auth-loading__text">Verifying session…</p>
+      </div>
+    );
+  }
+
+  // ── Gate 2: Not authenticated — show the login screen ───────────────────
+  if (!user) {
+    return <Login />;
+  }
+
+  // ── Gate 3: Authenticated — render the dashboard (below) ────────────────
+  // (The rest of the component only runs when user is not null)
+
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return <Dashboard
+    user={user}
+    logout={logout}
+    agents={agents}
+    setAgents={setAgents}
+    referrals={referrals}
+    setReferrals={setReferrals}
+    agentsLoading={agentsLoading}
+    setAgentsLoading={setAgentsLoading}
+    referralsLoading={referralsLoading}
+    setReferralsLoading={setReferralsLoading}
+    toast={toast}
+    setToast={setToast}
+    toastTimer={toastTimer}
+  />;
+}
+
+// ─── Dashboard — only rendered when the user is authenticated ────────────────
+//
+// Extracted into its own component so all its hooks run unconditionally
+// (React rules of hooks forbid calling hooks after an early return).
+function Dashboard({
+  user, logout,
+  agents, setAgents,
+  referrals, setReferrals,
+  agentsLoading, setAgentsLoading,
+  referralsLoading, setReferralsLoading,
+  toast, setToast, toastTimer,
+}) {
   // ── Data loading ────────────────────────────────────────────────────────────
+  //
+  // credentials: 'include' is spread from FETCH_OPTS onto every fetch call.
+  // This attaches the HttpOnly cookie so the server can authenticate the request.
+  // Without it, all fetches return 401 because the browser strips cookies
+  // from cross-origin requests by default.
   useEffect(() => {
     async function load() {
       try {
         const [aRes, rRes] = await Promise.all([
-          fetch(`${API}/agents`),
-          fetch(`${API}/referrals`),
+          fetch(`${API}/agents`,    FETCH_OPTS),  // credentials: 'include'
+          fetch(`${API}/referrals`, FETCH_OPTS),  // credentials: 'include'
         ]);
         const [aData, rData] = await Promise.all([aRes.json(), rRes.json()]);
         setAgents(Array.isArray(aData) ? aData : []);
@@ -378,6 +468,7 @@ export default function App() {
       }
     }
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Toast ───────────────────────────────────────────────────────────────────
@@ -397,12 +488,13 @@ export default function App() {
   // but not the joined names. Reload the full referral list to get everything.
   const handleReferralCreated = useCallback(async () => {
     try {
-      const res  = await fetch(`${API}/referrals`);
+      const res  = await fetch(`${API}/referrals`, FETCH_OPTS); // credentials: 'include'
       const data = await res.json();
       setReferrals(Array.isArray(data) ? data : []);
     } catch {
       showToast({ type: 'error', message: '🔴 Could not refresh referrals.' });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Status update (Approve / Reject) ─────────────────────────────────────────
@@ -412,6 +504,7 @@ export default function App() {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ status: newStatus }),
+        ...FETCH_OPTS,  // credentials: 'include'
       });
 
       if (!res.ok) {
@@ -428,7 +521,7 @@ export default function App() {
       // After a SUCCESSFUL status change, the agent's reward tier might have
       // changed — reload agents list to reflect updated counts and badges.
       if (newStatus === 'SUCCESSFUL') {
-        const aRes  = await fetch(`${API}/agents`);
+        const aRes  = await fetch(`${API}/agents`, FETCH_OPTS); // credentials: 'include'
         const aData = await aRes.json();
         setAgents(Array.isArray(aData) ? aData : []);
       }
@@ -439,6 +532,12 @@ export default function App() {
     } catch {
       showToast({ type: 'error', message: '🔴 Cannot reach the server.' });
     }
+  }
+
+  // ── Handle logout ─────────────────────────────────────────────────────────
+  async function handleLogout() {
+    await logout(); // Calls POST /api/auth/logout to clear the HttpOnly cookie
+    // AuthContext sets user=null → App re-renders → <Login /> is shown
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -455,7 +554,22 @@ export default function App() {
               <p className="app-header__subtitle">Internal Referral Management System</p>
             </div>
           </div>
-          <span className="app-header__tag">MVP · v1.0</span>
+
+          {/* ── Right side: user info + logout ─────────────────────────── */}
+          <div className="header-user">
+            <div className="header-user__info">
+              <p className="header-user__name">{user.username}</p>
+              <p className="header-user__role">{user.role}</p>
+            </div>
+            <button
+              id="logout-btn"
+              className="btn--logout"
+              onClick={handleLogout}
+              aria-label="Sign out"
+            >
+              ↩ Sign Out
+            </button>
+          </div>
         </div>
       </header>
 

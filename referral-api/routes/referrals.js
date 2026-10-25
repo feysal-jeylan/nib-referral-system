@@ -19,6 +19,7 @@
 
 const express = require('express');
 const pool    = require('../db');
+const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
@@ -96,7 +97,8 @@ router.get('/', async (req, res, next) => {
 //   409 Conflict     — customer phone number is already registered (PG code 23505)
 //   500 Server Error — unexpected DB failure (details logged server-side only)
 // ---------------------------------------------------------------------------
-router.post('/', async (req, res, next) => {
+// POST /api/referrals — ADMIN only: register a new customer referral.
+router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
   // ── Step 1: Extract and trim inputs ──────────────────────────────────────
   // Trimming rejects whitespace-only values (e.g. "   " is treated as empty).
   const referralCode  = req.body.referral_code?.trim();
@@ -259,7 +261,8 @@ router.post('/', async (req, res, next) => {
 //   404 Not Found   — no referral row exists with the given :id
 //   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
-router.patch('/:id/status', async (req, res, next) => {
+// PATCH /api/referrals/:id/status — ADMIN only: update a referral's status.
+router.patch('/:id/status', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
   // ── Step 1: Parse and validate the URL parameter ──────────────────────────
   // parseInt() converts the string ':id' from the URL into an integer.
   // If the user passes something like '/abc/status', parseInt returns NaN,

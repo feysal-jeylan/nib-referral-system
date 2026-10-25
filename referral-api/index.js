@@ -4,12 +4,16 @@
  * Entry point for the Nib Bank Referral System Express server.
  *
  * What each middleware does (for your report):
- *  - helmet   : Sets secure HTTP headers automatically (e.g., hides "X-Powered-By: Express").
- *  - cors     : Allows only the React dev server to call this API. Requests from any
- *               other origin are blocked by the browser — a basic CORS security layer.
- *  - express.json() : Parses incoming JSON request bodies so we can read req.body.
+ *  - helmet        : Sets secure HTTP headers automatically (e.g., hides "X-Powered-By: Express").
+ *  - cors          : Allows only the React dev server to call this API (with credentials).
+ *                    'credentials: true' is required for the browser to send/receive cookies
+ *                    on cross-origin requests (Vite on :5173 → API on :3000).
+ *  - cookieParser  : Parses the Cookie header so req.cookies.token is available to middleware.
+ *                    Without this, req.cookies is undefined and the JWT cannot be read.
+ *  - express.json(): Parses incoming JSON request bodies so we can read req.body.
  *
- * NOTE: This is a PROTOTYPE. Authentication is pending supervisor approval (see RULES.md §3).
+ * Authentication: JWT stored in an HttpOnly, SameSite=Strict cookie.
+ * See routes/auth.js and middleware/authMiddleware.js for full details.
  */
 
 'use strict';
@@ -17,11 +21,13 @@
 const express      = require('express');
 const helmet       = require('helmet');
 const cors         = require('cors');
+const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
 // ─── Route Imports ────────────────────────────────────────────────────────────
-const agentsRouter   = require('./routes/agents');
+const agentsRouter    = require('./routes/agents');
 const referralsRouter = require('./routes/referrals');
+const authRouter      = require('./routes/auth');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -33,11 +39,23 @@ app.use(helmet());
 
 // cors() restricts which origins can call this API.
 // Per RULES.md §3, we lock it to the Vite dev server URL only.
+//
+// credentials: true — REQUIRED for the browser to send cookies on cross-origin
+//   requests (Vite :5173 → API :3000). Without this flag, Set-Cookie headers
+//   from the server are silently ignored by the browser and the JWT cookie
+//   is never stored. The 'origin' must be an explicit URL (not '*') when
+//   credentials: true is set — browsers block wildcard + credentials combos.
 app.use(cors({
-  origin: 'http://localhost:5173',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin:      'http://localhost:5173',
+  credentials: true,                         // Allow cookies on cross-origin requests
+  methods:     ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type'],          // Authorization header no longer needed
 }));
+
+// cookieParser() parses the Cookie request header and populates req.cookies.
+// Without this, req.cookies is undefined and authenticateToken() cannot read
+// the JWT. Must be registered BEFORE any middleware that reads req.cookies.
+app.use(cookieParser());
 
 // Parse JSON bodies — required for POST/PUT endpoints.
 app.use(express.json());
@@ -59,6 +77,7 @@ app.get('/api/health', (req, res) => {
 
 // Mount feature routers.
 // Each router handles all sub-routes under its prefix.
+app.use('/api/auth',     authRouter);       // Login, logout, /me — no auth required
 app.use('/api/agents',   agentsRouter);
 app.use('/api/referrals', referralsRouter);
 

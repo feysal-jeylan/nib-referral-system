@@ -18,6 +18,7 @@
 
 const express = require('express');
 const pool    = require('../db');
+const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
@@ -137,7 +138,9 @@ function generateReferralCode() {
 //   409 Conflict      — phone or email already exists in the DB
 //   500 Server Error  — unexpected DB failure (details logged server-side only)
 // ---------------------------------------------------------------------------
-router.post('/', async (req, res, next) => {
+// POST /api/agents — ADMIN only: create a new agent.
+// authenticateToken verifies the JWT cookie; authorizeRole restricts to ADMIN.
+router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
   // ── Step 1: Extract and trim inputs ────────────────────────────────────────
   // We trim() to reject inputs that are only whitespace (e.g., "   ").
   const name  = req.body.name?.trim();
@@ -237,7 +240,9 @@ router.post('/', async (req, res, next) => {
 //   404 Not Found    — no agent exists with that id
 //   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
-router.get('/:id/stats', async (req, res, next) => {
+// GET /api/agents/:id/stats — any authenticated user, but AGENT role is
+// restricted to their OWN stats only (req.user.agent_id must match :id).
+router.get('/:id/stats', authenticateToken, async (req, res, next) => {
   // ── Step 1: Parse and validate the URL parameter ──────────────────────────
   const agentId = parseInt(req.params.id, 10);
 
@@ -245,6 +250,22 @@ router.get('/:id/stats', async (req, res, next) => {
     return res.status(400).json({
       error: 'Agent ID must be a valid integer.',
       code:  'INVALID_ID',
+    });
+  }
+
+  // ── Step 1b: RBAC — agents can only view their own stats ─────────────────
+  //
+  // req.user is set by authenticateToken (the decoded JWT payload).
+  // For AGENT users, req.user.agent_id is the FK that links the user account
+  // to the specific agent row. If an AGENT tries to request stats for a
+  // *different* agent's id, we return 403 immediately — before hitting the DB.
+  //
+  // ADMIN users (req.user.role === 'ADMIN') have no agent_id restriction;
+  // they can view stats for any agent.
+  if (req.user.role === 'AGENT' && req.user.agent_id !== agentId) {
+    return res.status(403).json({
+      error: 'Access denied. Agents can only view their own stats.',
+      code:  'FORBIDDEN',
     });
   }
 
