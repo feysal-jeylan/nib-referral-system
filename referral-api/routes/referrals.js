@@ -4,6 +4,7 @@
  * Router for all /api/referrals endpoints.
  *
  * Current endpoints:
+ *   GET   /api/referrals           — List all referrals with customer and agent details.
  *   POST  /api/referrals           — Register a new customer referral using an agent's code.
  *   PATCH /api/referrals/:id/status — Update the status of an existing referral.
  *
@@ -20,6 +21,53 @@ const express = require('express');
 const pool    = require('../db');
 
 const router = express.Router();
+
+// ---------------------------------------------------------------------------
+// GET /api/referrals
+// Return all referrals joined with customer and agent details.
+//
+// Success response — 200 OK (array, newest first):
+//   [
+//     {
+//       "id":              7,
+//       "customer_name":   "Tigist Alemu",
+//       "customer_phone":  "0922345678",
+//       "agent_name":      "Abebe Kebede",
+//       "referral_code":   "NIB-X7KP2A",
+//       "status":          "PENDING",
+//       "created_at":      "2026-10-25T08:00:00.000Z"
+//     },
+//     ...
+//   ]
+// ---------------------------------------------------------------------------
+router.get('/', async (req, res, next) => {
+  try {
+    // JOIN all three tables in one query so the frontend gets everything
+    // it needs without making additional requests.
+    // LEFT JOIN on agents is defensive: if an agent were somehow deleted
+    // (which our FK RESTRICT should prevent), the referral row still appears.
+    const result = await pool.query(`
+      SELECT
+        r.id,
+        c.name        AS customer_name,
+        c.phone       AS customer_phone,
+        a.name        AS agent_name,
+        a.referral_code,
+        r.status,
+        r.created_at
+      FROM   referrals r
+      JOIN   customers c ON c.id = r.customer_id
+      JOIN   agents    a ON a.id = r.agent_id
+      ORDER  BY r.created_at DESC
+    `);
+
+    return res.status(200).json(result.rows);
+
+  } catch (err) {
+    console.error('[GET /api/referrals] Unexpected DB error:', err.message);
+    next(err);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/referrals
