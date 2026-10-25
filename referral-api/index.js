@@ -20,7 +20,8 @@ const cors         = require('cors');
 require('dotenv').config();
 
 // ─── Route Imports ────────────────────────────────────────────────────────────
-const agentsRouter = require('./routes/agents');
+const agentsRouter   = require('./routes/agents');
+const referralsRouter = require('./routes/referrals');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -58,8 +59,8 @@ app.get('/api/health', (req, res) => {
 
 // Mount feature routers.
 // Each router handles all sub-routes under its prefix.
-app.use('/api/agents', agentsRouter);
-// Future: app.use('/api/referrals', referralsRouter);
+app.use('/api/agents',   agentsRouter);
+app.use('/api/referrals', referralsRouter);
 
 // ─── Error Handling Middleware ─────────────────────────────────────────────────
 /**
