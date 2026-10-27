@@ -5,112 +5,110 @@
  *
  * SECURITY: The JWT token is stored in an HttpOnly cookie managed entirely
  * by the backend. We NEVER touch localStorage, sessionStorage, or JS memory
- * for the token. This file only stores the decoded user identity (id, username,
- * role) — the data returned by GET /api/auth/me — so the UI knows who is
- * logged in. The actual token is invisible to JavaScript.
+ * for the token. This file only stores the decoded user identity
+ * (id, username, role, must_change_password) — the data returned by
+ * GET /api/auth/me — so the UI knows who is logged in and what state
+ * they are in. The actual token is invisible to JavaScript.
  *
  * State shape:
- *   user    : { id, username, role }  — null when not authenticated
- *   loading : boolean                 — true during the initial /me check
+ *   user    : { id, username, role, must_change_password } | null
+ *   loading : boolean
  *
- * Why a `loading` state?
- *   On every page load, we must call GET /api/auth/me to check if the
- *   browser's HttpOnly cookie is still valid. This takes a brief moment.
- *   Without `loading`, App.jsx would immediately render <Login /> before
- *   the check completes — causing an ugly flash for logged-in users.
- *   With `loading=true`, App.jsx shows a spinner until we know the answer.
+ * Exposed functions:
+ *   login(userData)    — called by Login.jsx after successful POST /api/auth/login
+ *   logout()           — calls POST /api/auth/logout then clears local state
+ *   refreshUser(data)  — called by ChangePassword.jsx after a successful password
+ *                        change to update the user state in-place (without a
+ *                        full page reload) so the Dashboard renders immediately.
  */
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
-// ── Create context (default values are only used if a component is rendered
-//    outside of <AuthProvider>, which should never happen in this app) ──────
 const AuthContext = createContext({
-  user:    null,
-  loading: true,
-  login:   () => {},
-  logout:  () => {},
+  user:        null,
+  loading:     true,
+  login:       () => {},
+  logout:      () => {},
+  refreshUser: () => {},
 });
 
-// ── AuthProvider ─────────────────────────────────────────────────────────────
 export function AuthProvider({ children }) {
   const [user,    setUser]    = useState(null);
   const [loading, setLoading] = useState(true);
 
   // ── On mount: check if the browser already has a valid session ──────────
   //
-  // credentials: 'include' instructs the browser to attach all cookies
-  // (including the HttpOnly 'token' cookie) to this cross-origin request.
-  // Without this flag, the browser silently strips cookies from fetch calls
-  // that cross origins (Vite :5173 → Express :3000).
-  //
-  // This is the ONLY way we can "read" the HttpOnly cookie — we can't
-  // inspect it in JavaScript, so we ask the server to verify it for us.
+  // credentials: 'include' instructs the browser to attach the HttpOnly
+  // 'token' cookie. We can't read it in JS, so we ask the server to verify
+  // it and return the user's current state (including must_change_password).
   useEffect(() => {
     async function checkSession() {
       try {
-        const res = await fetch('/api/auth/me', {
-          credentials: 'include', // Send the HttpOnly cookie with the request
-        });
+        const res = await fetch('/api/auth/me', { credentials: 'include' });
 
         if (res.ok) {
-          // Cookie exists and is valid — server returned { id, username, role }
+          // Returns { id, username, role, must_change_password }
           const data = await res.json();
           setUser(data);
         } else {
-          // 401: no cookie, or cookie is expired/tampered — user is not logged in
           setUser(null);
         }
       } catch {
-        // Network error (e.g. API is down) — treat as not logged in
+        // Network error — treat as not logged in
         setUser(null);
       } finally {
-        // Whether success or failure, we now know the auth state — stop loading
         setLoading(false);
       }
     }
 
     checkSession();
-  }, []); // Run once on mount only
+  }, []);
 
   // ── login(userData) ────────────────────────────────────────────────────────
-  //
-  // Called by Login.jsx after a successful POST /api/auth/login response.
-  // The backend has already set the HttpOnly cookie at this point. We just
-  // need to update the React state so the dashboard renders.
+  // Called by Login.jsx after a successful POST /api/auth/login.
+  // The backend has already set the HttpOnly cookie. We update local state
+  // so the dashboard (or ChangePassword screen) renders immediately.
   const login = useCallback((userData) => {
     setUser(userData);
   }, []);
 
   // ── logout() ──────────────────────────────────────────────────────────────
-  //
-  // Calls the backend to clear the HttpOnly cookie (which JavaScript cannot
-  // delete directly — only the browser's HTTP layer can). Then clears the
-  // React user state so the app transitions back to <Login />.
+  // Asks the backend to clear the HttpOnly cookie (JS cannot do this directly),
+  // then clears local state so App renders <Login />.
   const logout = useCallback(async () => {
     try {
       await fetch('/api/auth/logout', {
         method:      'POST',
-        credentials: 'include', // Required to send the cookie so the server can clear it
+        credentials: 'include',
       });
     } catch {
-      // If the network call fails, still log out locally.
-      // On next page load, the expired/missing cookie will redirect to login.
+      // Network failure — still clear local state so the UI shows login.
     } finally {
       setUser(null);
     }
   }, []);
 
+  // ── refreshUser(userData) ─────────────────────────────────────────────────
+  //
+  // Called by ChangePassword.jsx after POST /api/auth/change-password returns
+  // a fresh user object with must_change_password = false.
+  //
+  // This updates the React state in-place so App.jsx re-renders and shows
+  // the Dashboard — without requiring the user to log in again.
+  //
+  // The backend has already replaced the HttpOnly cookie with a new JWT at
+  // this point, so future API calls are also fully authenticated.
+  const refreshUser = useCallback((userData) => {
+    setUser(userData);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
-// ── useAuth hook ──────────────────────────────────────────────────────────────
-// Convenience hook so components don't need to import useContext + AuthContext.
-// Usage: const { user, loading, login, logout } = useAuth();
 export function useAuth() {
   return useContext(AuthContext);
 }

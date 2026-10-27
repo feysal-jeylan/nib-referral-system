@@ -4,9 +4,9 @@
  * Router for all /api/referrals endpoints.
  *
  * Current endpoints:
- *   GET   /api/referrals           — List all referrals with customer and agent details.
- *   POST  /api/referrals           — Register a new customer referral using an agent's code.
- *   PATCH /api/referrals/:id/status — Update the status of an existing referral.
+ *   GET   /api/referrals            — List referrals (ADMIN: all, AGENT: own only).
+ *   POST  /api/referrals            — Register a new customer referral (ADMIN or AGENT).
+ *   PATCH /api/referrals/:id/status — Update the status of an existing referral (ADMIN only).
  *
  * Per RULES.md:
  *   - All inputs are validated server-side before touching the database.
@@ -41,8 +41,30 @@ const router = express.Router();
 //     ...
 //   ]
 // ---------------------------------------------------------------------------
-router.get('/', async (req, res, next) => {
+// ---------------------------------------------------------------------------
+// GET /api/referrals — requires authentication (any role).
+//
+// RBAC filtering:
+//   ADMIN  → returns ALL referrals (joined with customer and agent details).
+//   AGENT  → returns ONLY referrals where agent_id = req.user.agent_id.
+//
+// The WHERE clause is built dynamically using a parameterized value so that
+// the agent_id is always treated as data — never as executable SQL.
+// ---------------------------------------------------------------------------
+router.get('/', authenticateToken, async (req, res, next) => {
   try {
+    // ── RBAC: build the WHERE clause based on the caller's role ────────────
+    //
+    // ADMIN  → agentFilter = '' (no restriction), queryParams = []
+    // AGENT  → agentFilter = 'WHERE r.agent_id = $1', queryParams = [agent_id]
+    let agentFilter = '';
+    const queryParams = [];
+
+    if (req.user.role === 'AGENT') {
+      queryParams.push(req.user.agent_id);
+      agentFilter = 'WHERE r.agent_id = $1';
+    }
+
     // JOIN all three tables in one query so the frontend gets everything
     // it needs without making additional requests.
     // LEFT JOIN on agents is defensive: if an agent were somehow deleted
@@ -59,8 +81,9 @@ router.get('/', async (req, res, next) => {
       FROM   referrals r
       JOIN   customers c ON c.id = r.customer_id
       JOIN   agents    a ON a.id = r.agent_id
+      ${agentFilter}
       ORDER  BY r.created_at DESC
-    `);
+    `, queryParams);
 
     return res.status(200).json(result.rows);
 
@@ -97,46 +120,79 @@ router.get('/', async (req, res, next) => {
 //   409 Conflict     — customer phone number is already registered (PG code 23505)
 //   500 Server Error — unexpected DB failure (details logged server-side only)
 // ---------------------------------------------------------------------------
-// POST /api/referrals — ADMIN only: register a new customer referral.
-router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
+// POST /api/referrals — ADMIN or AGENT: register a new customer referral.
+//
+// SECURITY: If the caller is an AGENT, we IGNORE any agent_id / referral_code
+// supplied in the request body and FORCE the agent_id to req.user.agent_id.
+// This prevents an agent from registering a customer under a different agent's
+// code by manipulating the request payload.
+router.post('/', authenticateToken, authorizeRole(['ADMIN', 'AGENT']), async (req, res, next) => {
   // ── Step 1: Extract and trim inputs ──────────────────────────────────────
   // Trimming rejects whitespace-only values (e.g. "   " is treated as empty).
   const referralCode  = req.body.referral_code?.trim();
   const customerName  = req.body.customer_name?.trim();
   const customerPhone = req.body.customer_phone?.trim();
 
-  // ── Step 2: Validate — all three fields are required ─────────────────────
+  // ── Step 2: Validate — customer fields are always required ──────────────
+  // referral_code is only required for ADMINs; AGENTs have it forced server-side.
   // Per RULES.md §3: validate all inputs, return 400 for malformed requests.
-  if (!referralCode || !customerName || !customerPhone) {
+  if (!customerName || !customerPhone) {
     return res.status(400).json({
-      error: 'All fields are required: referral_code, customer_name, customer_phone.',
+      error: 'customer_name and customer_phone are required.',
       code:  'MISSING_FIELDS',
     });
   }
 
-  // ── Step 3: Look up the agent by referral_code ────────────────────────────
-  // We do this BEFORE opening a transaction — no point starting one if the
-  // code does not exist. A parameterized query prevents SQL injection.
+  // ── Step 3: Resolve agent_id ─────────────────────────────────────────────
+  //
+  // AGENT path — security-critical:
+  //   We IGNORE the referral_code in the body entirely and derive the agent_id
+  //   directly from the verified JWT payload (req.user.agent_id). This makes it
+  //   impossible for an agent to register a customer under another agent's code.
+  //
+  // ADMIN path:
+  //   We look up the agent by the referral_code supplied in the body, exactly
+  //   as before, giving admins the flexibility to register under any agent.
   let agent;
-  try {
-    const agentResult = await pool.query(
-      'SELECT id FROM agents WHERE referral_code = $1',
-      [referralCode]
-    );
 
-    if (agentResult.rows.length === 0) {
-      // The code exists nowhere in the agents table — invalid.
-      return res.status(404).json({
-        error: 'Invalid referral code.',
-        code:  'AGENT_NOT_FOUND',
+  if (req.user.role === 'AGENT') {
+    // ── AGENT: trust only the JWT, never the request body ──────────────────
+    if (!req.user.agent_id) {
+      // Defensive: the JWT should always carry agent_id for AGENT tokens.
+      return res.status(403).json({
+        error: 'Agent identity could not be resolved from session.',
+        code:  'AGENT_ID_MISSING',
       });
     }
+    agent = { id: req.user.agent_id };
 
-    agent = agentResult.rows[0]; // { id: 3 }
+  } else {
+    // ── ADMIN: look up agent by referral_code from the request body ─────────
+    if (!referralCode) {
+      return res.status(400).json({
+        error: 'All fields are required: referral_code, customer_name, customer_phone.',
+        code:  'MISSING_FIELDS',
+      });
+    }
+    try {
+      const agentResult = await pool.query(
+        'SELECT id FROM agents WHERE referral_code = $1',
+        [referralCode]
+      );
 
-  } catch (err) {
-    console.error('[POST /api/referrals] Error looking up agent:', err.message);
-    return next(err);
+      if (agentResult.rows.length === 0) {
+        return res.status(404).json({
+          error: 'Invalid referral code.',
+          code:  'AGENT_NOT_FOUND',
+        });
+      }
+
+      agent = agentResult.rows[0]; // { id: 3 }
+
+    } catch (err) {
+      console.error('[POST /api/referrals] Error looking up agent:', err.message);
+      return next(err);
+    }
   }
 
   // ── Step 4: Open a database transaction ──────────────────────────────────

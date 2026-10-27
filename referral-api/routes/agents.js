@@ -4,19 +4,22 @@
  * Router for all /api/agents endpoints.
  *
  * Current endpoints:
- *   GET  /api/agents          — List all agents with referral stats and reward tier.
- *   POST /api/agents          — Create a new agent.
+ *   GET  /api/agents           — List agents (ADMIN: all, AGENT: own row only).
+ *   POST /api/agents           — Create a new agent + linked user account (ADMIN only, transactional).
  *   GET  /api/agents/:id/stats — Get a single agent's referral count and reward tier.
  *
  * Per RULES.md:
  *   - All inputs are validated server-side before touching the database.
  *   - All queries use parameterized form ($1, $2, ...) — never string concatenation.
  *   - Raw DB errors are never sent to the client.
+ *   - Multi-table writes are wrapped in a transaction (BEGIN / COMMIT / ROLLBACK).
  */
 
 'use strict';
 
+const crypto  = require('crypto');
 const express = require('express');
+const bcrypt  = require('bcrypt');
 const pool    = require('../db');
 const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
 
@@ -42,29 +45,43 @@ const router = express.Router();
 // Error responses:
 //   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
-router.get('/', async (req, res, next) => {
+// ---------------------------------------------------------------------------
+// GET /api/agents — requires authentication (any role).
+//
+// RBAC filtering:
+//   ADMIN  → returns ALL agents.
+//   AGENT  → returns ONLY the row for their own agent_id (req.user.agent_id).
+//
+// This means the frontend does not need to filter client-side; the server
+// enforces the boundary. An AGENT simply cannot see other agents' data.
+// ---------------------------------------------------------------------------
+router.get('/', authenticateToken, async (req, res, next) => {
   try {
+    // ── RBAC: build the WHERE clause based on the caller's role ────────────
+    //
+    // For AGENT users, req.user.agent_id is the FK from their users row to
+    // the agents table. We inject it as a parameterized value to prevent
+    // SQL injection — never via string concatenation.
+    //
+    // For ADMIN users, we add no WHERE filter (queryParams stays empty, and
+    // the agentFilter fragment is an empty string).
+    let agentFilter = '';
+    const queryParams = [];
+
+    if (req.user.role === 'AGENT') {
+      queryParams.push(req.user.agent_id);
+      // $1 will be bound to req.user.agent_id — safe from injection.
+      agentFilter = 'WHERE a.id = $1';
+    }
+
     // This single query does everything in one round-trip:
     //
     // 1. For each agent (LEFT JOIN so agents with zero referrals appear too),
     //    COUNT only the referral rows where status = 'SUCCESSFUL'.
-    //    The FILTER clause is a conditional aggregate — it counts a row only
-    //    when the WHERE condition is true. Equivalent to:
-    //      COUNT(CASE WHEN r.status = 'SUCCESSFUL' THEN 1 END)
     //
-    // 2. Find the highest qualifying reward tier with a correlated subquery:
-    //    MAX(min_referrals) WHERE min_referrals <= successful_count
-    //    then LEFT JOIN reward_rules on that threshold to get the reward_name.
-    //    LEFT JOIN means the row is still returned with reward_name = NULL
-    //    when no tier is met (0 successful referrals).
+    // 2. Find the highest qualifying reward tier with a correlated subquery.
     //
-    // GROUP BY a.id groups one result row per agent so COUNT operates per-agent.
-    // ORDER BY a.created_at DESC shows newest agents first.
-    // We use a derived table (sub) so that the per-agent SUCCESSFUL count is
-    // computed once and can be referenced cleanly in the LEFT JOIN.
-    // PostgreSQL does not allow referencing an aggregate from the same SELECT
-    // level inside a subquery of that same SELECT, so we must materialise it
-    // in an inner query first — identical to the /:id/stats pattern.
+    // The agentFilter fragment is either '' (ADMIN) or 'WHERE a.id = $1' (AGENT).
     const result = await pool.query(`
       SELECT
         sub.id,
@@ -81,6 +98,7 @@ router.get('/', async (req, res, next) => {
           COUNT(r.id) FILTER (WHERE r.status = 'SUCCESSFUL') AS successful_count
         FROM agents a
         LEFT JOIN referrals r ON r.agent_id = a.id
+        ${agentFilter}
         GROUP BY a.id, a.name, a.referral_code, a.created_at
       ) sub
       LEFT JOIN reward_rules rr
@@ -90,7 +108,7 @@ router.get('/', async (req, res, next) => {
           WHERE  min_referrals <= sub.successful_count
         )
       ORDER BY sub.created_at DESC
-    `);
+    `, queryParams);
 
     const agents = result.rows.map(row => ({
       id:                   row.id,
@@ -138,17 +156,31 @@ function generateReferralCode() {
 //   409 Conflict      — phone or email already exists in the DB
 //   500 Server Error  — unexpected DB failure (details logged server-side only)
 // ---------------------------------------------------------------------------
-// POST /api/agents — ADMIN only: create a new agent.
-// authenticateToken verifies the JWT cookie; authorizeRole restricts to ADMIN.
+// ---------------------------------------------------------------------------
+// POST /api/agents — ADMIN only: create a new agent with a linked user account.
+//
+// This route is wrapped in a database transaction so that both the agents INSERT
+// and the users INSERT succeed or fail together — no orphaned rows possible.
+//
+// On success the response includes the temporary password so the Admin can
+// hand it to the new agent. The agent must change it after first login.
+//
+// New response shape (201 Created):
+//   {
+//     "id":               1,
+//     "name":             "Abebe Kebede",
+//     "referral_code":    "NIB-X7KP2A",
+//     "created_at":       "2026-10-27T...",
+//     "temp_password":    "NibBank2026!"
+//   }
+// ---------------------------------------------------------------------------
 router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
   // ── Step 1: Extract and trim inputs ────────────────────────────────────────
-  // We trim() to reject inputs that are only whitespace (e.g., "   ").
   const name  = req.body.name?.trim();
   const phone = req.body.phone?.trim();
   const email = req.body.email?.trim();
 
   // ── Step 2: Validate — all fields are required ────────────────────────────
-  // Per RULES.md §3: validate all inputs, return 400 for malformed requests.
   if (!name || !phone || !email) {
     return res.status(400).json({
       error: 'All fields are required: name, phone, email.',
@@ -156,7 +188,6 @@ router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, n
     });
   }
 
-  // Basic email format check — keeps obviously wrong values out of the DB.
   if (!email.includes('@')) {
     return res.status(400).json({
       error: 'A valid email address is required.',
@@ -164,49 +195,96 @@ router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, n
     });
   }
 
-  // ── Step 3: Generate the referral code ────────────────────────────────────
-  const referralCode = generateReferralCode();
+  // ── Step 3: Generate referral code and a cryptographically random temp password ─
+  //
+  // WHY crypto.randomBytes instead of a fixed string:
+  //   A fixed password like 'NibBank2026!' is the same for EVERY new agent.
+  //   If it leaks once (e.g., in a git commit), ALL new agents are vulnerable.
+  //   crypto.randomBytes(16) draws from the OS CSPRNG — each agent gets a
+  //   unique 32-character hex string with ~128 bits of entropy.
+  //
+  // WHY console.log and NOT in the HTTP response:
+  //   Returning secrets in HTTP responses is risky: they appear in browser
+  //   history, proxy logs, and DevTools network tabs. In production this
+  //   console.log would be replaced by a secure email/SMS delivery system.
+  //   The Admin reads it from the terminal and hands it to the agent out-of-band.
+  const referralCode  = generateReferralCode();
+  const tempPassword  = crypto.randomBytes(16).toString('hex'); // 32-char hex string
+  const passwordHash  = await bcrypt.hash(tempPassword, 12);
 
-  // ── Step 4: Insert into DB using a parameterized query ────────────────────
-  // $1, $2, $3, $4 are placeholders. The pg library sends the values separately,
-  // so PostgreSQL treats them as data — never as executable SQL.
-  // This completely prevents SQL injection attacks.
-  const sql = `
-    INSERT INTO agents (name, phone, email, referral_code)
-    VALUES ($1, $2, $3, $4)
-    RETURNING id, name, referral_code, created_at
-  `;
+  // ▶ Simulate sending the temp password to the agent via email.
+  //   In production: replace this with nodemailer / SendGrid / AWS SES.
+  console.log(`[AGENT ONBOARDING] Temp password for ${email}: ${tempPassword}`);
+  console.log(`[AGENT ONBOARDING] ⚠️  This should be delivered via secure email, not stored anywhere.`);
+
+  // ── Step 4: Open a transaction — two tables must succeed together ──────────
+  //
+  // WHY A TRANSACTION?
+  //   We write to both `agents` and `users`. If the agents INSERT succeeds
+  //   but users fails (e.g. email collision), we'd have an agent with no
+  //   login account — an inconsistent state. BEGIN/COMMIT/ROLLBACK prevents this.
+  //
+  // WHY pool.connect() instead of pool.query()?
+  //   pool.query() picks a fresh connection for every call; it cannot maintain
+  //   transaction state across calls. We need ONE dedicated connection so that
+  //   BEGIN, the two INSERTs, and COMMIT/ROLLBACK all run on the same session.
+  //
+  // CRITICAL: client.release() MUST be called in finally — otherwise the
+  //   connection is permanently "checked out" and the pool slowly starves.
+  const client = await pool.connect();
 
   try {
-    const result = await pool.query(sql, [name, phone, email, referralCode]);
-    const newAgent = result.rows[0];
+    // ── BEGIN ─────────────────────────────────────────────────────────────
+    await client.query('BEGIN');
 
-    // 201 Created — standard HTTP code for a successful resource creation.
+    // ── INSERT 1: agents ──────────────────────────────────────────────────
+    // RETURNING gives us the auto-generated id without a second SELECT.
+    const agentResult = await client.query(
+      `INSERT INTO agents (name, phone, email, referral_code)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, referral_code, created_at`,
+      [name, phone, email, referralCode]
+    );
+    const newAgent = agentResult.rows[0];
+
+    // ── INSERT 2: users ───────────────────────────────────────────────────
+    // Creates the login account linked to the new agent.
+    //   username      = agent's email (unique, used as login credential)
+    //   password_hash = bcrypt hash of the temporary password
+    //   role          = 'AGENT'
+    //   agent_id      = FK to the row we just inserted above
+    await client.query(
+      `INSERT INTO users (username, password_hash, role, agent_id)
+       VALUES ($1, $2, 'AGENT', $3)`,
+      [email, passwordHash, newAgent.id]
+    );
+
+    // ── COMMIT ────────────────────────────────────────────────────────────
+    // Both INSERTs succeeded — make all changes permanent.
+    await client.query('COMMIT');
+
+    // Return agent details. The temp password is NOT in the response — it was
+    // printed to the server terminal above (simulating email delivery).
     return res.status(201).json({
       id:            newAgent.id,
       name:          newAgent.name,
       referral_code: newAgent.referral_code,
       created_at:    newAgent.created_at,
+      message:       `Agent created. Temporary credentials have been dispatched to ${email}.`,
     });
 
   } catch (err) {
-    // ── Step 5: Handle DB constraint violations gracefully ──────────────────
-    //
-    // PostgreSQL error code '23505' means "unique_violation".
-    // This fires when we try to INSERT a phone or email that already exists,
-    // because our schema has UNIQUE constraints on both columns.
-    //
-    // Without this check, the raw pg error would bubble up to the global
-    // error handler and be logged, but we'd still return a generic 500.
-    // Catching it here lets us return a meaningful 409 Conflict instead.
+    // ── ROLLBACK ──────────────────────────────────────────────────────────
+    // Something failed — undo everything so neither table gets a partial write.
+    await client.query('ROLLBACK');
+
+    // '23505' = unique_violation — phone, email, or referral_code collision.
     if (err.code === '23505') {
-      // err.constraint contains the name of the violated constraint
-      // (e.g., "agents_phone_key" or "agents_email_key").
-      // We use it to tell the user exactly which field is duplicated.
       let field = 'phone or email';
-      if (err.constraint && err.constraint.includes('phone')) field = 'phone number';
-      if (err.constraint && err.constraint.includes('email')) field = 'email address';
+      if (err.constraint && err.constraint.includes('phone'))         field = 'phone number';
+      if (err.constraint && err.constraint.includes('email'))         field = 'email address';
       if (err.constraint && err.constraint.includes('referral_code')) field = 'referral code';
+      if (err.constraint && err.constraint.includes('username'))      field = 'email (user account)';
 
       return res.status(409).json({
         error: `An agent with this ${field} already exists.`,
@@ -214,10 +292,12 @@ router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, n
       });
     }
 
-    // For any other unexpected DB error, log it server-side and pass to
-    // the global error handler in index.js. The client gets a safe 500.
     console.error('[POST /api/agents] Unexpected DB error:', err.message);
     next(err);
+
+  } finally {
+    // Always return the connection to the pool — no matter what happened.
+    client.release();
   }
 });
 

@@ -27,6 +27,7 @@ import './App.css';
 import './Login.css';
 import { useAuth } from './AuthContext';
 import Login from './Login';
+import ChangePassword from './ChangePassword';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const API = '/api'; // Vite dev-proxy rewrites /api → http://localhost:3000
@@ -126,7 +127,12 @@ function AgentForm({ onCreated, onToast }) {
         referral_code: data.referral_code,
         successful_referrals: 0, current_reward: null,
       });
-      onToast({ type: 'success', message: `✅ Agent "${data.name}" registered — code: ${data.referral_code}` });
+      // Include the temporary password in the success toast so the Admin
+      // can immediately hand it to the new agent.
+      onToast({
+        type: 'success',
+        message: `✅ Agent "${data.name}" created — Code: ${data.referral_code} · Temp Password: ${data.temp_password}`,
+      });
       setForm({ name: '', phone: '', email: '' });
       nameRef.current?.focus();
     } catch {
@@ -214,10 +220,30 @@ function AgentTable({ agents, loading }) {
 }
 
 // ─── 4. ReferralForm ──────────────────────────────────────────────────────────
-function ReferralForm({ onCreated, onToast }) {
-  const [form, setForm]           = useState({ referral_code: '', customer_name: '', customer_phone: '' });
+//
+// Props:
+//   onCreated  — called after a successful POST (triggers referral list refresh)
+//   onToast    — displays a toast notification
+//   lockedCode — when provided (AGENT view), the referral_code field is
+//                pre-filled with this value and made readOnly so the agent
+//                cannot type someone else's code. The backend also enforces
+//                this independently (req.user.agent_id override).
+function ReferralForm({ onCreated, onToast, lockedCode }) {
+  const [form, setForm]             = useState({
+    referral_code:  lockedCode ?? '',
+    customer_name:  '',
+    customer_phone: '',
+  });
   const [submitting, setSubmitting] = useState(false);
+  const nameRef = useRef(null); // focus on customer name after submit for agents
   const codeRef = useRef(null);
+
+  // If the locked code arrives after initial render (data loads async), sync it.
+  useEffect(() => {
+    if (lockedCode) {
+      setForm(prev => ({ ...prev, referral_code: lockedCode }));
+    }
+  }, [lockedCode]);
 
   function handleChange(e) {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -250,8 +276,10 @@ function ReferralForm({ onCreated, onToast }) {
 
       onCreated(data);
       onToast({ type: 'success', message: `✅ Referral for "${form.customer_name}" submitted successfully.` });
-      setForm({ referral_code: '', customer_name: '', customer_phone: '' });
-      codeRef.current?.focus();
+      // After submit: reset editable fields; keep the locked code intact for agents.
+      setForm({ referral_code: lockedCode ?? '', customer_name: '', customer_phone: '' });
+      // Focus the first editable field for quick re-entry.
+      (lockedCode ? nameRef : codeRef).current?.focus();
     } catch {
       onToast({ type: 'error', message: '🔴 Cannot reach the server. Is the API running?' });
     } finally {
@@ -267,15 +295,34 @@ function ReferralForm({ onCreated, onToast }) {
       noValidate
       aria-label="Submit a new referral"
     >
-      <h2 className="form__title">Submit New Referral</h2>
+      <h2 className="form__title">Register New Referral</h2>
       <div className="form__grid">
         <div className="form__field">
           <label htmlFor="ref-code">Agent Referral Code</label>
-          <input id="ref-code" name="referral_code" type="text"
+          <input
+            id="ref-code"
+            name="referral_code"
+            type="text"
             placeholder="e.g. NIB-X7KP2A"
-            value={form.referral_code} onChange={handleChange}
-            required ref={codeRef} autoComplete="off"
-            style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }} />
+            value={form.referral_code}
+            onChange={handleChange}
+            required
+            ref={codeRef}
+            autoComplete="off"
+            readOnly={!!lockedCode}
+            aria-readonly={!!lockedCode}
+            title={lockedCode ? 'Your referral code is pre-filled automatically.' : undefined}
+            style={{
+              textTransform:  'uppercase',
+              letterSpacing:  '0.5px',
+              // Visual cue: muted + not-allowed cursor when locked
+              ...(lockedCode && {
+                opacity:  0.7,
+                cursor:   'not-allowed',
+                background: 'var(--surface-2, #2a2a3a)',
+              }),
+            }}
+          />
         </div>
         <div className="form__field">
           <label htmlFor="ref-phone">Customer Phone</label>
@@ -289,19 +336,23 @@ function ReferralForm({ onCreated, onToast }) {
           <input id="ref-name" name="customer_name" type="text"
             placeholder="e.g. Tigist Alemu"
             value={form.customer_name} onChange={handleChange}
-            required autoComplete="off" />
+            required ref={nameRef} autoComplete="off" />
         </div>
       </div>
       <button id="submit-referral-btn" type="submit" className="btn btn--primary" disabled={submitting}>
         {submitting && <Spinner small />}
-        {submitting ? 'Submitting…' : 'Submit Referral'}
+        {submitting ? 'Submitting…' : 'Register Referral'}
       </button>
     </form>
   );
 }
 
 // ─── 5. ReferralTable ─────────────────────────────────────────────────────────
-function ReferralTable({ referrals, loading, onStatusChange }) {
+//
+// isAdmin controls whether the Actions column (Approve / Reject) is shown.
+// When false (AGENT view), the column is hidden entirely — agents can only
+// read their own referral list, not modify statuses.
+function ReferralTable({ referrals, loading, onStatusChange, isAdmin }) {
   // Track which referral IDs are currently being updated so we can disable
   // their buttons and show a spinner mid-update without blocking the whole UI.
   const [updating, setUpdating] = useState(new Set());
@@ -315,7 +366,7 @@ function ReferralTable({ referrals, loading, onStatusChange }) {
   if (loading) return <div className="state-box"><Spinner /><p>Loading referrals…</p></div>;
   if (!referrals.length) return (
     <EmptyState icon="📋" title="No referrals yet"
-      sub="Submit your first referral using the form above." />
+      sub={isAdmin ? 'Submit your first referral using the form above.' : 'No referrals have been registered under your code yet.'} />
   );
 
   return (
@@ -329,7 +380,8 @@ function ReferralTable({ referrals, loading, onStatusChange }) {
             <th scope="col">Agent</th>
             <th scope="col">Code</th>
             <th scope="col">Status</th>
-            <th scope="col">Actions</th>
+            {/* Only admins see the Actions column */}
+            {isAdmin && <th scope="col">Actions</th>}
           </tr>
         </thead>
         <tbody>
@@ -345,32 +397,34 @@ function ReferralTable({ referrals, loading, onStatusChange }) {
                 <td>{r.agent_name}</td>
                 <td><code className="code-chip">{r.referral_code}</code></td>
                 <td><StatusPill status={r.status} /></td>
-                <td>
-                  {r.status === 'PENDING' ? (
-                    <div className="action-group">
-                      <button
-                        id={`approve-btn-${r.id}`}
-                        className="btn btn--approve"
-                        disabled={busy}
-                        onClick={() => handleAction(r.id, 'SUCCESSFUL')}
-                        aria-label={`Approve referral for ${r.customer_name}`}
-                      >
-                        {busy ? <Spinner small /> : '✓ Approve'}
-                      </button>
-                      <button
-                        id={`reject-btn-${r.id}`}
-                        className="btn btn--reject"
-                        disabled={busy}
-                        onClick={() => handleAction(r.id, 'REJECTED')}
-                        aria-label={`Reject referral for ${r.customer_name}`}
-                      >
-                        {busy ? <Spinner small /> : '✕ Reject'}
-                      </button>
-                    </div>
-                  ) : (
-                    <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>—</span>
-                  )}
-                </td>
+                {isAdmin && (
+                  <td>
+                    {r.status === 'PENDING' ? (
+                      <div className="action-group">
+                        <button
+                          id={`approve-btn-${r.id}`}
+                          className="btn btn--approve"
+                          disabled={busy}
+                          onClick={() => handleAction(r.id, 'SUCCESSFUL')}
+                          aria-label={`Approve referral for ${r.customer_name}`}
+                        >
+                          {busy ? <Spinner small /> : '✓ Approve'}
+                        </button>
+                        <button
+                          id={`reject-btn-${r.id}`}
+                          className="btn btn--reject"
+                          disabled={busy}
+                          onClick={() => handleAction(r.id, 'REJECTED')}
+                          aria-label={`Reject referral for ${r.customer_name}`}
+                        >
+                          {busy ? <Spinner small /> : '✕ Reject'}
+                        </button>
+                      </div>
+                    ) : (
+                      <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>—</span>
+                    )}
+                  </td>
+                )}
               </tr>
             );
           })}
@@ -393,10 +447,6 @@ export default function App() {
   const toastTimer = useRef(null);
 
   // ── Gate 1: Auth loading — show spinner while /api/auth/me is in-flight ──
-  //
-  // Without this, React would render the <Login /> screen for a brief moment
-  // on every page refresh, even for users with a valid session cookie.
-  // This "flash" would be confusing and looks broken. The spinner prevents it.
   if (loading) {
     return (
       <div className="auth-loading" role="status" aria-label="Checking authentication…">
@@ -411,8 +461,24 @@ export default function App() {
     return <Login />;
   }
 
-  // ── Gate 3: Authenticated — render the dashboard (below) ────────────────
-  // (The rest of the component only runs when user is not null)
+  // ── Gate 2.5: Forced password change ─────────────────────────────────────
+  //
+  // The user has a valid JWT (they logged in), but must_change_password = TRUE
+  // means they authenticated with a temporary password. We block the Dashboard
+  // entirely and show the ChangePassword screen instead.
+  //
+  // Security rationale:
+  //   • Frontend gate: no dashboard HTML is rendered, no API calls fire.
+  //   • Backend gate: /api/auth/change-password re-reads must_change_password
+  //     from the DB, so a crafted JWT with false cannot bypass it.
+  //   • Once the agent sets their password, refreshUser() in AuthContext flips
+  //     this to false and the Dashboard renders automatically.
+  if (user.must_change_password) {
+    return <ChangePassword />;
+  }
+
+  // ── Gate 3: Authenticated + password set → render the full Dashboard ─────
+  // (Hooks below run unconditionally because early returns are all above)
 
   // eslint-disable-next-line react-hooks/rules-of-hooks
   return <Dashboard
@@ -444,6 +510,11 @@ function Dashboard({
   referralsLoading, setReferralsLoading,
   toast, setToast, toastTimer,
 }) {
+  // Derived role flags — computed once here and passed down to keep all
+  // role-gating logic centralised in this component.
+  const isAdmin = user.role === 'ADMIN';
+  const isAgent = user.role === 'AGENT';
+
   // ── Data loading ────────────────────────────────────────────────────────────
   //
   // credentials: 'include' is spread from FETCH_OPTS onto every fetch call.
@@ -471,11 +542,20 @@ function Dashboard({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Derive the agent's own referral code for the locked form field ───────────
+  //
+  // GET /api/agents returns ONLY the calling agent's own row when the role is
+  // AGENT (server-side filter). We grab the first (and only) element's code.
+  // This value is passed to ReferralForm as `lockedCode` so the field is
+  // pre-filled and read-only — a belt-and-suspenders UX guard on top of the
+  // backend security fix in POST /api/referrals.
+  const agentOwnCode = isAgent ? (agents[0]?.referral_code ?? '') : null;
+
   // ── Toast ───────────────────────────────────────────────────────────────────
   function showToast(t) {
     setToast(t);
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 4500);
+    toastTimer.current = setTimeout(() => setToast(null), 6000);
   }
 
   // ── Agent created ────────────────────────────────────────────────────────────
@@ -497,7 +577,7 @@ function Dashboard({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Status update (Approve / Reject) ─────────────────────────────────────────
+  // ── Status update (Approve / Reject) — ADMIN only ────────────────────────────
   async function handleStatusChange(referralId, newStatus) {
     try {
       const res = await fetch(`${API}/referrals/${referralId}/status`, {
@@ -550,8 +630,19 @@ function Dashboard({
           <div className="app-header__brand">
             <span className="app-header__logo" aria-hidden="true">🏦</span>
             <div>
-              <h1 className="app-header__title">Nib International Bank</h1>
-              <p className="app-header__subtitle">Internal Referral Management System</p>
+              {/*
+                Role-aware header title:
+                  ADMIN → full system name (manages everything)
+                  AGENT → "Agent Portal" (read-only personal view)
+              */}
+              <h1 className="app-header__title">
+                {isAdmin ? 'Nib International Bank' : 'Agent Portal'}
+              </h1>
+              <p className="app-header__subtitle">
+                {isAdmin
+                  ? 'Internal Referral Management System'
+                  : 'Nib International Bank — Your Referral Dashboard'}
+              </p>
             </div>
           </div>
 
@@ -559,7 +650,14 @@ function Dashboard({
           <div className="header-user">
             <div className="header-user__info">
               <p className="header-user__name">{user.username}</p>
-              <p className="header-user__role">{user.role}</p>
+              {/*
+                Show a friendly role badge:
+                  'ADMIN' → 'Admin'
+                  'AGENT' → 'Agent'
+              */}
+              <p className="header-user__role">
+                {isAdmin ? '🛡️ Admin' : '👤 Agent'}
+              </p>
             </div>
             <button
               id="logout-btn"
@@ -575,16 +673,24 @@ function Dashboard({
 
       <main className="app-main">
 
-        {/* ── Agent Registration ─────────────────────────────────────── */}
-        <section className="card" aria-labelledby="agent-form-heading">
-          <AgentForm onCreated={handleAgentCreated} onToast={showToast} />
-        </section>
+        {/*
+          ── ADMIN-ONLY: Create Agent form ──────────────────────────────────
+          Agents cannot create other agents, so we hide this section entirely.
+          The backend enforces this too (authorizeRole(['ADMIN'])), but hiding
+          the UI avoids confusing 403 errors in the console.
+        */}
+        {isAdmin && (
+          <section className="card" aria-labelledby="agent-form-heading">
+            <AgentForm onCreated={handleAgentCreated} onToast={showToast} />
+          </section>
+        )}
 
-        {/* ── Agent Dashboard ────────────────────────────────────────── */}
+        {/* ── Agent Dashboard — visible to ALL roles ──────────────────── */}
+        {/* ADMIN sees all agents; AGENT sees only their own row (filtered server-side). */}
         <section className="card" aria-labelledby="agent-dashboard-heading">
           <div className="section-header">
             <h2 id="agent-dashboard-heading" className="section-header__title">
-              Agent Dashboard
+              {isAdmin ? 'Agent Dashboard' : 'My Profile'}
             </h2>
             <span className="section-header__count">
               {agents.length} agent{agents.length !== 1 ? 's' : ''}
@@ -593,16 +699,31 @@ function Dashboard({
           <AgentTable agents={agents} loading={agentsLoading} />
         </section>
 
-        {/* ── Referral Submission ────────────────────────────────────── */}
+        {/*
+          ── Referral Registration form — visible to ADMIN and AGENT ───────────
+
+          ADMIN: full form — can type any referral code to register a customer
+                 under any agent.
+
+          AGENT: same form, but the referral_code field is pre-filled with the
+                 agent's own code (agentOwnCode) and set to readOnly.
+                 The backend ALSO enforces this: it ignores any referral_code
+                 in the body for AGENT requests and forces req.user.agent_id.
+        */}
         <section className="card" aria-labelledby="referral-form-heading">
-          <ReferralForm onCreated={handleReferralCreated} onToast={showToast} />
+          <ReferralForm
+            onCreated={handleReferralCreated}
+            onToast={showToast}
+            lockedCode={agentOwnCode}
+          />
         </section>
 
-        {/* ── Recent Referrals ───────────────────────────────────────── */}
+        {/* ── Recent Referrals — visible to ALL roles ─────────────────── */}
+        {/* ADMIN sees all referrals + approve/reject. AGENT sees only their own (read-only). */}
         <section className="card" aria-labelledby="referral-table-heading">
           <div className="section-header">
             <h2 id="referral-table-heading" className="section-header__title">
-              Recent Referrals
+              {isAdmin ? 'Recent Referrals' : 'My Referrals'}
             </h2>
             <span className="section-header__count">
               {referrals.length} referral{referrals.length !== 1 ? 's' : ''}
@@ -612,6 +733,7 @@ function Dashboard({
             referrals={referrals}
             loading={referralsLoading}
             onStatusChange={handleStatusChange}
+            isAdmin={isAdmin}
           />
         </section>
 
