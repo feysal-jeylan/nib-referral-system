@@ -41,3 +41,20 @@
 - **Explain the code** you generate briefly so the student can learn and defend it in their report.
 - **Do not change filenames, database columns, or folder structures** without explaining why.
 - **Ask for confirmation** before making architectural decisions.
+## 6. V2 Pivot: Real-World Banking Workflow (Approved by Supervisor)
+The system is no longer a simple manual-entry app. It must reflect real banking operations.
+
+- **Agent Onboarding:** External marketers can register publicly. Their status is `PENDING`. Only an Admin can approve them. Upon approval, the system generates their `referral_code` and creates their User account.
+- **No Customer Registration UI:** Customers are NEVER registered inside this app. 
+- **Core Banking Integration:** This system must expose an API endpoint (e.g., `POST /api/integration/account-opened`) to receive webhooks from the core banking system (Temenos) when a customer opens an account.
+- **Flexible Campaigns:** Hardcoded 3/5/10 thresholds are removed. Admins create `campaigns` with dynamic `campaign_rules` (e.g., min deposit, account type, start/end dates).
+
+## 7. Scalability & Production Constraints (CRITICAL)
+Because this will integrate with a real banking system, scalability is non-negotiable.
+
+- **Idempotency:** The integration webhook must be idempotent. If Temenos sends the same `transaction_id` twice, the system must ignore the duplicate and return `200 OK` to prevent double-crediting an agent.
+- **Asynchronous Processing:** The webhook endpoint must respond immediately (`202 Accepted`) and process the referral validation in the background (or via a queue) to prevent blocking the core banking system.
+- **JSONB for Rules:** Use PostgreSQL `JSONB` for `campaign_rules` and `integration_logs` payloads. This allows schema flexibility without constant database migrations.
+- **Audit Trails:** Every status change on a `referral` or `campaign` must record `updated_at` and `updated_by` (User ID).
+- **Pagination:** All `GET` endpoints (agents, referrals, campaigns) must support pagination (`?page=1&limit=20`) to handle thousands of records.
+- **Database Indexes:** Add indexes on `referrals(agent_id)`, `referrals(status)`, `campaigns(status)`, and `integration_logs(status)` for fast querying.

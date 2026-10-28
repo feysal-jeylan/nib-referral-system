@@ -25,9 +25,11 @@ const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
 // ─── Route Imports ────────────────────────────────────────────────────────────
-const agentsRouter    = require('./routes/agents');
-const referralsRouter = require('./routes/referrals');
-const authRouter      = require('./routes/auth');
+const agentsRouter      = require('./routes/agents');
+const referralsRouter   = require('./routes/referrals');
+const authRouter        = require('./routes/auth');
+const campaignsRouter   = require('./routes/campaigns');     // v4: Campaign Management
+const integrationRouter = require('./routes/integration');   // v4: Core Banking Webhook
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -77,9 +79,11 @@ app.get('/api/health', (req, res) => {
 
 // Mount feature routers.
 // Each router handles all sub-routes under its prefix.
-app.use('/api/auth',     authRouter);       // Login, logout, /me — no auth required
-app.use('/api/agents',   agentsRouter);
-app.use('/api/referrals', referralsRouter);
+app.use('/api/auth',        authRouter);        // Login, logout, /me — no auth required
+app.use('/api/agents',      agentsRouter);
+app.use('/api/referrals',   referralsRouter);
+app.use('/api/campaigns',   campaignsRouter);   // v4: ADMIN-only Campaign Management
+app.use('/api/integration', integrationRouter); // v4: Public Core Banking Webhook (Temenos)
 
 // ─── Error Handling Middleware ─────────────────────────────────────────────────
 /**
