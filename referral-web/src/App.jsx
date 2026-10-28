@@ -15,11 +15,15 @@
  *
  * Sections:
  *   1. Primitive UI components (Toast, StatusPill, RewardBadge, Spinner)
- *   2. AgentForm       — register a new agent (POST /api/agents)
- *   3. AgentTable      — shows all agents with reward tier
- *   4. ReferralForm    — register a new referral (POST /api/referrals)
- *   5. ReferralTable   — shows all referrals with approve/reject actions
- *   6. App (root)      — auth gate, orchestrates state, data fetching, toasts
+ *   2. AgentForm          — register a new agent (POST /api/agents)
+ *   3. AgentTable         — shows all agents with reward tier
+ *   4. ReferralForm       — register a new referral (POST /api/referrals)
+ *   5. ReferralTable      — shows all referrals with approve/reject actions
+ *   6. CampaignForm       — ADMIN: create a new campaign (POST /api/campaigns)
+ *   7. CampaignTable      — ADMIN: list campaigns with rules + activate action
+ *   8. CampaignStatusPill — coloured pill for DRAFT / ACTIVE / EXPIRED
+ *   9. App (root)         — auth gate, orchestrates state, data fetching, toasts
+ *  10. Dashboard          — rendered when authenticated, holds all business logic
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -434,7 +438,290 @@ function ReferralTable({ referrals, loading, onStatusChange, isAdmin }) {
   );
 }
 
-// ─── 6. App (root) ────────────────────────────────────────────────────────────
+// ─── 6. CampaignForm ──────────────────────────────────────────────────────────
+//
+// ADMIN-ONLY. Creates a new campaign via POST /api/campaigns.
+// On success, calls onCreated() to reload the campaign list and fires a toast.
+//
+// Fields:
+//   name         — freetext campaign name
+//   start_date   — HTML date input (converted to ISO string before sending)
+//   end_date     — HTML date input
+//   reward_type  — select: CASH | BADGE
+//   reward_value — freetext (e.g. "500 ETB" or "Gold Tier Badge")
+function CampaignForm({ onCreated, onToast }) {
+  const EMPTY = { name: '', start_date: '', end_date: '', reward_type: 'CASH', reward_value: '' };
+  const [form, setForm]             = useState(EMPTY);
+  const [submitting, setSubmitting] = useState(false);
+  const nameRef = useRef(null);
+
+  function handleChange(e) {
+    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API}/campaigns`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Send dates as ISO 8601 strings so the backend parser handles them correctly.
+        body: JSON.stringify({
+          ...form,
+          start_date: form.start_date ? new Date(form.start_date).toISOString() : '',
+          end_date:   form.end_date   ? new Date(form.end_date).toISOString()   : '',
+        }),
+        ...FETCH_OPTS,
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          onToast({ type: 'error', message: '🔒 Your session has expired. Please log in again.' });
+          return;
+        }
+        onToast({ type: 'error', message: data.error ?? 'Failed to create campaign.' });
+        return;
+      }
+
+      onCreated();  // triggers refreshCampaigns() in Dashboard
+      onToast({ type: 'success', message: `✅ Campaign "${data.campaign.name}" created as DRAFT.` });
+      setForm(EMPTY);
+      nameRef.current?.focus();
+    } catch {
+      onToast({ type: 'error', message: '🔴 Cannot reach the server. Is the API running?' });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form
+      id="campaign-form"
+      className="agent-form"
+      onSubmit={handleSubmit}
+      noValidate
+      aria-label="Create a new campaign"
+    >
+      <h2 className="form__title">Create New Campaign</h2>
+      <div className="form__grid form__grid--3col">
+        <div className="form__field">
+          <label htmlFor="camp-name">Campaign Name</label>
+          <input
+            id="camp-name" name="name" type="text"
+            placeholder="e.g. Q4 Savings Drive"
+            value={form.name} onChange={handleChange}
+            required ref={nameRef} autoComplete="off"
+          />
+        </div>
+        <div className="form__field">
+          <label htmlFor="camp-start">Start Date</label>
+          <input
+            id="camp-start" name="start_date" type="date"
+            value={form.start_date} onChange={handleChange}
+            required
+          />
+        </div>
+        <div className="form__field">
+          <label htmlFor="camp-end">End Date</label>
+          <input
+            id="camp-end" name="end_date" type="date"
+            value={form.end_date} onChange={handleChange}
+            required
+          />
+        </div>
+        <div className="form__field">
+          <label htmlFor="camp-reward-type">Reward Type</label>
+          {/*
+            select uses .form__field select rules in App.css to match
+            the styling of all other form inputs on the page.
+          */}
+          <select
+            id="camp-reward-type" name="reward_type"
+            value={form.reward_type} onChange={handleChange}
+            required
+          >
+            <option value="CASH">CASH</option>
+            <option value="BADGE">BADGE</option>
+          </select>
+        </div>
+        <div className="form__field form__field--wide">
+          <label htmlFor="camp-reward-value">Reward Value</label>
+          <input
+            id="camp-reward-value" name="reward_value" type="text"
+            placeholder="e.g. 500 ETB or Gold Tier Badge"
+            value={form.reward_value} onChange={handleChange}
+            required autoComplete="off"
+          />
+        </div>
+      </div>
+      <button id="submit-campaign-btn" type="submit" className="btn btn--primary" disabled={submitting}>
+        {submitting && <Spinner small />}
+        {submitting ? 'Creating…' : 'Create Campaign'}
+      </button>
+    </form>
+  );
+}
+
+// ─── 7. CampaignTable ─────────────────────────────────────────────────────────
+//
+// ADMIN-ONLY. Renders a table of all campaigns.
+//
+// For each campaign row:
+//   - Rules are shown as small inline tags below the campaign name.
+//   - A CampaignStatusPill shows DRAFT / ACTIVE / EXPIRED.
+//   - DRAFT rows show an "Activate" button (PATCH /api/campaigns/:id/activate).
+//   - ACTIVE rows show a disabled "Active" badge in the Actions column.
+//   - EXPIRED rows show a dash.
+//
+// Props:
+//   campaigns   — array from GET /api/campaigns (includes rules array)
+//   loading     — boolean, shows spinner while fetching
+//   onActivated — callback after a successful activate → triggers list refresh
+//   onToast     — show a toast notification
+function CampaignTable({ campaigns, loading, onActivated, onToast }) {
+  const [activating, setActivating] = useState(new Set());
+
+  async function handleActivate(id, name) {
+    setActivating(prev => new Set(prev).add(id));
+    try {
+      const res  = await fetch(`${API}/campaigns/${id}/activate`, {
+        method: 'PATCH',
+        ...FETCH_OPTS,
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        onToast({ type: 'error', message: data.error ?? 'Activation failed.' });
+        return;
+      }
+      onActivated();   // refresh the campaign list in Dashboard
+      onToast({ type: 'success', message: `✅ Campaign "${name}" is now ACTIVE.` });
+    } catch {
+      onToast({ type: 'error', message: '🔴 Cannot reach the server.' });
+    } finally {
+      setActivating(prev => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  }
+
+  if (loading) return <div className="state-box"><Spinner /><p>Loading campaigns…</p></div>;
+  if (!campaigns.length) return (
+    <EmptyState icon="📋" title="No campaigns yet"
+      sub="Create your first campaign using the form above." />
+  );
+
+  return (
+    <div className="table-wrap">
+      <table className="data-table" aria-label="Campaign list">
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Name / Rules</th>
+            <th scope="col">Start Date</th>
+            <th scope="col">End Date</th>
+            <th scope="col">Reward</th>
+            <th scope="col">Status</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {campaigns.map((c, i) => {
+            const busy  = activating.has(c.id);
+            // The API guarantees rules is an array (possibly empty).
+            const rules = Array.isArray(c.rules) ? c.rules : [];
+            return (
+              <tr key={c.id} className="data-row">
+                <td className="td--index">{i + 1}</td>
+                <td className="td--name">
+                  {/* Campaign name */}
+                  <span>{c.name}</span>
+                  {/* Rule tags — only rendered when the campaign has rules */}
+                  {rules.length > 0 && (
+                    <div className="rule-tags">
+                      {rules.map(r => {
+                        // rule_value is a JSONB object; extract the first scalar value
+                        // for a compact display (e.g. MIN_DEPOSIT: 5000).
+                        const val = Object.values(r.rule_value ?? {})[0] ?? '';
+                        return (
+                          <span key={r.id} className="rule-tag">
+                            {r.rule_type}: {String(val)}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </td>
+                <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)' }}>
+                  {new Date(c.start_date).toLocaleDateString()}
+                </td>
+                <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)' }}>
+                  {new Date(c.end_date).toLocaleDateString()}
+                </td>
+                <td>
+                  {/* Type chip + value chip side-by-side */}
+                  <span className="reward-chip reward-chip--type">{c.reward_type}</span>
+                  {' '}
+                  <span className="reward-chip reward-chip--value">{c.reward_value}</span>
+                </td>
+                <td>
+                  <CampaignStatusPill status={c.status} />
+                </td>
+                <td>
+                  {c.status === 'DRAFT' ? (
+                    /*
+                      "Activate" button — only shown for DRAFT campaigns.
+                      Calls PATCH /api/campaigns/:id/activate.
+                      Disabled while the PATCH request is in-flight.
+                    */
+                    <button
+                      id={`activate-btn-${c.id}`}
+                      className="btn btn--activate"
+                      disabled={busy}
+                      onClick={() => handleActivate(c.id, c.name)}
+                      aria-label={`Activate campaign ${c.name}`}
+                    >
+                      {busy ? <Spinner small /> : '▶ Activate'}
+                    </button>
+                  ) : c.status === 'ACTIVE' ? (
+                    /*
+                      Non-interactive "Active" badge — replaces the button for ACTIVE
+                      campaigns so the Actions cell always has content. Makes it clear
+                      at a glance that no further action is available.
+                    */
+                    <span className="badge badge--active-indicator" aria-label="Campaign is active">
+                      Active
+                    </span>
+                  ) : (
+                    /* EXPIRED — no action available */
+                    <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>—</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── 8. CampaignStatusPill ───────────────────────────────────────────────────
+//
+// Colour-coded pill for campaign status.
+// Separate from the referral StatusPill because the colours and states differ:
+//   DRAFT   → grey   (neutral, not yet live)
+//   ACTIVE  → green  (live, accepting referrals)
+//   EXPIRED → red    (past end_date, read-only)
+function CampaignStatusPill({ status }) {
+  return (
+    <span className={`camp-status-pill camp-status-pill--${status}`}>
+      {status}
+    </span>
+  );
+}
+
+// ─── 9. App (root) ────────────────────────────────────────────────────────────
 export default function App() {
   // ── Auth state from context ──────────────────────────────────────────────
   const { user, loading, logout } = useAuth();
@@ -498,7 +785,7 @@ export default function App() {
   />;
 }
 
-// ─── Dashboard — only rendered when the user is authenticated ────────────────
+// ─── 10. Dashboard — only rendered when the user is authenticated ─────────────
 //
 // Extracted into its own component so all its hooks run unconditionally
 // (React rules of hooks forbid calling hooks after an early return).
@@ -515,6 +802,12 @@ function Dashboard({
   const isAdmin = user.role === 'ADMIN';
   const isAgent = user.role === 'AGENT';
 
+  // ── Campaign state — ADMIN only ──────────────────────────────────────────
+  // Hooks are declared unconditionally (React rules), but the fetch is
+  // skipped for non-admin users so there are no unnecessary 403 requests.
+  const [campaigns,        setCampaigns]        = useState([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(true);
+
   // ── Data loading ────────────────────────────────────────────────────────────
   //
   // credentials: 'include' is spread from FETCH_OPTS onto every fetch call.
@@ -524,21 +817,53 @@ function Dashboard({
   useEffect(() => {
     async function load() {
       try {
-        const [aRes, rRes] = await Promise.all([
-          fetch(`${API}/agents`,    FETCH_OPTS),  // credentials: 'include'
-          fetch(`${API}/referrals`, FETCH_OPTS),  // credentials: 'include'
+        // Always fetch agents and referrals (both roles need them).
+        const fetches = [
+          fetch(`${API}/agents`,    FETCH_OPTS),
+          fetch(`${API}/referrals`, FETCH_OPTS),
+        ];
+        // Campaigns are ADMIN-only — skip the fetch entirely for AGENT role
+        // to avoid a 403 that would show an error toast unnecessarily.
+        if (isAdmin) {
+          fetches.push(fetch(`${API}/campaigns`, FETCH_OPTS));
+        }
+
+        const responses = await Promise.all(fetches);
+        const [aData, rData] = await Promise.all([
+          responses[0].json(),
+          responses[1].json(),
         ]);
-        const [aData, rData] = await Promise.all([aRes.json(), rRes.json()]);
         setAgents(Array.isArray(aData) ? aData : []);
         setReferrals(Array.isArray(rData) ? rData : []);
+
+        if (isAdmin && responses[2]) {
+          const cData = await responses[2].json();
+          // GET /api/campaigns returns { campaigns: [...], total, page, limit }
+          setCampaigns(Array.isArray(cData.campaigns) ? cData.campaigns : []);
+        }
       } catch {
         showToast({ type: 'error', message: '🔴 Failed to load data. Is the API running?' });
       } finally {
         setAgentsLoading(false);
         setReferralsLoading(false);
+        setCampaignsLoading(false);
       }
     }
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Refresh campaign list ────────────────────────────────────────────────────
+  // Called after a successful campaign create or activate to keep the table
+  // in sync with the server without a full page reload.
+  const refreshCampaigns = useCallback(async () => {
+    try {
+      const res  = await fetch(`${API}/campaigns`, FETCH_OPTS);
+      const data = await res.json();
+      setCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
+    } catch {
+      showToast({ type: 'error', message: '🔴 Could not refresh campaigns.' });
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -736,6 +1061,41 @@ function Dashboard({
             isAdmin={isAdmin}
           />
         </section>
+
+        {/*
+          ── ADMIN-ONLY: Campaign Management ──────────────────────────────────
+          Placed below Recent Referrals per the task specification.
+          The isAdmin check is the frontend gate. The backend independently
+          enforces ADMIN-only access on all /api/campaigns routes via
+          authorizeRole(['ADMIN']) — so even a crafted request from an AGENT
+          will be rejected with 403 Forbidden.
+        */}
+        {isAdmin && (
+          <>
+            {/* Campaign creation form */}
+            <section className="card" aria-labelledby="campaign-form-heading">
+              <CampaignForm onCreated={refreshCampaigns} onToast={showToast} />
+            </section>
+
+            {/* Campaign list with status pills, rule tags, and activate actions */}
+            <section className="card" aria-labelledby="campaign-table-heading">
+              <div className="section-header">
+                <h2 id="campaign-table-heading" className="section-header__title">
+                  Campaign Management
+                </h2>
+                <span className="section-header__count">
+                  {campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <CampaignTable
+                campaigns={campaigns}
+                loading={campaignsLoading}
+                onActivated={refreshCampaigns}
+                onToast={showToast}
+              />
+            </section>
+          </>
+        )}
 
       </main>
 

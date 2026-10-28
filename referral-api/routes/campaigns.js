@@ -277,8 +277,8 @@ router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
 // GET /api/campaigns
 // List all campaigns with their rules aggregated as a JSON array.
 //
-// Using json_agg + json_build_object so each campaign row already contains
-// its rules array — no N+1 query problem, no extra round-trips.
+// The GET /api/campaigns endpoint already uses json_agg + LEFT JOIN to embed
+// each campaign's rules array in a single query — no N+1 problem.
 //
 // Supports pagination per RULES.md §7:
 //   ?page=1&limit=20   (defaults: page=1, limit=20)
@@ -307,7 +307,6 @@ router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
 router.get('/', ...adminOnly, async (req, res, next) => {
   try {
     // ── Pagination ────────────────────────────────────────────────────────────
-    // parseInt with base 10 and a fallback for non-numeric or missing values.
     const page  = Math.max(1, parseInt(req.query.page,  10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const offset = (page - 1) * limit;
@@ -317,16 +316,9 @@ router.get('/', ...adminOnly, async (req, res, next) => {
     const total = parseInt(countResult.rows[0].total, 10);
 
     // ── Main query: campaigns + aggregated rules ───────────────────────────────
-    // LEFT JOIN: campaigns with zero rules still appear (rules = []).
-    // json_agg with FILTER (WHERE cr.id IS NOT NULL) prevents [null] in the
-    //   rules array when a campaign has no rules yet.
-    // ORDER BY c.created_at DESC: newest campaign first.
-    // LIMIT / OFFSET: applied to campaigns (not to the join rows) via subquery
-    //   or by letting PostgreSQL handle grouping before pagination.
-    //
-    // Note on parameterized LIMIT/OFFSET:
-    //   We pass $1 and $2 as parameters — never interpolated into the string —
-    //   per RULES.md §2 "Never use string concatenation for SQL queries."
+    // LEFT JOIN ensures campaigns with zero rules still appear (rules = []).
+    // json_agg FILTER (WHERE cr.id IS NOT NULL) prevents [null] in the array.
+    // All parameters are passed as $1/$2 — no string interpolation per RULES.md §2.
     const result = await pool.query(
       `SELECT
          c.id,
@@ -360,6 +352,73 @@ router.get('/', ...adminOnly, async (req, res, next) => {
       page,
       limit,
       campaigns: result.rows,
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// GET /api/campaigns/:id/stats
+// Return aggregate statistics for a single campaign.
+//
+// Currently surfaces:
+//   total_referrals — how many referral rows are linked to this campaign_id.
+//
+// The frontend uses this to show a live "X referrals" counter on each campaign
+// card without re-fetching the entire referrals table.
+//
+// WHY COUNT on referrals.campaign_id?
+//   The referrals table has a nullable campaign_id FK (set during the v4
+//   migration). Each referral that was processed through the integration
+//   webhook will have this FK populated. Counting them gives the campaign's
+//   reach without a slow full-table scan (idx_referrals_campaign_id covers this).
+//
+// Success response — 200 OK:
+//   { "campaign_id": 1, "total_referrals": 42 }
+//
+// Error responses:
+//   400 Bad Request — id is not a number
+//   404 Not Found   — campaign does not exist
+//   500 Server Error
+// ---------------------------------------------------------------------------
+router.get('/:id/stats', ...adminOnly, async (req, res, next) => {
+  try {
+    const campaignId = parseInt(req.params.id, 10);
+    if (isNaN(campaignId)) {
+      return res.status(400).json({
+        error: 'Campaign ID must be a number.',
+        code:  'INVALID_CAMPAIGN_ID',
+      });
+    }
+
+    // ── Verify the campaign exists before counting ────────────────────────────
+    // Explicit 404 is friendlier than returning { total_referrals: 0 } for a
+    // campaign that doesn't exist, which would be a silent data error.
+    const campaignCheck = await pool.query(
+      'SELECT id FROM campaigns WHERE id = $1',
+      [campaignId]
+    );
+    if (campaignCheck.rows.length === 0) {
+      return res.status(404).json({
+        error: `Campaign with id ${campaignId} not found.`,
+        code:  'CAMPAIGN_NOT_FOUND',
+      });
+    }
+
+    // ── Count referrals linked to this campaign ───────────────────────────────
+    // referrals.campaign_id is the FK set by the integration webhook.
+    // COUNT(*) returns 0 (not null) when no rows match, so no COALESCE needed.
+    const statsResult = await pool.query(
+      'SELECT COUNT(*) AS total_referrals FROM referrals WHERE campaign_id = $1',
+      [campaignId]
+    );
+
+    return res.status(200).json({
+      campaign_id:      campaignId,
+      total_referrals:  parseInt(statsResult.rows[0].total_referrals, 10),
     });
 
   } catch (err) {
