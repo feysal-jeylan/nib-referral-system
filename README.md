@@ -1,26 +1,54 @@
-# Nib International Bank Referral Management System
+# Nib International Bank: Referral Management System (V2)
 
-A secure, full-stack enterprise application designed to automate agent referral tracking, enforce role-based access control, and calculate customer acquisition rewards based on configurable business rules.
+> A secure, event-driven referral tracking and campaign management system designed to integrate with Nib Bank's Core Banking System (Temenos). Built as a university internship mini-project.
 
-## Project Overview
+**Project Context:** University Internship Mini-Project  
+**Institution:** Nib International Bank (Mexico Branch, Addis Ababa)  
+**Author:** Feysal Jeylan  
+**Date:** October 2026
 
-- **Institution:** Nib International Bank, Mexico Branch, Addis Ababa
-- **Project Type:** University Internship Mini-Project
-- **Author:** Feysal Jeylan
-- **Date:** October 2026
-- **Tech Stack:** React, Vite, Node.js, Express.js, PostgreSQL
+---
 
-## Database Schema
+## 📖 Executive Summary
 
-The database uses relational tables, foreign keys, unique constraints, and check constraints to maintain data integrity.
+Manual referral tracking is prone to data duplication, delayed reward processing, and internal fraud. This system solves that by acting as an **event-driven listener** for the bank's Core Banking System (Temenos).
+
+Instead of registering customers manually, the system receives webhooks when a customer opens an account using a referral code. It then validates the code, checks active marketing campaigns, and automatically tracks the agent's progress towards reward tiers.
+
+---
+
+## 🏗️ System Architecture
+
+The application follows a decoupled, three-tier architecture, plus an external integration layer.
+
+```mermaid
+graph TD
+    Temenos["Core Banking System (Temenos)"]
+    API["Express.js REST API (Node.js)"]
+    DB[("PostgreSQL 18 Database")]
+    React["React Dashboard (Admin & Agent)"]
+
+    Temenos -- "Webhook: POST /api/integration/account-opened" --> API
+    React -- "HTTP Requests (JSON) + HttpOnly Cookie" --> API
+    API -- "Validates & Records" --> DB
+    DB -- "Relational Data" --> API
+    API -- "JSON Response" --> React
+```
+
+---
+
+## 🗄️ Database Schema (Entity-Relationship Diagram)
+
+The database is highly normalized to ensure ACID compliance.
 
 ```mermaid
 erDiagram
     USERS {
         int id PK
-        varchar username UK
+        varchar username
         varchar password_hash
         varchar role
+        boolean must_change_password
         int agent_id FK
     }
 
@@ -30,128 +58,155 @@ erDiagram
         varchar phone UK
         varchar email UK
         varchar referral_code UK
-        timestamp created_at
-    }
-
-    CUSTOMERS {
-        int id PK
-        varchar name
-        varchar phone UK
-        timestamp created_at
     }
 
     REFERRALS {
         int id PK
         int agent_id FK
-        int customer_id FK
-        varchar status
+        varchar customer_name
+        varchar customer_phone
+        int campaign_id FK
+        varchar status "CHECK: PENDING, SUCCESSFUL, REJECTED"
         timestamp created_at
     }
 
-    REWARD_RULES {
+    CAMPAIGNS {
         int id PK
-        int min_referrals UK
-        varchar reward_name
+        varchar name
+        timestamp start_date
+        timestamp end_date
+        varchar reward_type
+        varchar reward_value
+        varchar status
     }
 
-    AGENTS ||--o{ REFERRALS : generates
-    CUSTOMERS ||--o{ REFERRALS : receives
-    AGENTS ||--o{ USERS : authenticates_as
+    CAMPAIGN_RULES {
+        int id PK
+        int campaign_id FK
+        varchar rule_type
+        jsonb rule_value
+    }
+
+    INTEGRATION_LOGS {
+        int id PK
+        varchar transaction_id UK
+        jsonb payload
+        varchar status
+        text error_message
+    }
+
+    AGENTS ||--o{ REFERRALS : "Generates"
+    AGENTS ||--o{ USERS : "Authenticates as"
+    CAMPAIGNS ||--o{ REFERRALS : "Applies to"
+    CAMPAIGNS ||--o{ CAMPAIGN_RULES : "Has rules"
 ```
 
-## Executive Summary
+---
 
-Manual referral tracking is vulnerable to duplicate records, delayed reward processing, and unauthorized changes.
+## 🔄 Core Banking Integration & Idempotency
 
-This system provides a centralized web portal where authorized users manage agents, register customers through referral codes, review referrals, and track agent performance.
+### The Flow
 
-The application calculates reward tiers using configurable database rules, such as Bronze, Silver, and Gold, based on the number of successful referrals.
+1. A customer opens an account in Temenos and provides an agent's `referral_code`.
+2. Temenos fires a webhook to `POST /api/integration/account-opened`.
+3. The system validates the code, finds the active campaign, and records the referral.
 
-## System Architecture
+### Idempotency (The Safety Net)
 
-The application follows a three-tier architecture that separates the frontend, backend API, and database.
-
-```mermaid
-flowchart TD
-    A["Client Browser<br/>React + Vite"]
-    B["Express.js REST API<br/>Node.js"]
-    C["Authentication and<br/>RBAC Middleware"]
-    D[("PostgreSQL Database")]
-
-    A -->|"HTTP Requests and JSON"| B
-    B --> C
-    C -->|"Authorized Operations"| D
-    D -->|"Query Results"| B
-    B -->|"JSON Responses"| A
-```
-
-## Core Business Workflow
-
-The following sequence illustrates referral registration, approval, and reward calculation.
+If Temenos sends the same `transaction_id` twice due to network retries, the system **must not** double-credit the agent.
 
 ```mermaid
 sequenceDiagram
-    actor Admin as Admin User
-    participant React as React Frontend
-    participant API as Express API
-    participant DB as PostgreSQL
+    participant Temenos
+    participant API
+    participant DB
 
-    Admin->>React: Submit referral code and customer details
-    React->>API: POST /api/referrals
-    API->>DB: BEGIN transaction
-    API->>DB: Insert customer record
-    API->>DB: Insert pending referral
-    API->>DB: COMMIT transaction
-    DB-->>API: Confirm successful registration
-    API-->>React: 201 Created
+    Temenos->>API: POST /account-opened (TXN-1001)
+    API->>DB: Check integration_logs for TXN-1001
+    DB-->>API: Not found
+    API->>DB: INSERT into integration_logs + INSERT into referrals
+    API-->>Temenos: 202 Accepted
 
-    Note over Admin,DB: The administrator reviews the referral later
+    Temenos->>API: POST /account-opened (TXN-1001) - Retry
+    API->>DB: Check integration_logs for TXN-1001
+    DB-->>API: Found (PROCESSED)
+    API-->>Temenos: 200 OK {"message": "Already processed"}
 
-    Admin->>React: Approve pending referral
-    React->>API: PATCH /api/referrals/:id/status
-    API->>DB: Update referral status
-    API->>DB: Calculate successful referral count
-    DB-->>API: Return updated statistics
-    API-->>React: 200 OK with updated reward tier
-    React-->>Admin: Display updated agent statistics
+    Note over API,DB: No duplicate referral created.
 ```
 
-## Security Architecture
+---
 
-Security and data integrity are important design requirements for this banking-related application.
+## 🛡️ Enterprise Security Architecture
 
-- **Authentication:** JSON Web Tokens (JWT) are transmitted through `HttpOnly` cookies with appropriate `SameSite` settings.
-- **Password Hashing:** Passwords are hashed using `bcrypt` with a configured cost factor of 12. Plain-text passwords are never stored.
-- **Role-Based Access Control:** Middleware restricts API operations according to user roles. Administrators manage agents and referrals, while agents access only their authorized information.
-- **SQL Injection Prevention:** Parameterized SQL queries protect database operations from SQL injection.
-- **ACID Transactions:** Customer and referral creation use database transactions to prevent incomplete records.
-- **HTTP Security:** Helmet.js sets security-related HTTP headers.
-- **Cross-Origin Resource Sharing:** CORS policies restrict requests to approved origins.
+Because this operates in a banking context, security is non-negotiable:
 
-## Running the Project Locally
+- **Stateless Auth (JWT & HttpOnly Cookies):** JWTs are stored in `HttpOnly`, `SameSite=Strict` cookies, preventing XSS attacks.
+- **Forced Password Change:** New agents receive a temporary password, simulated via email. They are forced to create a new one on first login.
+- **Role-Based Access Control (RBAC):** Middleware strictly enforces roles. Agents can only view their own stats. Only Admins can activate campaigns or view integration logs.
+- **SQL Injection Prevention:** 100% of queries use parameterized inputs (`$1`, `$2`).
+- **Campaign Rules (JSONB):** Flexible rules, such as `MIN_DEPOSIT`, are stored as JSONB, allowing schema changes without migrations.
+
+---
+
+## 💻 Running the Project Locally
 
 ### Prerequisites
 
-- Node.js and npm
-- PostgreSQL
-- Configured environment variables
-- Project dependencies installed
+- Node.js (v18+)
+- PostgreSQL (v18+) running on port `5432`
 
-### 1. Start the Backend API
+### 1. Database Setup
 
-Open a terminal and run:
+Run the following commands from the project root, assuming the database scripts are located in `referral-api`.
+
+```bash
+psql -U postgres -c "CREATE DATABASE referral_db;"
+
+cd referral-api
+
+psql -U postgres -d referral_db -f schema.sql
+psql -U postgres -d referral_db -f schema_auth.sql
+psql -U postgres -d referral_db -f schema_v3_password.sql
+psql -U postgres -d referral_db -f schema_v4_campaigns.sql
+```
+
+### 2. Backend Setup
+
+Navigate to the backend directory and install the dependencies.
 
 ```bash
 cd referral-api
 npm install
+```
+
+Create a `.env` file in the `referral-api` directory with the following configuration.
+
+```env
+PORT=3000
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=your_password
+DB_NAME=referral_db
+JWT_SECRET=your_super_secret_key
+```
+
+#### Seed the Default Admin
+
+```bash
+node seed_admin.js
+```
+
+#### Start the Backend
+
+```bash
 npm run dev
 ```
 
-The backend API runs at `http://localhost:3000`, assuming the configured development port is 3000.
+### 3. Frontend Setup
 
-### 2. Start the Frontend
-
-Open a second terminal and run:
+Open a new terminal and run the following commands.
 
 ```bash
 cd referral-web
@@ -159,32 +214,10 @@ npm install
 npm run dev
 ```
 
-The frontend runs at `http://localhost:5173`, assuming the default Vite development port.
+---
 
-### 3. Access the Application
+## 🔑 System Access (Demo Credentials)
 
-Open the frontend URL in your browser:
-
-`http://localhost:5173`
-
-### Demo Credentials
-
-Use the following credentials only if the corresponding demo account has been configured in your local database.
-
+- **Admin URL:** `http://localhost:5173`
 - **Username:** `admin`
 - **Password:** `admin123`
-
-## Production Roadmap
-
-The following features are potential future enhancements.
-
-1. **Core Banking Integration:** Integrate with approved banking systems to verify customer qualification events.
-2. **Maker-Checker Workflow:** Require independent authorization for reward approvals and financial payouts.
-3. **Single Sign-On:** Integrate with the bank's approved identity provider.
-4. **Audit Logging:** Maintain tamper-resistant records of important actions and administrative changes.
-5. **Configurable Reward Rules:** Allow authorized administrators to manage reward thresholds through controlled interfaces.
-6. **Automated Testing:** Add unit, integration, and end-to-end tests for critical business workflows.
-
-## Disclaimer
-
-This project is an internship mini-project developed for learning and demonstration purposes. It is not an official banking production system and should not process real customer data or financial transactions without formal security review, authorization, and compliance approval.
