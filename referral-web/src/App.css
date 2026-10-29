@@ -48,8 +48,8 @@
   --reject-txt:  #7F1D1D;
   --reject-bdr:  #FCA5A5;
 
-  --radius:     6px;
-  --radius-btn: 4px;
+  --radius:      6px;
+  --radius-btn:  4px;
   --shadow-card: 0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(0,43,91,0.07);
   --font:        'Inter', 'Segoe UI', system-ui, sans-serif;
   --transition:  0.14s ease;
@@ -76,58 +76,41 @@ body {
 .app-header {
   background:    var(--navy);
   border-bottom: 3px solid var(--gold);
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  position:      sticky;
+  top:           0;
+  z-index:       100;
+  box-shadow:    0 2px 6px rgba(0,0,0,0.2);
 }
 
 .app-header__inner {
-  max-width:  1060px;
-  margin:     0 auto;
-  padding:    14px 28px;
-  display:    flex;
-  align-items: center;
+  max-width:       1060px;
+  margin:          0 auto;
+  padding:         14px 28px;
+  display:         flex;
+  align-items:     center;
   justify-content: space-between;
 }
 
 .app-header__brand {
-  display:    flex;
+  display:     flex;
   align-items: center;
-  gap:        14px;
-}
-
-/* NIB text monogram — replaces emoji */
-.app-header__monogram {
-  width:           38px;
-  height:          38px;
-  background:      var(--gold);
-  color:           #fff;
-  font-size:       12px;
-  font-weight:     800;
-  letter-spacing:  0.6px;
-  display:         flex;
-  align-items:     center;
-  justify-content: center;
-  border-radius:   4px;
-  flex-shrink:     0;
-  user-select:     none;
+  gap:         14px;
 }
 
 .app-header__title {
-  font-size:    17px;
-  font-weight:  700;
-  color:        #fff;
+  font-size:      17px;
+  font-weight:    700;
+  color:          #fff;
   letter-spacing: -0.2px;
-  line-height:  1.2;
+  line-height:    1.2;
 }
 
 .app-header__subtitle {
-  font-size:       10.5px;
-  color:           rgba(255,255,255,0.5);
-  letter-spacing:  0.8px;
-  text-transform:  uppercase;
-  margin-top:      2px;
+  font-size:      10.5px;
+  color:          rgba(255,255,255,0.5);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  margin-top:     2px;
 }
 
 /* ── Main ─────────────────────────────────────────────────────────────────── */
@@ -225,11 +208,7 @@ body {
   gap:                   12px;
 }
 
-/*
-  3-column grid variant used by the Campaign form.
-  Gives name / start / end their own columns on wide viewports,
-  then reward-type its own column, and reward-value spanning the rest.
-*/
+/* 3-column variant used by the Campaign form */
 .form__grid--3col {
   grid-template-columns: 2fr 1fr 1fr;
 }
@@ -262,7 +241,6 @@ body {
   outline:       none;
   transition:    border-color var(--transition), box-shadow var(--transition);
   width:         100%;
-  /* date and select inputs need the same height as text inputs */
   height:        38px;
 }
 
@@ -275,10 +253,9 @@ body {
   background:   #fff;
 }
 
-/* Native date picker icon inherits the navy colour on focus */
 .form__field input[type="date"]::-webkit-calendar-picker-indicator {
-  opacity:  0.5;
-  cursor:   pointer;
+  opacity: 0.5;
+  cursor:  pointer;
 }
 .form__field input[type="date"]:focus::-webkit-calendar-picker-indicator {
   opacity: 1;
@@ -302,57 +279,69 @@ body {
                    color var(--transition), opacity var(--transition);
 }
 
-/* Primary — solid navy, no gradient */
+/* Primary — solid navy */
 .btn--primary {
-  background:  var(--navy);
-  color:       #fff;
+  background:   var(--navy);
+  color:        #fff;
   border-color: var(--navy);
-  align-self:  flex-start;
+  align-self:   flex-start;
 }
 .btn--primary:hover:not(:disabled) {
-  background:  var(--navy-hover);
+  background:   var(--navy-hover);
   border-color: var(--navy-hover);
 }
 .btn--primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Ghost — subtle outlined button for secondary actions (e.g. Refresh) */
+.btn--ghost {
+  background:   transparent;
+  color:        var(--text-3);
+  border-color: var(--border);
+  padding:      5px 12px;
+  font-size:    12px;
+  font-weight:  600;
+}
+.btn--ghost:hover:not(:disabled) {
+  background:   var(--bg);
+  color:        var(--text-2);
+  border-color: var(--border-dark);
+}
+.btn--ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* Approve — solid dark green */
 .btn--approve {
-  background:  #14532D;
-  color:       #fff;
+  background:   #14532D;
+  color:        #fff;
   border-color: #14532D;
-  padding:     5px 12px;
-  font-size:   12px;
+  padding:      5px 12px;
+  font-size:    12px;
 }
 .btn--approve:hover:not(:disabled) { background: #166534; border-color: #166534; }
 .btn--approve:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Reject — outlined, fills on hover */
+/* Reject — outlined red */
 .btn--reject {
-  background:  transparent;
-  color:       #991B1B;
+  background:   transparent;
+  color:        #991B1B;
   border-color: #FCA5A5;
-  padding:     5px 12px;
-  font-size:   12px;
+  padding:      5px 12px;
+  font-size:    12px;
 }
 .btn--reject:hover:not(:disabled) {
-  background:  #7F1D1D;
-  color:       #fff;
+  background:   #7F1D1D;
+  color:        #fff;
   border-color: #7F1D1D;
 }
 .btn--reject:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/*
-  Activate — gold-accented navy outline.
-  Distinctive enough to stand apart from Approve (green) — this is an
-  admin configuration action, not a transaction approval.
-*/
+/* Activate — gold-accented outline */
 .btn--activate {
-  background:   transparent;
-  color:        var(--gold);
-  border-color: var(--gold);
-  padding:      5px 14px;
-  font-size:    12px;
-  font-weight:  700;
+  background:     transparent;
+  color:          var(--gold);
+  border-color:   var(--gold);
+  padding:        5px 14px;
+  font-size:      12px;
+  font-weight:    700;
   letter-spacing: 0.3px;
 }
 .btn--activate:hover:not(:disabled) {
@@ -372,7 +361,6 @@ body {
   border:          1px solid var(--border);
 }
 
-/* Column headers — institutional uppercase style */
 .data-table thead { background: var(--bg); }
 
 .data-table th {
@@ -389,7 +377,6 @@ body {
 }
 .data-table th:last-child { border-right: none; }
 
-/* Data cells */
 .data-table td {
   padding:        13px 16px;
   border-bottom:  1px solid var(--border);
@@ -400,17 +387,17 @@ body {
 .data-table td:last-child { border-right: none; }
 .data-table tbody tr:last-child td { border-bottom: none; }
 
-/* Zebra striping — financial ledger style */
+/* Zebra striping */
 .data-table tbody tr:nth-child(even) { background: var(--stripe); }
 .data-table tbody tr:nth-child(odd)  { background: var(--surface); }
 .data-table tbody tr:hover            { background: var(--navy-light); }
 
 /* ── Table column helpers ─────────────────────────────────────────────────── */
 .td--index {
-  color:               var(--text-3);
+  color:                var(--text-3);
   font-variant-numeric: tabular-nums;
-  width:               44px;
-  font-size:           12px;
+  width:                44px;
+  font-size:            12px;
 }
 
 .td--name {
@@ -421,32 +408,32 @@ body {
 .td--count { text-align: center; }
 
 .code-chip {
-  font-family:     ui-monospace, 'Cascadia Code', Consolas, monospace;
-  font-size:       11.5px;
-  background:      var(--navy-light);
-  color:           var(--navy);
-  padding:         3px 8px;
-  border-radius:   3px;
-  border:          1px solid rgba(0,43,91,0.14);
-  letter-spacing:  0.5px;
-  font-weight:     600;
+  font-family:    ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size:      11.5px;
+  background:     var(--navy-light);
+  color:          var(--navy);
+  padding:        3px 8px;
+  border-radius:  3px;
+  border:         1px solid rgba(0,43,91,0.14);
+  letter-spacing: 0.5px;
+  font-weight:    600;
 }
 
 .count-pill {
-  display:      inline-block;
-  background:   var(--navy-light);
-  color:        var(--navy);
-  font-weight:  700;
-  font-size:    13px;
-  min-width:    30px;
-  text-align:   center;
-  border-radius: 3px;
-  padding:      2px 10px;
-  border:       1px solid rgba(0,43,91,0.14);
+  display:              inline-block;
+  background:           var(--navy-light);
+  color:                var(--navy);
+  font-weight:          700;
+  font-size:            13px;
+  min-width:            30px;
+  text-align:           center;
+  border-radius:        3px;
+  padding:              2px 10px;
+  border:               1px solid rgba(0,43,91,0.14);
   font-variant-numeric: tabular-nums;
 }
 
-/* ── Reward badges — solid rectangular, no emoji ─────────────────────────── */
+/* ── Reward badges ────────────────────────────────────────────────────────── */
 .badge {
   display:        inline-block;
   font-size:      10px;
@@ -464,11 +451,7 @@ body {
 .badge--bronze { background: #6B3A15; color: #FEF3C7; border-color: #6B3A15; }
 .badge--none   { background: var(--bg); color: var(--text-3); border-color: var(--border); }
 
-/*
-  "Active" indicator badge in the Campaign table Actions column.
-  Uses gold-on-light to signal a live, positive state without clashing
-  with the green approve buttons elsewhere on the page.
-*/
+/* "Active" indicator in Campaign table Actions column */
 .badge--active-indicator {
   background:     var(--gold-light);
   color:          var(--gold);
@@ -482,7 +465,7 @@ body {
   white-space:    nowrap;
 }
 
-/* ── Status pills — referral status (PENDING / SUCCESSFUL / REJECTED) ─────── */
+/* ── Referral status pills (PENDING / SUCCESSFUL / REJECTED) ──────────────── */
 .status-pill {
   display:        inline-flex;
   align-items:    center;
@@ -496,7 +479,6 @@ body {
   letter-spacing: 0.2px;
 }
 
-/* Colored indicator dot */
 .status-pill::before {
   content:       '';
   width:         6px;
@@ -515,13 +497,11 @@ body {
 
 /* ── Campaign status pills (DRAFT / ACTIVE / EXPIRED) ────────────────────── */
 /*
-  Designed to match the institutional tone of the referral status pills
-  but with a distinct shape (no leading dot) to visually separate the
-  two status systems at a glance.
-
-  DRAFT   → neutral grey   — not yet live, configuration in progress
-  ACTIVE  → corporate green — live, accepting referrals
-  EXPIRED → muted red       — past end_date, read-only record
+  Rectangular — no leading dot — to visually distinguish campaign status from
+  the referral status pills at a glance.
+  DRAFT   → neutral grey
+  ACTIVE  → corporate green
+  EXPIRED → muted red
 */
 .camp-status-pill {
   display:        inline-block;
@@ -535,29 +515,51 @@ body {
   text-transform: uppercase;
 }
 
-.camp-status-pill--DRAFT {
-  background:   #F3F4F6;
-  color:        #374151;
-  border-color: #D1D5DB;
+.camp-status-pill--DRAFT   { background: #F3F4F6; color: #374151; border-color: #D1D5DB; }
+.camp-status-pill--ACTIVE  { background: var(--success-bg); color: var(--success-txt); border-color: var(--success-bdr); }
+.camp-status-pill--EXPIRED { background: var(--reject-bg);  color: var(--reject-txt);  border-color: var(--reject-bdr);  }
+
+/* ── Integration log status pills (RECEIVED / PROCESSED / FAILED) ─────────── */
+/*
+  Three distinct colours that match the semantic meaning of each webhook state:
+  RECEIVED  → amber/yellow — event arrived, processing in progress or queued
+  PROCESSED → green        — referral was created successfully end-to-end
+  FAILED    → red          — processing failed (e.g. bad referral code, no campaign)
+
+  Shares the pill shape of .camp-status-pill so both status systems feel
+  consistent but uses slightly different hues to prevent confusion.
+*/
+.integ-status-pill {
+  display:        inline-block;
+  font-size:      10.5px;
+  font-weight:    700;
+  padding:        3px 10px;
+  border-radius:  3px;
+  border:         1px solid transparent;
+  white-space:    nowrap;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
 }
 
-.camp-status-pill--ACTIVE {
+.integ-status-pill--RECEIVED  {
+  background:   var(--pending-bg);
+  color:        var(--pending-txt);
+  border-color: var(--pending-bdr);
+}
+
+.integ-status-pill--PROCESSED {
   background:   var(--success-bg);
   color:        var(--success-txt);
   border-color: var(--success-bdr);
 }
 
-.camp-status-pill--EXPIRED {
+.integ-status-pill--FAILED {
   background:   var(--reject-bg);
   color:        var(--reject-txt);
   border-color: var(--reject-bdr);
 }
 
 /* ── Reward chips (Campaign table) ───────────────────────────────────────── */
-/*
-  Two small inline chips per campaign: type (CASH / BADGE) and its value.
-  Kept subtle — they carry metadata, not a status.
-*/
 .reward-chip {
   display:        inline-block;
   font-size:      10.5px;
@@ -569,9 +571,9 @@ body {
 }
 
 .reward-chip--type {
-  background:   var(--navy-light);
-  color:        var(--navy);
-  border:       1px solid rgba(0,43,91,0.16);
+  background:     var(--navy-light);
+  color:          var(--navy);
+  border:         1px solid rgba(0,43,91,0.16);
   text-transform: uppercase;
 }
 
@@ -582,11 +584,6 @@ body {
 }
 
 /* ── Campaign rule tags ───────────────────────────────────────────────────── */
-/*
-  Displayed below the campaign name inside the Name/Rules column.
-  Each tag shows a single rule as "RULE_TYPE: value" — compact and scannable.
-  Using flex-wrap so multiple rules flow naturally without overflowing the cell.
-*/
 .rule-tags {
   display:    flex;
   flex-wrap:  wrap;
@@ -606,6 +603,40 @@ body {
   letter-spacing: 0.2px;
   font-family:    ui-monospace, 'Cascadia Code', Consolas, monospace;
   white-space:    nowrap;
+}
+
+/* ── Info Box — V2 architecture notice replacing the manual referral form ─── */
+/*
+  Sits inside the "Core Banking Integration" card. Uses a left-border accent
+  (gold) to signal "institutional information" without the alarm of a warning
+  colour. The icon (ℹ) is purely decorative and hidden from screen readers.
+*/
+.info-box {
+  display:       flex;
+  align-items:   flex-start;
+  gap:           12px;
+  background:    var(--gold-light);
+  border:        1px solid rgba(150,114,12,0.25);
+  border-left:   4px solid var(--gold);
+  border-radius: var(--radius-btn);
+  padding:       14px 16px;
+}
+
+.info-box__icon {
+  font-size:   18px;
+  line-height: 1;
+  color:       var(--gold);
+  flex-shrink: 0;
+  margin-top:  1px;
+  /* render the ℹ as text, not emoji, on all platforms */
+  font-style:  normal;
+}
+
+.info-box__text {
+  font-size:   13.5px;
+  font-weight: 500;
+  color:       #78520A;   /* slightly darker than --gold for readability */
+  line-height: 1.5;
 }
 
 /* ── Action group (table cells) ───────────────────────────────────────────── */
@@ -650,41 +681,41 @@ body {
 }
 
 .toast {
-  position:    fixed;
-  bottom:      28px;
-  left:        50%;
-  transform:   translateX(-50%);
-  display:     flex;
-  align-items: center;
-  gap:         12px;
-  padding:     12px 18px;
+  position:      fixed;
+  bottom:        28px;
+  left:          50%;
+  transform:     translateX(-50%);
+  display:       flex;
+  align-items:   center;
+  gap:           12px;
+  padding:       12px 18px;
   border-radius: var(--radius-btn);
-  font-size:   13.5px;
-  font-weight: 500;
-  max-width:   520px;
-  width:       calc(100% - 48px);
-  z-index:     999;
-  box-shadow:  0 6px 24px rgba(0,0,0,0.14);
-  animation:   slideUp 0.2s ease;
-  border-left: 4px solid transparent;
+  font-size:     13.5px;
+  font-weight:   500;
+  max-width:     520px;
+  width:         calc(100% - 48px);
+  z-index:       999;
+  box-shadow:    0 6px 24px rgba(0,0,0,0.14);
+  animation:     slideUp 0.2s ease;
+  border-left:   4px solid transparent;
 }
 
 .toast--success { background: #F0FDF4; color: #14532D; border-color: #22C55E; }
 .toast--error   { background: #FFF5F5; color: #7F1D1D; border-color: #EF4444; }
 
 .toast__close {
-  margin-left: auto;
-  background:  none;
-  border:      none;
-  cursor:      pointer;
-  color:       inherit;
-  opacity:     0.5;
-  font-size:   14px;
-  padding:     2px 4px;
+  margin-left:   auto;
+  background:    none;
+  border:        none;
+  cursor:        pointer;
+  color:         inherit;
+  opacity:       0.5;
+  font-size:     14px;
+  padding:       2px 4px;
   border-radius: 3px;
-  transition:  opacity var(--transition);
-  flex-shrink: 0;
-  line-height: 1;
+  transition:    opacity var(--transition);
+  flex-shrink:   0;
+  line-height:   1;
 }
 .toast__close:hover { opacity: 1; }
 
@@ -697,18 +728,18 @@ body {
   .agent-form         { padding: 18px 16px; }
   .section-header     { padding: 16px 16px 0; }
 
-  /* Collapse all grids to a single column on mobile */
+  /* Collapse all grids to single column */
   .form__grid,
   .form__grid--3col   { grid-template-columns: 1fr; }
   .form__field--wide  { grid-column: 1; }
 
-  /* Hide the # index column on small screens to save horizontal space */
+  /* Hide the # index column to save horizontal space */
   .data-table th:first-child,
   .data-table td:first-child { display: none; }
 
-  /* Rule tags wrap gracefully on small screens — no extra rules needed */
   .rule-tags          { gap: 3px; }
-
-  /* Reward chips stack if needed */
   .reward-chip        { display: inline-block; }
+
+  /* InfoBox stacks icon and text vertically on very narrow screens */
+  .info-box           { flex-direction: column; gap: 6px; }
 }

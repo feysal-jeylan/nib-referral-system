@@ -58,3 +58,4 @@ Because this will integrate with a real banking system, scalability is non-negot
 - **Audit Trails:** Every status change on a `referral` or `campaign` must record `updated_at` and `updated_by` (User ID).
 - **Pagination:** All `GET` endpoints (agents, referrals, campaigns) must support pagination (`?page=1&limit=20`) to handle thousands of records.
 - **Database Indexes:** Add indexes on `referrals(agent_id)`, `referrals(status)`, `campaigns(status)`, and `integration_logs(status)` for fast querying.
+

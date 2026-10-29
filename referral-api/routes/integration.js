@@ -3,13 +3,12 @@
  * ------------------------------------
  * Router for all /api/integration endpoints.
  *
- * This router handles inbound webhooks from the core banking system (Temenos).
- * It is intentionally PUBLIC — Temenos calls it server-to-server, so there is
- * no browser session or JWT cookie involved. API Key validation will be added
- * in a future sprint once the key is provisioned.
+ * This router handles inbound webhooks from the core banking system (Temenos)
+ * and exposes an admin-only audit log endpoint.
  *
  * Current endpoints:
- *   POST /api/integration/account-opened — Receive a "new account opened" event
+ *   POST /api/integration/account-opened — Receive a "new account opened" event (public)
+ *   GET  /api/integration/logs           — View integration audit log (ADMIN only)
  *
  * Key design decisions per RULES.md §6 & §7:
  *
@@ -40,12 +39,13 @@
 
 const express = require('express');
 const pool    = require('../db');
+const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
 
 // ---------------------------------------------------------------------------
-// POST /api/integration/account-opened
+// POST /api/integration/account-opened  (PUBLIC — called by Temenos server-to-server)
 //
 // Called by Temenos when a referred customer successfully opens a bank account.
 //
@@ -229,9 +229,8 @@ router.post('/account-opened', async (req, res, next) => {
     // Status defaults to 'PENDING' — an admin must later review and mark it
     // 'SUCCESSFUL' or 'REJECTED' after verifying the account opening with ops.
     //
-    // Note: customer_id column no longer exists (dropped in migration v4).
-    // Customer identity is now stored directly on the referral row as
-    // customer_name and customer_phone (denormalized per new architecture).
+    // customer_name and customer_phone are stored directly on the referral row
+    // (denormalized in V4 migration — the customers table is gone).
     const referralResult = await client.query(
       `INSERT INTO referrals (agent_id, customer_name, customer_phone, campaign_id, status)
        VALUES ($1, $2, $3, $4, 'PENDING')
@@ -291,6 +290,87 @@ router.post('/account-opened', async (req, res, next) => {
     // subsequent request would hang waiting for a free connection.
     // The finally block runs even if catch() re-throws.
     client.release();
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// GET /api/integration/logs  — ADMIN only.
+//
+// Returns the 20 most recent rows from integration_logs, ordered newest first.
+// Used by the Admin Dashboard to display the Temenos Integration Logs table.
+//
+// WHY ADMIN-ONLY?
+//   integration_logs contains raw Temenos payloads (customer names, phone
+//   numbers, deposit amounts). Exposing this to AGENTs would be a data
+//   privacy violation — agents should only see their own referral outcomes,
+//   not the raw webhook audit trail.
+//
+// Pagination per RULES.md §7:
+//   ?page=1&limit=20   (defaults: page=1, limit=20, max=100)
+//
+// Success response — 200 OK:
+//   {
+//     "total": 85,
+//     "page": 1,
+//     "limit": 20,
+//     "logs": [
+//       {
+//         "id":             12,
+//         "transaction_id": "TXN-2026-001234",
+//         "payload":        { "customer_name": "Fatuma Ali", ... },
+//         "status":         "PROCESSED",
+//         "error_message":  null,
+//         "created_at":     "2026-10-28T19:00:00.000Z"
+//       },
+//       ...
+//     ]
+//   }
+//
+// Error responses:
+//   401 Unauthorized — no valid session
+//   403 Forbidden    — caller is not an ADMIN
+//   500 Server Error — unexpected DB failure
+// ---------------------------------------------------------------------------
+router.get('/logs', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
+  try {
+    // ── Pagination ────────────────────────────────────────────────────────────
+    const page   = Math.max(1, parseInt(req.query.page,  10) || 1);
+    const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const offset = (page - 1) * limit;
+
+    // ── Total count ───────────────────────────────────────────────────────────
+    const countResult = await pool.query('SELECT COUNT(*) AS total FROM integration_logs');
+    const total = parseInt(countResult.rows[0].total, 10);
+
+    // ── Main query ────────────────────────────────────────────────────────────
+    // We select all columns. The payload is already stored as JSONB so pg
+    // returns it as a parsed JS object — no JSON.parse() needed on the frontend.
+    // Parameters $1 and $2 are LIMIT and OFFSET — always parameterized per RULES.md §2.
+    const result = await pool.query(
+      `SELECT
+         id,
+         transaction_id,
+         payload,
+         status,
+         error_message,
+         created_at
+       FROM   integration_logs
+       ORDER  BY created_at DESC
+       LIMIT  $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    return res.status(200).json({
+      total,
+      page,
+      limit,
+      logs: result.rows,
+    });
+
+  } catch (err) {
+    console.error('[GET /api/integration/logs] Unexpected DB error:', err.message);
+    next(err);
   }
 });
 

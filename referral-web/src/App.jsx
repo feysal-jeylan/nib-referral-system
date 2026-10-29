@@ -13,17 +13,24 @@
  * browser attaches the HttpOnly JWT cookie automatically. No token is
  * ever stored in JavaScript — it lives only in the browser's cookie jar.
  *
+ * V2 Architecture change (RULES.md §6):
+ *   The manual "Register Referral" form (ReferralForm) has been removed.
+ *   Customers are now registered exclusively via the Temenos webhook
+ *   (POST /api/integration/account-opened). A static informational box
+ *   replaces the form in both the Admin Dashboard and Agent Portal.
+ *
  * Sections:
- *   1. Primitive UI components (Toast, StatusPill, RewardBadge, Spinner)
- *   2. AgentForm          — register a new agent (POST /api/agents)
- *   3. AgentTable         — shows all agents with reward tier
- *   4. ReferralForm       — register a new referral (POST /api/referrals)
- *   5. ReferralTable      — shows all referrals with approve/reject actions
- *   6. CampaignForm       — ADMIN: create a new campaign (POST /api/campaigns)
- *   7. CampaignTable      — ADMIN: list campaigns with rules + activate action
- *   8. CampaignStatusPill — coloured pill for DRAFT / ACTIVE / EXPIRED
- *   9. App (root)         — auth gate, orchestrates state, data fetching, toasts
- *  10. Dashboard          — rendered when authenticated, holds all business logic
+ *   1.  Primitive UI components (Toast, StatusPill, RewardBadge, Spinner, InfoBox)
+ *   2.  AgentForm            — ADMIN: register a new agent (POST /api/agents)
+ *   3.  AgentTable           — show all agents with reward tier
+ *   4.  ReferralTable        — show referrals with approve/reject actions (ADMIN)
+ *   5.  CampaignForm         — ADMIN: create a new campaign (POST /api/campaigns)
+ *   6.  CampaignTable        — ADMIN: list campaigns with rules + activate action
+ *   7.  CampaignStatusPill   — coloured pill for DRAFT / ACTIVE / EXPIRED
+ *   8.  IntegrationLogsTable — ADMIN: Temenos webhook audit log
+ *   9.  IntegrationStatusPill— coloured pill for RECEIVED / PROCESSED / FAILED
+ *  10.  App (root)           — auth gate, orchestrates state, data fetching, toasts
+ *  11.  Dashboard            — rendered when authenticated, holds all business logic
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -39,7 +46,6 @@ const API = '/api'; // Vite dev-proxy rewrites /api → http://localhost:3000
 // ─── Shared fetch options — ALWAYS include credentials ───────────────────────
 // credentials: 'include' tells the browser to attach all cookies (including
 // the HttpOnly JWT token) to every request. Without this, the API returns 401.
-// We define it once here and spread it into every fetch() call below.
 const FETCH_OPTS = { credentials: 'include' };
 
 // ─── Reward badge metadata ────────────────────────────────────────────────────
@@ -90,9 +96,23 @@ function EmptyState({ icon, title, sub }) {
   );
 }
 
+/*
+  InfoBox — replaces the removed ReferralForm in both Admin and Agent views.
+  Communicates the V2 architecture to users so they understand why there is no
+  manual entry form — referrals arrive automatically from Temenos.
+*/
+function InfoBox({ message }) {
+  return (
+    <div className="info-box" role="note">
+      <span className="info-box__icon" aria-hidden="true">ℹ</span>
+      <p className="info-box__text">{message}</p>
+    </div>
+  );
+}
+
 // ─── 2. AgentForm ─────────────────────────────────────────────────────────────
 function AgentForm({ onCreated, onToast }) {
-  const [form, setForm]           = useState({ name: '', phone: '', email: '' });
+  const [form, setForm]             = useState({ name: '', phone: '', email: '' });
   const [submitting, setSubmitting] = useState(false);
   const nameRef = useRef(null);
 
@@ -108,12 +128,11 @@ function AgentForm({ onCreated, onToast }) {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(form),
-        ...FETCH_OPTS,  // credentials: 'include' — sends the HttpOnly JWT cookie
+        ...FETCH_OPTS,
       });
       const data = await res.json();
 
       if (!res.ok) {
-        // 401/403 means the session expired while the user was on the page
         if (res.status === 401 || res.status === 403) {
           onToast({ type: 'error', message: '🔒 Your session has expired. Please log in again.' });
           return;
@@ -125,14 +144,11 @@ function AgentForm({ onCreated, onToast }) {
         return;
       }
 
-      // Optimistic prepend — 0 referrals, no tier yet
       onCreated({
         id: data.id, name: data.name,
         referral_code: data.referral_code,
         successful_referrals: 0, current_reward: null,
       });
-      // Include the temporary password in the success toast so the Admin
-      // can immediately hand it to the new agent.
       onToast({
         type: 'success',
         message: `✅ Agent "${data.name}" created — Code: ${data.referral_code} · Temp Password: ${data.temp_password}`,
@@ -223,142 +239,12 @@ function AgentTable({ agents, loading }) {
   );
 }
 
-// ─── 4. ReferralForm ──────────────────────────────────────────────────────────
-//
-// Props:
-//   onCreated  — called after a successful POST (triggers referral list refresh)
-//   onToast    — displays a toast notification
-//   lockedCode — when provided (AGENT view), the referral_code field is
-//                pre-filled with this value and made readOnly so the agent
-//                cannot type someone else's code. The backend also enforces
-//                this independently (req.user.agent_id override).
-function ReferralForm({ onCreated, onToast, lockedCode }) {
-  const [form, setForm]             = useState({
-    referral_code:  lockedCode ?? '',
-    customer_name:  '',
-    customer_phone: '',
-  });
-  const [submitting, setSubmitting] = useState(false);
-  const nameRef = useRef(null); // focus on customer name after submit for agents
-  const codeRef = useRef(null);
-
-  // If the locked code arrives after initial render (data loads async), sync it.
-  useEffect(() => {
-    if (lockedCode) {
-      setForm(prev => ({ ...prev, referral_code: lockedCode }));
-    }
-  }, [lockedCode]);
-
-  function handleChange(e) {
-    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      const res  = await fetch(`${API}/referrals`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(form),
-        ...FETCH_OPTS,  // credentials: 'include' — sends the HttpOnly JWT cookie
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (res.status === 401 || res.status === 403) {
-          onToast({ type: 'error', message: '🔒 Your session has expired. Please log in again.' });
-          return;
-        }
-        let msg;
-        if (res.status === 404) msg = '⚠️ Invalid referral code — no agent found with that code.';
-        else if (res.status === 409) msg = '⚠️ A customer with this phone number is already registered.';
-        else msg = data.error ?? 'Something went wrong. Please try again.';
-        onToast({ type: 'error', message: msg });
-        return;
-      }
-
-      onCreated(data);
-      onToast({ type: 'success', message: `✅ Referral for "${form.customer_name}" submitted successfully.` });
-      // After submit: reset editable fields; keep the locked code intact for agents.
-      setForm({ referral_code: lockedCode ?? '', customer_name: '', customer_phone: '' });
-      // Focus the first editable field for quick re-entry.
-      (lockedCode ? nameRef : codeRef).current?.focus();
-    } catch {
-      onToast({ type: 'error', message: '🔴 Cannot reach the server. Is the API running?' });
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <form
-      id="referral-form"
-      className="agent-form"
-      onSubmit={handleSubmit}
-      noValidate
-      aria-label="Submit a new referral"
-    >
-      <h2 className="form__title">Register New Referral</h2>
-      <div className="form__grid">
-        <div className="form__field">
-          <label htmlFor="ref-code">Agent Referral Code</label>
-          <input
-            id="ref-code"
-            name="referral_code"
-            type="text"
-            placeholder="e.g. NIB-X7KP2A"
-            value={form.referral_code}
-            onChange={handleChange}
-            required
-            ref={codeRef}
-            autoComplete="off"
-            readOnly={!!lockedCode}
-            aria-readonly={!!lockedCode}
-            title={lockedCode ? 'Your referral code is pre-filled automatically.' : undefined}
-            style={{
-              textTransform:  'uppercase',
-              letterSpacing:  '0.5px',
-              // Visual cue: muted + not-allowed cursor when locked
-              ...(lockedCode && {
-                opacity:  0.7,
-                cursor:   'not-allowed',
-                background: 'var(--surface-2, #2a2a3a)',
-              }),
-            }}
-          />
-        </div>
-        <div className="form__field">
-          <label htmlFor="ref-phone">Customer Phone</label>
-          <input id="ref-phone" name="customer_phone" type="tel"
-            placeholder="e.g. 0922345678"
-            value={form.customer_phone} onChange={handleChange}
-            required autoComplete="off" />
-        </div>
-        <div className="form__field form__field--wide">
-          <label htmlFor="ref-name">Customer Full Name</label>
-          <input id="ref-name" name="customer_name" type="text"
-            placeholder="e.g. Tigist Alemu"
-            value={form.customer_name} onChange={handleChange}
-            required ref={nameRef} autoComplete="off" />
-        </div>
-      </div>
-      <button id="submit-referral-btn" type="submit" className="btn btn--primary" disabled={submitting}>
-        {submitting && <Spinner small />}
-        {submitting ? 'Submitting…' : 'Register Referral'}
-      </button>
-    </form>
-  );
-}
-
-// ─── 5. ReferralTable ─────────────────────────────────────────────────────────
+// ─── 4. ReferralTable ─────────────────────────────────────────────────────────
 //
 // isAdmin controls whether the Actions column (Approve / Reject) is shown.
 // When false (AGENT view), the column is hidden entirely — agents can only
 // read their own referral list, not modify statuses.
 function ReferralTable({ referrals, loading, onStatusChange, isAdmin }) {
-  // Track which referral IDs are currently being updated so we can disable
-  // their buttons and show a spinner mid-update without blocking the whole UI.
   const [updating, setUpdating] = useState(new Set());
 
   async function handleAction(id, newStatus) {
@@ -370,7 +256,9 @@ function ReferralTable({ referrals, loading, onStatusChange, isAdmin }) {
   if (loading) return <div className="state-box"><Spinner /><p>Loading referrals…</p></div>;
   if (!referrals.length) return (
     <EmptyState icon="📋" title="No referrals yet"
-      sub={isAdmin ? 'Submit your first referral using the form above.' : 'No referrals have been registered under your code yet.'} />
+      sub={isAdmin
+        ? 'Referrals appear here once Temenos sends a webhook event.'
+        : 'No referrals have been registered under your code yet.'} />
   );
 
   return (
@@ -384,7 +272,6 @@ function ReferralTable({ referrals, loading, onStatusChange, isAdmin }) {
             <th scope="col">Agent</th>
             <th scope="col">Code</th>
             <th scope="col">Status</th>
-            {/* Only admins see the Actions column */}
             {isAdmin && <th scope="col">Actions</th>}
           </tr>
         </thead>
@@ -438,17 +325,7 @@ function ReferralTable({ referrals, loading, onStatusChange, isAdmin }) {
   );
 }
 
-// ─── 6. CampaignForm ──────────────────────────────────────────────────────────
-//
-// ADMIN-ONLY. Creates a new campaign via POST /api/campaigns.
-// On success, calls onCreated() to reload the campaign list and fires a toast.
-//
-// Fields:
-//   name         — freetext campaign name
-//   start_date   — HTML date input (converted to ISO string before sending)
-//   end_date     — HTML date input
-//   reward_type  — select: CASH | BADGE
-//   reward_value — freetext (e.g. "500 ETB" or "Gold Tier Badge")
+// ─── 5. CampaignForm ──────────────────────────────────────────────────────────
 function CampaignForm({ onCreated, onToast }) {
   const EMPTY = { name: '', start_date: '', end_date: '', reward_type: 'CASH', reward_value: '' };
   const [form, setForm]             = useState(EMPTY);
@@ -466,7 +343,6 @@ function CampaignForm({ onCreated, onToast }) {
       const res = await fetch(`${API}/campaigns`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Send dates as ISO 8601 strings so the backend parser handles them correctly.
         body: JSON.stringify({
           ...form,
           start_date: form.start_date ? new Date(form.start_date).toISOString() : '',
@@ -485,7 +361,7 @@ function CampaignForm({ onCreated, onToast }) {
         return;
       }
 
-      onCreated();  // triggers refreshCampaigns() in Dashboard
+      onCreated();
       onToast({ type: 'success', message: `✅ Campaign "${data.campaign.name}" created as DRAFT.` });
       setForm(EMPTY);
       nameRef.current?.focus();
@@ -533,10 +409,6 @@ function CampaignForm({ onCreated, onToast }) {
         </div>
         <div className="form__field">
           <label htmlFor="camp-reward-type">Reward Type</label>
-          {/*
-            select uses .form__field select rules in App.css to match
-            the styling of all other form inputs on the page.
-          */}
           <select
             id="camp-reward-type" name="reward_type"
             value={form.reward_type} onChange={handleChange}
@@ -564,22 +436,7 @@ function CampaignForm({ onCreated, onToast }) {
   );
 }
 
-// ─── 7. CampaignTable ─────────────────────────────────────────────────────────
-//
-// ADMIN-ONLY. Renders a table of all campaigns.
-//
-// For each campaign row:
-//   - Rules are shown as small inline tags below the campaign name.
-//   - A CampaignStatusPill shows DRAFT / ACTIVE / EXPIRED.
-//   - DRAFT rows show an "Activate" button (PATCH /api/campaigns/:id/activate).
-//   - ACTIVE rows show a disabled "Active" badge in the Actions column.
-//   - EXPIRED rows show a dash.
-//
-// Props:
-//   campaigns   — array from GET /api/campaigns (includes rules array)
-//   loading     — boolean, shows spinner while fetching
-//   onActivated — callback after a successful activate → triggers list refresh
-//   onToast     — show a toast notification
+// ─── 6. CampaignTable ─────────────────────────────────────────────────────────
 function CampaignTable({ campaigns, loading, onActivated, onToast }) {
   const [activating, setActivating] = useState(new Set());
 
@@ -591,12 +448,11 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
         ...FETCH_OPTS,
       });
       const data = await res.json();
-
       if (!res.ok) {
         onToast({ type: 'error', message: data.error ?? 'Activation failed.' });
         return;
       }
-      onActivated();   // refresh the campaign list in Dashboard
+      onActivated();
       onToast({ type: 'success', message: `✅ Campaign "${name}" is now ACTIVE.` });
     } catch {
       onToast({ type: 'error', message: '🔴 Cannot reach the server.' });
@@ -628,20 +484,15 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
         <tbody>
           {campaigns.map((c, i) => {
             const busy  = activating.has(c.id);
-            // The API guarantees rules is an array (possibly empty).
             const rules = Array.isArray(c.rules) ? c.rules : [];
             return (
               <tr key={c.id} className="data-row">
                 <td className="td--index">{i + 1}</td>
                 <td className="td--name">
-                  {/* Campaign name */}
                   <span>{c.name}</span>
-                  {/* Rule tags — only rendered when the campaign has rules */}
                   {rules.length > 0 && (
                     <div className="rule-tags">
                       {rules.map(r => {
-                        // rule_value is a JSONB object; extract the first scalar value
-                        // for a compact display (e.g. MIN_DEPOSIT: 5000).
                         const val = Object.values(r.rule_value ?? {})[0] ?? '';
                         return (
                           <span key={r.id} className="rule-tag">
@@ -659,21 +510,13 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
                   {new Date(c.end_date).toLocaleDateString()}
                 </td>
                 <td>
-                  {/* Type chip + value chip side-by-side */}
                   <span className="reward-chip reward-chip--type">{c.reward_type}</span>
                   {' '}
                   <span className="reward-chip reward-chip--value">{c.reward_value}</span>
                 </td>
-                <td>
-                  <CampaignStatusPill status={c.status} />
-                </td>
+                <td><CampaignStatusPill status={c.status} /></td>
                 <td>
                   {c.status === 'DRAFT' ? (
-                    /*
-                      "Activate" button — only shown for DRAFT campaigns.
-                      Calls PATCH /api/campaigns/:id/activate.
-                      Disabled while the PATCH request is in-flight.
-                    */
                     <button
                       id={`activate-btn-${c.id}`}
                       className="btn btn--activate"
@@ -684,16 +527,10 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
                       {busy ? <Spinner small /> : '▶ Activate'}
                     </button>
                   ) : c.status === 'ACTIVE' ? (
-                    /*
-                      Non-interactive "Active" badge — replaces the button for ACTIVE
-                      campaigns so the Actions cell always has content. Makes it clear
-                      at a glance that no further action is available.
-                    */
                     <span className="badge badge--active-indicator" aria-label="Campaign is active">
                       Active
                     </span>
                   ) : (
-                    /* EXPIRED — no action available */
                     <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>—</span>
                   )}
                 </td>
@@ -706,13 +543,7 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
   );
 }
 
-// ─── 8. CampaignStatusPill ───────────────────────────────────────────────────
-//
-// Colour-coded pill for campaign status.
-// Separate from the referral StatusPill because the colours and states differ:
-//   DRAFT   → grey   (neutral, not yet live)
-//   ACTIVE  → green  (live, accepting referrals)
-//   EXPIRED → red    (past end_date, read-only)
+// ─── 7. CampaignStatusPill ───────────────────────────────────────────────────
 function CampaignStatusPill({ status }) {
   return (
     <span className={`camp-status-pill camp-status-pill--${status}`}>
@@ -721,9 +552,84 @@ function CampaignStatusPill({ status }) {
   );
 }
 
-// ─── 9. App (root) ────────────────────────────────────────────────────────────
+// ─── 8. IntegrationLogsTable ─────────────────────────────────────────────────
+//
+// ADMIN-ONLY. Displays the last 20 rows from integration_logs in a table.
+// Each row shows: Transaction ID, Customer Name (from JSONB payload),
+// Status pill (RECEIVED / PROCESSED / FAILED), and Date.
+//
+// The `payload` column is stored as JSONB on the server; pg returns it as a
+// parsed JS object, so we can read payload.customer_name directly.
+function IntegrationLogsTable({ logs, loading }) {
+  if (loading) return <div className="state-box"><Spinner /><p>Loading integration logs…</p></div>;
+  if (!logs.length) return (
+    <EmptyState
+      icon="📡"
+      title="No integration events yet"
+      sub="Events appear here when Temenos sends a webhook to POST /api/integration/account-opened."
+    />
+  );
+
+  return (
+    <div className="table-wrap">
+      <table className="data-table" aria-label="Temenos integration log">
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Transaction ID</th>
+            <th scope="col">Customer Name</th>
+            <th scope="col">Status</th>
+            <th scope="col">Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          {logs.map((log, i) => (
+            <tr key={log.id} className="data-row">
+              <td className="td--index">{i + 1}</td>
+              <td>
+                {/*
+                  Transaction ID shown in a monospace chip — it is a technical
+                  identifier (e.g. "TXN-2026-001234"), not a human-readable value.
+                */}
+                <code className="code-chip">{log.transaction_id}</code>
+              </td>
+              <td className="td--name">
+                {/*
+                  payload is a JSONB object returned as a parsed JS object by pg.
+                  We safely fall back to "—" if the field is absent.
+                */}
+                {log.payload?.customer_name ?? '—'}
+              </td>
+              <td>
+                <IntegrationStatusPill status={log.status} />
+              </td>
+              <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+                {new Date(log.created_at).toLocaleString()}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── 9. IntegrationStatusPill ─────────────────────────────────────────────────
+//
+// Colour-coded pill for the integration_logs status column.
+//   RECEIVED  → amber/yellow  — webhook received, processing in progress
+//   PROCESSED → green         — referral created successfully
+//   FAILED    → red           — processing failed (see error_message in DB)
+function IntegrationStatusPill({ status }) {
+  return (
+    <span className={`integ-status-pill integ-status-pill--${status}`}>
+      {status}
+    </span>
+  );
+}
+
+// ─── 10. App (root) ───────────────────────────────────────────────────────────
 export default function App() {
-  // ── Auth state from context ──────────────────────────────────────────────
   const { user, loading, logout } = useAuth();
 
   const [agents,     setAgents]     = useState([]);
@@ -733,7 +639,7 @@ export default function App() {
   const [toast,      setToast]      = useState(null);
   const toastTimer = useRef(null);
 
-  // ── Gate 1: Auth loading — show spinner while /api/auth/me is in-flight ──
+  // ── Gate 1: Auth loading ─────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="auth-loading" role="status" aria-label="Checking authentication…">
@@ -743,52 +649,29 @@ export default function App() {
     );
   }
 
-  // ── Gate 2: Not authenticated — show the login screen ───────────────────
-  if (!user) {
-    return <Login />;
-  }
+  // ── Gate 2: Not authenticated ────────────────────────────────────────────
+  if (!user) return <Login />;
 
   // ── Gate 2.5: Forced password change ─────────────────────────────────────
-  //
-  // The user has a valid JWT (they logged in), but must_change_password = TRUE
-  // means they authenticated with a temporary password. We block the Dashboard
-  // entirely and show the ChangePassword screen instead.
-  //
-  // Security rationale:
-  //   • Frontend gate: no dashboard HTML is rendered, no API calls fire.
-  //   • Backend gate: /api/auth/change-password re-reads must_change_password
-  //     from the DB, so a crafted JWT with false cannot bypass it.
-  //   • Once the agent sets their password, refreshUser() in AuthContext flips
-  //     this to false and the Dashboard renders automatically.
-  if (user.must_change_password) {
-    return <ChangePassword />;
-  }
+  if (user.must_change_password) return <ChangePassword />;
 
-  // ── Gate 3: Authenticated + password set → render the full Dashboard ─────
-  // (Hooks below run unconditionally because early returns are all above)
-
+  // ── Gate 3: Authenticated + password set → Dashboard ─────────────────────
   // eslint-disable-next-line react-hooks/rules-of-hooks
   return <Dashboard
     user={user}
     logout={logout}
-    agents={agents}
-    setAgents={setAgents}
-    referrals={referrals}
-    setReferrals={setReferrals}
-    agentsLoading={agentsLoading}
-    setAgentsLoading={setAgentsLoading}
-    referralsLoading={referralsLoading}
-    setReferralsLoading={setReferralsLoading}
-    toast={toast}
-    setToast={setToast}
+    agents={agents}           setAgents={setAgents}
+    referrals={referrals}     setReferrals={setReferrals}
+    agentsLoading={agentsLoading}       setAgentsLoading={setAgentsLoading}
+    referralsLoading={referralsLoading} setReferralsLoading={setReferralsLoading}
+    toast={toast}             setToast={setToast}
     toastTimer={toastTimer}
   />;
 }
 
-// ─── 10. Dashboard — only rendered when the user is authenticated ─────────────
+// ─── 11. Dashboard ────────────────────────────────────────────────────────────
 //
-// Extracted into its own component so all its hooks run unconditionally
-// (React rules of hooks forbid calling hooks after an early return).
+// Extracted so all hooks run unconditionally (Rules of Hooks).
 function Dashboard({
   user, logout,
   agents, setAgents,
@@ -797,35 +680,29 @@ function Dashboard({
   referralsLoading, setReferralsLoading,
   toast, setToast, toastTimer,
 }) {
-  // Derived role flags — computed once here and passed down to keep all
-  // role-gating logic centralised in this component.
   const isAdmin = user.role === 'ADMIN';
   const isAgent = user.role === 'AGENT';
 
-  // ── Campaign state — ADMIN only ──────────────────────────────────────────
-  // Hooks are declared unconditionally (React rules), but the fetch is
-  // skipped for non-admin users so there are no unnecessary 403 requests.
+  // ── ADMIN-only state ─────────────────────────────────────────────────────
   const [campaigns,        setCampaigns]        = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(true);
+  const [integLogs,        setIntegLogs]        = useState([]);
+  const [integLogsLoading, setIntegLogsLoading] = useState(true);
 
-  // ── Data loading ────────────────────────────────────────────────────────────
-  //
-  // credentials: 'include' is spread from FETCH_OPTS onto every fetch call.
-  // This attaches the HttpOnly cookie so the server can authenticate the request.
-  // Without it, all fetches return 401 because the browser strips cookies
-  // from cross-origin requests by default.
+  // ── Initial data load ────────────────────────────────────────────────────
   useEffect(() => {
     async function load() {
       try {
-        // Always fetch agents and referrals (both roles need them).
+        // Agents and referrals are needed by both roles.
         const fetches = [
           fetch(`${API}/agents`,    FETCH_OPTS),
           fetch(`${API}/referrals`, FETCH_OPTS),
         ];
-        // Campaigns are ADMIN-only — skip the fetch entirely for AGENT role
-        // to avoid a 403 that would show an error toast unnecessarily.
+        // Campaign and integration-log fetches are ADMIN-only — skipping them
+        // for agents avoids unnecessary 403 errors in the console.
         if (isAdmin) {
-          fetches.push(fetch(`${API}/campaigns`, FETCH_OPTS));
+          fetches.push(fetch(`${API}/campaigns`,         FETCH_OPTS));
+          fetches.push(fetch(`${API}/integration/logs`,  FETCH_OPTS));
         }
 
         const responses = await Promise.all(fetches);
@@ -833,13 +710,19 @@ function Dashboard({
           responses[0].json(),
           responses[1].json(),
         ]);
-        setAgents(Array.isArray(aData) ? aData : []);
-        setReferrals(Array.isArray(rData) ? rData : []);
 
-        if (isAdmin && responses[2]) {
+        // GET /api/agents returns a plain array.
+        setAgents(Array.isArray(aData) ? aData : []);
+        // GET /api/referrals returns { referrals: [...], total, page, limit }
+        // after the V2 pagination update. Guard against both shapes.
+        setReferrals(Array.isArray(rData) ? rData : (rData.referrals ?? []));
+
+        if (isAdmin) {
           const cData = await responses[2].json();
-          // GET /api/campaigns returns { campaigns: [...], total, page, limit }
           setCampaigns(Array.isArray(cData.campaigns) ? cData.campaigns : []);
+
+          const lData = await responses[3].json();
+          setIntegLogs(Array.isArray(lData.logs) ? lData.logs : []);
         }
       } catch {
         showToast({ type: 'error', message: '🔴 Failed to load data. Is the API running?' });
@@ -847,15 +730,14 @@ function Dashboard({
         setAgentsLoading(false);
         setReferralsLoading(false);
         setCampaignsLoading(false);
+        setIntegLogsLoading(false);
       }
     }
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Refresh campaign list ────────────────────────────────────────────────────
-  // Called after a successful campaign create or activate to keep the table
-  // in sync with the server without a full page reload.
+  // ── Refresh helpers ──────────────────────────────────────────────────────
   const refreshCampaigns = useCallback(async () => {
     try {
       const res  = await fetch(`${API}/campaigns`, FETCH_OPTS);
@@ -867,49 +749,37 @@ function Dashboard({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Derive the agent's own referral code for the locked form field ───────────
-  //
-  // GET /api/agents returns ONLY the calling agent's own row when the role is
-  // AGENT (server-side filter). We grab the first (and only) element's code.
-  // This value is passed to ReferralForm as `lockedCode` so the field is
-  // pre-filled and read-only — a belt-and-suspenders UX guard on top of the
-  // backend security fix in POST /api/referrals.
-  const agentOwnCode = isAgent ? (agents[0]?.referral_code ?? '') : null;
+  const refreshIntegLogs = useCallback(async () => {
+    try {
+      const res  = await fetch(`${API}/integration/logs`, FETCH_OPTS);
+      const data = await res.json();
+      setIntegLogs(Array.isArray(data.logs) ? data.logs : []);
+    } catch {
+      showToast({ type: 'error', message: '🔴 Could not refresh integration logs.' });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // ── Toast ───────────────────────────────────────────────────────────────────
+  // ── Toast ────────────────────────────────────────────────────────────────
   function showToast(t) {
     setToast(t);
     clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 6000);
   }
 
-  // ── Agent created ────────────────────────────────────────────────────────────
+  // ── Agent created ────────────────────────────────────────────────────────
   function handleAgentCreated(newAgent) {
     setAgents(prev => [newAgent, ...prev]);
   }
 
-  // ── Referral created ─────────────────────────────────────────────────────────
-  // The POST response gives us referral_id, agent_id, customer_id, status, created_at
-  // but not the joined names. Reload the full referral list to get everything.
-  const handleReferralCreated = useCallback(async () => {
-    try {
-      const res  = await fetch(`${API}/referrals`, FETCH_OPTS); // credentials: 'include'
-      const data = await res.json();
-      setReferrals(Array.isArray(data) ? data : []);
-    } catch {
-      showToast({ type: 'error', message: '🔴 Could not refresh referrals.' });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── Status update (Approve / Reject) — ADMIN only ────────────────────────────
+  // ── Status update (Approve / Reject) ────────────────────────────────────
   async function handleStatusChange(referralId, newStatus) {
     try {
       const res = await fetch(`${API}/referrals/${referralId}/status`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ status: newStatus }),
-        ...FETCH_OPTS,  // credentials: 'include'
+        ...FETCH_OPTS,
       });
 
       if (!res.ok) {
@@ -918,48 +788,41 @@ function Dashboard({
         return;
       }
 
-      // Update status in-place so the row transitions without a full reload.
+      // Update in-place — no full reload needed.
       setReferrals(prev =>
         prev.map(r => r.id === referralId ? { ...r, status: newStatus } : r)
       );
 
-      // After a SUCCESSFUL status change, the agent's reward tier might have
-      // changed — reload agents list to reflect updated counts and badges.
       if (newStatus === 'SUCCESSFUL') {
-        const aRes  = await fetch(`${API}/agents`, FETCH_OPTS); // credentials: 'include'
+        const aRes  = await fetch(`${API}/agents`, FETCH_OPTS);
         const aData = await aRes.json();
         setAgents(Array.isArray(aData) ? aData : []);
       }
 
-      const label = newStatus === 'SUCCESSFUL' ? 'approved' : 'rejected';
-      showToast({ type: 'success', message: `✅ Referral ${label} successfully.` });
-
+      showToast({
+        type: 'success',
+        message: `✅ Referral ${newStatus === 'SUCCESSFUL' ? 'approved' : 'rejected'} successfully.`,
+      });
     } catch {
       showToast({ type: 'error', message: '🔴 Cannot reach the server.' });
     }
   }
 
-  // ── Handle logout ─────────────────────────────────────────────────────────
+  // ── Logout ───────────────────────────────────────────────────────────────
   async function handleLogout() {
-    await logout(); // Calls POST /api/auth/logout to clear the HttpOnly cookie
-    // AuthContext sets user=null → App re-renders → <Login /> is shown
+    await logout();
   }
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="app">
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
+      {/* ── Header ────────────────────────────────────────────────────── */}
       <header className="app-header">
         <div className="app-header__inner">
           <div className="app-header__brand">
             <span className="app-header__logo" aria-hidden="true">🏦</span>
             <div>
-              {/*
-                Role-aware header title:
-                  ADMIN → full system name (manages everything)
-                  AGENT → "Agent Portal" (read-only personal view)
-              */}
               <h1 className="app-header__title">
                 {isAdmin ? 'Nib International Bank' : 'Agent Portal'}
               </h1>
@@ -970,26 +833,14 @@ function Dashboard({
               </p>
             </div>
           </div>
-
-          {/* ── Right side: user info + logout ─────────────────────────── */}
           <div className="header-user">
             <div className="header-user__info">
               <p className="header-user__name">{user.username}</p>
-              {/*
-                Show a friendly role badge:
-                  'ADMIN' → 'Admin'
-                  'AGENT' → 'Agent'
-              */}
               <p className="header-user__role">
                 {isAdmin ? '🛡️ Admin' : '👤 Agent'}
               </p>
             </div>
-            <button
-              id="logout-btn"
-              className="btn--logout"
-              onClick={handleLogout}
-              aria-label="Sign out"
-            >
+            <button id="logout-btn" className="btn--logout" onClick={handleLogout} aria-label="Sign out">
               ↩ Sign Out
             </button>
           </div>
@@ -998,20 +849,14 @@ function Dashboard({
 
       <main className="app-main">
 
-        {/*
-          ── ADMIN-ONLY: Create Agent form ──────────────────────────────────
-          Agents cannot create other agents, so we hide this section entirely.
-          The backend enforces this too (authorizeRole(['ADMIN'])), but hiding
-          the UI avoids confusing 403 errors in the console.
-        */}
+        {/* ── ADMIN: Register Agent form ──────────────────────────────── */}
         {isAdmin && (
           <section className="card" aria-labelledby="agent-form-heading">
             <AgentForm onCreated={handleAgentCreated} onToast={showToast} />
           </section>
         )}
 
-        {/* ── Agent Dashboard — visible to ALL roles ──────────────────── */}
-        {/* ADMIN sees all agents; AGENT sees only their own row (filtered server-side). */}
+        {/* ── Agent Dashboard — ALL roles ─────────────────────────────── */}
         <section className="card" aria-labelledby="agent-dashboard-heading">
           <div className="section-header">
             <h2 id="agent-dashboard-heading" className="section-header__title">
@@ -1025,26 +870,26 @@ function Dashboard({
         </section>
 
         {/*
-          ── Referral Registration form — visible to ADMIN and AGENT ───────────
-
-          ADMIN: full form — can type any referral code to register a customer
-                 under any agent.
-
-          AGENT: same form, but the referral_code field is pre-filled with the
-                 agent's own code (agentOwnCode) and set to readOnly.
-                 The backend ALSO enforces this: it ignores any referral_code
-                 in the body for AGENT requests and forces req.user.agent_id.
+          ── V2 Architecture: Referral Registration Removed ─────────────────
+          The manual "Register Referral" form has been removed per the V2
+          architecture approved by the supervisor (RULES.md §6). Customers
+          arrive exclusively via the Temenos core banking webhook. This
+          informational box replaces the form for both Admin and Agent users.
         */}
-        <section className="card" aria-labelledby="referral-form-heading">
-          <ReferralForm
-            onCreated={handleReferralCreated}
-            onToast={showToast}
-            lockedCode={agentOwnCode}
-          />
+        <section className="card" aria-labelledby="temenos-info-heading">
+          <div className="section-header">
+            <h2 id="temenos-info-heading" className="section-header__title">
+              Core Banking Integration
+            </h2>
+          </div>
+          <div style={{ padding: '0 24px 22px' }}>
+            <InfoBox
+              message="Customer referrals are automatically synced from the Core Banking System (Temenos). No manual entry is required."
+            />
+          </div>
         </section>
 
-        {/* ── Recent Referrals — visible to ALL roles ─────────────────── */}
-        {/* ADMIN sees all referrals + approve/reject. AGENT sees only their own (read-only). */}
+        {/* ── Recent Referrals — ALL roles ─────────────────────────────── */}
         <section className="card" aria-labelledby="referral-table-heading">
           <div className="section-header">
             <h2 id="referral-table-heading" className="section-header__title">
@@ -1063,12 +908,9 @@ function Dashboard({
         </section>
 
         {/*
-          ── ADMIN-ONLY: Campaign Management ──────────────────────────────────
-          Placed below Recent Referrals per the task specification.
-          The isAdmin check is the frontend gate. The backend independently
-          enforces ADMIN-only access on all /api/campaigns routes via
-          authorizeRole(['ADMIN']) — so even a crafted request from an AGENT
-          will be rejected with 403 Forbidden.
+          ── ADMIN-ONLY sections below this point ───────────────────────────
+          The isAgent check at the top of the component tree is the primary
+          guard; the backend also enforces ADMIN-only on all these endpoints.
         */}
         {isAdmin && (
           <>
@@ -1077,7 +919,7 @@ function Dashboard({
               <CampaignForm onCreated={refreshCampaigns} onToast={showToast} />
             </section>
 
-            {/* Campaign list with status pills, rule tags, and activate actions */}
+            {/* Campaign list */}
             <section className="card" aria-labelledby="campaign-table-heading">
               <div className="section-header">
                 <h2 id="campaign-table-heading" className="section-header__title">
@@ -1094,12 +936,36 @@ function Dashboard({
                 onToast={showToast}
               />
             </section>
+
+            {/* Temenos Integration Logs */}
+            <section className="card" aria-labelledby="integ-logs-heading">
+              <div className="section-header">
+                <h2 id="integ-logs-heading" className="section-header__title">
+                  Temenos Integration Logs
+                </h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span className="section-header__count">
+                    {integLogs.length} event{integLogs.length !== 1 ? 's' : ''}
+                  </span>
+                  {/* Manual refresh button — lets admin pull latest events */}
+                  <button
+                    className="btn btn--ghost"
+                    onClick={refreshIntegLogs}
+                    aria-label="Refresh integration logs"
+                    title="Refresh"
+                  >
+                    ↺ Refresh
+                  </button>
+                </div>
+              </div>
+              <IntegrationLogsTable logs={integLogs} loading={integLogsLoading} />
+            </section>
           </>
         )}
 
       </main>
 
-      {/* ── Toast ─────────────────────────────────────────────────────── */}
+      {/* ── Toast ───────────────────────────────────────────────────── */}
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
