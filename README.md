@@ -21,6 +21,8 @@ Instead of registering customers manually, the system receives webhooks when a c
 
 The application follows a decoupled, three-tier architecture, plus an external integration layer.
 
+### High-Level System Architecture
+
 ```mermaid
 graph TD
     Temenos["Core Banking System (Temenos)"]
@@ -35,19 +37,116 @@ graph TD
     API -- "JSON Response" --> React
 ```
 
+### Detailed System Architecture
+
+The following diagram illustrates the complete application structure, including the external banking system, client interfaces, application services, middleware, and database layer.
+
+```mermaid
+graph TD
+    subgraph External ["External Systems (Bank)"]
+        Temenos["Temenos Core Banking
+        (Sends Webhooks)"]
+    end
+
+    subgraph Client ["Client Tier (React Frontend)"]
+        UI_Admin["Admin Dashboard
+        (React)"]
+        UI_Agent["Agent Portal
+        (React)"]
+        UI_Login["Login/Apply Screen
+        (React)"]
+    end
+
+    subgraph Server ["Application Tier (Express Backend)"]
+        API["Express API
+        (Port 3000)"]
+        Auth["Auth & RBAC Middleware
+        (JWT + HttpOnly Cookies)"]
+        RuleEngine["Rule Engine Service
+        (campaign_rules)"]
+    end
+
+    subgraph Data ["Data Tier (PostgreSQL)"]
+        DB[("PostgreSQL 18 Database
+        (referral_db)")]
+    end
+
+    %% Connections
+    UI_Admin -- "HTTPS + HttpOnly Cookie" --> API
+    UI_Agent -- "HTTPS + HttpOnly Cookie" --> API
+    UI_Login -- "HTTPS + HttpOnly Cookie" --> API
+
+    Temenos -- "POST Webhook
+    (JSON Payload)" --> API
+
+    API -- "1. Verify JWT" --> Auth
+    API -- "2. Evaluate Rules" --> RuleEngine
+    API -- "3. Parameterized SQL" --> DB
+```
+
+---
+
+## ⚙️ Backend Request Processing & Middleware Architecture
+
+This diagram illustrates how incoming client requests pass through the backend middleware, how Express routes direct requests to their respective modules, and how authentication, authorization, and the rule engine interact with PostgreSQL.
+
+```mermaid
+graph LR
+    Client["Client Request"] --> Middleware1["helmet & cors
+    (Security Headers)"]
+
+    Middleware1 --> Middleware2["cookie-parser
+    (Read JWT)"]
+
+    Middleware2 --> Route{"Which Route?"}
+
+    Route -- "/api/auth/*" --> AuthRoute["Auth Router
+    (Login/Logout)"]
+
+    Route -- "/api/integration/*" --> IntegRoute["Integration Router
+    (Temenos Webhook)"]
+
+    Route -- "/api/campaigns/*" --> CampRoute["Campaign Router
+    (Admin Only)"]
+
+    Route -- "/api/referrals/*" --> RefRoute["Referral Router
+    (Admin/Agent)"]
+
+    Route -- "/api/agents/*" --> AgentRoute["Agent Router
+    (Admin/Public)"]
+
+    AuthRoute --> AuthMID["authenticateToken
+    (Verify JWT)"]
+
+    IntegRoute --> RuleEng["Rule Engine
+    (Evaluate Rules)"]
+
+    CampRoute --> AuthMID --> AuthRole["authorizeRole
+    (Check ADMIN)"]
+
+    RefRoute --> AuthMID --> AuthRole
+
+    AgentRoute --> AuthMID --> AuthRole
+
+    AuthRole --> DB[("PostgreSQL")]
+    RuleEng --> DB
+```
+
 ---
 
 ## 🗄️ Database Schema (Entity-Relationship Diagram)
 
 The database is highly normalized to ensure ACID compliance.
 
+### Database Entity-Relationship Diagram
+
 ```mermaid
 erDiagram
     USERS {
         int id PK
-        varchar username
+        varchar username UK
         varchar password_hash
-        varchar role
+        varchar role "ADMIN | AGENT"
         boolean must_change_password
         int agent_id FK
     }
@@ -57,7 +156,9 @@ erDiagram
         varchar name
         varchar phone UK
         varchar email UK
-        varchar referral_code UK
+        varchar referral_code UK "NULL if PENDING"
+        varchar status "PENDING | APPROVED | REJECTED"
+        timestamp created_at
     }
 
     REFERRALS {
@@ -66,24 +167,27 @@ erDiagram
         varchar customer_name
         varchar customer_phone
         int campaign_id FK
-        varchar status "CHECK: PENDING, SUCCESSFUL, REJECTED"
+        varchar status "PENDING | SUCCESSFUL | REJECTED"
         timestamp created_at
     }
 
     CAMPAIGNS {
         int id PK
         varchar name
+        text description
         timestamp start_date
         timestamp end_date
-        varchar reward_type
+        varchar reward_type "CASH | BADGE"
         varchar reward_value
-        varchar status
+        int reward_threshold
+        varchar status "DRAFT | ACTIVE | EXPIRED"
     }
 
     CAMPAIGN_RULES {
         int id PK
         int campaign_id FK
-        varchar rule_type
+        varchar rule_type "MIN_DEPOSIT | ACCOUNT_TYPE"
+        varchar operator "GREATER_THAN | EQUALS"
         jsonb rule_value
     }
 
@@ -91,14 +195,15 @@ erDiagram
         int id PK
         varchar transaction_id UK
         jsonb payload
-        varchar status
+        varchar status "RECEIVED | PROCESSED | FAILED"
         text error_message
+        timestamp created_at
     }
 
     AGENTS ||--o{ REFERRALS : "Generates"
-    AGENTS ||--o{ USERS : "Authenticates as"
+    AGENTS ||--o{ USERS : "Has Login"
     CAMPAIGNS ||--o{ REFERRALS : "Applies to"
-    CAMPAIGNS ||--o{ CAMPAIGN_RULES : "Has rules"
+    CAMPAIGNS ||--o{ CAMPAIGN_RULES : "Has Rules"
 ```
 
 ---
@@ -162,6 +267,45 @@ Banks don't just reward agents for any referral. They reward for **qualified** r
   "disqualified": true,
   "reason": "MIN_DEPOSIT: deposit_amount (1000) must be GREATER_THAN 5000"
 }
+```
+
+### Detailed Core Banking Integration & Rule Engine Sequence
+
+The following sequence diagram illustrates the complete webhook processing lifecycle, from receiving a Temenos transaction to validating the agent, identifying the active campaign, evaluating qualification rules, and recording the final referral and integration log.
+
+```mermaid
+sequenceDiagram
+    participant Temenos as Temenos Core Banking
+    participant API as Express API
+    participant RuleEngine as Rule Engine Service
+    participant DB as PostgreSQL Database
+
+    Temenos->>API: POST /api/integration/account-opened
+    Note right of Temenos: Payload: { transaction_id, referral_code, deposit_amount, ... }
+
+    API->>DB: Check integration_logs for transaction_id
+    DB-->>API: Not found (New Transaction)
+
+    API->>DB: Find Agent by referral_code
+    DB-->>API: Agent Found (Status: APPROVED)
+
+    API->>DB: Find Active Campaign
+    DB-->>API: Campaign Found (ID: 1)
+
+    API->>RuleEngine: evaluateRules(campaign_id, payload, db_client)
+    RuleEngine->>DB: Fetch campaign_rules
+    DB-->>RuleEngine: Rules: [{ type: 'MIN_DEPOSIT', op: 'GREATER_THAN', value: 5000 }]
+
+    alt Rules Fail (Deposit < 5000)
+        RuleEngine-->>API: { passed: false, reason: "MIN_DEPOSIT failed" }
+        API->>DB: INSERT integration_logs (Status: FAILED)
+        API-->>Temenos: 202 Accepted {"disqualified": true, "reason": "..."}
+    else Rules Pass (Deposit >= 5000)
+        RuleEngine-->>API: { passed: true }
+        API->>DB: INSERT referrals (Status: PENDING)
+        API->>DB: INSERT integration_logs (Status: PROCESSED)
+        API-->>Temenos: 202 Accepted {"message": "Referral recorded"}
+    end
 ```
 
 ---

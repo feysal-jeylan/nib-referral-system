@@ -397,7 +397,7 @@ export default function Login() {
                     </>
                   ) : (
                     <>
-                      🔑 Sign In to Dashboard
+                       Sign In to Dashboard
                     </>
                   )}
                 </button>
