@@ -113,7 +113,6 @@ erDiagram
 
 ### Idempotency (The Safety Net)
 
-
 If Temenos sends the same `transaction_id` twice due to network retries, the system **must not** double-credit the agent.
 
 ```mermaid
@@ -137,13 +136,13 @@ sequenceDiagram
 ```
 
 ---
----
 
 ## ⚙️ V6 Rule Engine (Campaign Qualification)
 
-Banks don't just reward agents for any referral—they reward for **qualified** referrals. The V6 Rule Engine enforces this.
+Banks don't just reward agents for any referral. They reward for **qualified** referrals. The V6 Rule Engine enforces this.
 
 ### How it works:
+
 1. Admin creates a campaign and attaches rules (e.g., `MIN_DEPOSIT GREATER_THAN 5000`).
 2. Admin activates the campaign.
 3. Temenos sends a webhook with customer data (`deposit_amount`, `account_type`).
@@ -152,15 +151,20 @@ Banks don't just reward agents for any referral—they reward for **qualified** 
 6. If all rules pass, the referral is created as `PENDING` for Admin approval.
 
 ### Supported Operators:
+
 `GREATER_THAN`, `LESS_THAN`, `EQUALS`, `GREATER_THAN_OR_EQUAL`, `LESS_THAN_OR_EQUAL`, `NOT_EQUALS`
 
 ### Example Rejection Log:
+
 ```json
 {
   "transaction_id": "TXN-RULE-FAIL",
   "disqualified": true,
   "reason": "MIN_DEPOSIT: deposit_amount (1000) must be GREATER_THAN 5000"
 }
+```
+
+---
 
 ## 🛡️ Enterprise Security Architecture
 
