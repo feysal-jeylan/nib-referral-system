@@ -19,18 +19,25 @@
  *   (POST /api/integration/account-opened). A static informational box
  *   replaces the form in both the Admin Dashboard and Agent Portal.
  *
+ * V5 Architecture change (RULES.md §6):
+ *   Public agent self-registration is now supported. Applicants submit via
+ *   POST /api/agents/apply (no auth). Admins approve via the new
+ *   "Pending Agent Applications" section which calls PATCH /api/agents/:id/approve.
+ *   The AgentTable now shows a Status column for Admin users.
+ *
  * Sections:
  *   1.  Primitive UI components (Toast, StatusPill, RewardBadge, Spinner, InfoBox)
- *   2.  AgentForm            — ADMIN: register a new agent (POST /api/agents)
- *   3.  AgentTable           — show all agents with reward tier
- *   4.  ReferralTable        — show referrals with approve/reject actions (ADMIN)
- *   5.  CampaignForm         — ADMIN: create a new campaign (POST /api/campaigns)
- *   6.  CampaignTable        — ADMIN: list campaigns with rules + activate action
- *   7.  CampaignStatusPill   — coloured pill for DRAFT / ACTIVE / EXPIRED
- *   8.  IntegrationLogsTable — ADMIN: Temenos webhook audit log
- *   9.  IntegrationStatusPill— coloured pill for RECEIVED / PROCESSED / FAILED
- *  10.  App (root)           — auth gate, orchestrates state, data fetching, toasts
- *  11.  Dashboard            — rendered when authenticated, holds all business logic
+ *   2.  AgentStatusPill       — coloured pill for PENDING / APPROVED / REJECTED agents
+ *   3.  AgentForm             — ADMIN: register a new agent (POST /api/agents)
+ *   4.  AgentTable            — show all agents with reward tier and status (ADMIN)
+ *   5.  ReferralTable         — show referrals with approve/reject actions (ADMIN)
+ *   6.  CampaignForm          — ADMIN: create a new campaign (POST /api/campaigns)
+ *   7.  CampaignTable         — ADMIN: list campaigns with rules + activate action
+ *   8.  CampaignStatusPill    — coloured pill for DRAFT / ACTIVE / EXPIRED
+ *   9.  IntegrationLogsTable  — ADMIN: Temenos webhook audit log
+ *  10.  IntegrationStatusPill — coloured pill for RECEIVED / PROCESSED / FAILED
+ *  11.  App (root)            — auth gate, orchestrates state, data fetching, toasts
+ *  12.  Dashboard             — rendered when authenticated, holds all business logic
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -110,7 +117,22 @@ function InfoBox({ message }) {
   );
 }
 
-// ─── 2. AgentForm ─────────────────────────────────────────────────────────────
+// ─── 2. AgentStatusPill ───────────────────────────────────────────────────────
+//
+// Colour-coded pill for the agent `status` field added in V5.
+//   PENDING  → amber/yellow — awaiting Admin review
+//   APPROVED → green        — agent is active and can log in
+//   REJECTED → muted grey   — application was declined
+function AgentStatusPill({ status }) {
+  if (!status) return null;
+  return (
+    <span className={`agent-status-pill agent-status-pill--${status}`}>
+      {status}
+    </span>
+  );
+}
+
+// ─── 3. AgentForm ─────────────────────────────────────────────────────────────
 function AgentForm({ onCreated, onToast }) {
   const [form, setForm]             = useState({ name: '', phone: '', email: '' });
   const [submitting, setSubmitting] = useState(false);
@@ -147,6 +169,7 @@ function AgentForm({ onCreated, onToast }) {
       onCreated({
         id: data.id, name: data.name,
         referral_code: data.referral_code,
+        status: data.status ?? 'APPROVED',
         successful_referrals: 0, current_reward: null,
       });
       onToast({
@@ -202,8 +225,11 @@ function AgentForm({ onCreated, onToast }) {
   );
 }
 
-// ─── 3. AgentTable ────────────────────────────────────────────────────────────
-function AgentTable({ agents, loading }) {
+// ─── 4. AgentTable ────────────────────────────────────────────────────────────
+//
+// isAdmin controls whether the Status column is shown. Agents only see their
+// own row and do not need to see a status pill (they are already approved).
+function AgentTable({ agents, loading, isAdmin }) {
   if (loading) return <div className="state-box"><Spinner /><p>Loading agents…</p></div>;
   if (!agents.length) return (
     <EmptyState icon="🏦" title="No agents yet"
@@ -219,6 +245,7 @@ function AgentTable({ agents, loading }) {
             <th scope="col">Referral Code</th>
             <th scope="col">Successful Referrals</th>
             <th scope="col">Reward Tier</th>
+            {isAdmin && <th scope="col">Status</th>}
           </tr>
         </thead>
         <tbody>
@@ -226,11 +253,19 @@ function AgentTable({ agents, loading }) {
             <tr key={a.id} className="data-row">
               <td className="td--index">{i + 1}</td>
               <td className="td--name">{a.name}</td>
-              <td><code className="code-chip">{a.referral_code}</code></td>
+              <td>
+                {a.referral_code
+                  ? <code className="code-chip">{a.referral_code}</code>
+                  : <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>—</span>
+                }
+              </td>
               <td className="td--count">
                 <span className="count-pill">{a.successful_referrals}</span>
               </td>
               <td><RewardBadge tier={a.current_reward} /></td>
+              {isAdmin && (
+                <td><AgentStatusPill status={a.status} /></td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -239,7 +274,7 @@ function AgentTable({ agents, loading }) {
   );
 }
 
-// ─── 4. ReferralTable ─────────────────────────────────────────────────────────
+// ─── 5. ReferralTable ─────────────────────────────────────────────────────────
 //
 // isAdmin controls whether the Actions column (Approve / Reject) is shown.
 // When false (AGENT view), the column is hidden entirely — agents can only
@@ -325,7 +360,7 @@ function ReferralTable({ referrals, loading, onStatusChange, isAdmin }) {
   );
 }
 
-// ─── 5. CampaignForm ──────────────────────────────────────────────────────────
+// ─── 6. CampaignForm ──────────────────────────────────────────────────────────
 function CampaignForm({ onCreated, onToast }) {
   const EMPTY = { name: '', start_date: '', end_date: '', reward_type: 'CASH', reward_value: '' };
   const [form, setForm]             = useState(EMPTY);
@@ -436,7 +471,7 @@ function CampaignForm({ onCreated, onToast }) {
   );
 }
 
-// ─── 6. CampaignTable ─────────────────────────────────────────────────────────
+// ─── 7. CampaignTable ─────────────────────────────────────────────────────────
 function CampaignTable({ campaigns, loading, onActivated, onToast }) {
   const [activating, setActivating] = useState(new Set());
 
@@ -543,7 +578,7 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
   );
 }
 
-// ─── 7. CampaignStatusPill ───────────────────────────────────────────────────
+// ─── 8. CampaignStatusPill ───────────────────────────────────────────────────
 function CampaignStatusPill({ status }) {
   return (
     <span className={`camp-status-pill camp-status-pill--${status}`}>
@@ -552,14 +587,11 @@ function CampaignStatusPill({ status }) {
   );
 }
 
-// ─── 8. IntegrationLogsTable ─────────────────────────────────────────────────
+// ─── 9. IntegrationLogsTable ─────────────────────────────────────────────────
 //
 // ADMIN-ONLY. Displays the last 20 rows from integration_logs in a table.
 // Each row shows: Transaction ID, Customer Name (from JSONB payload),
 // Status pill (RECEIVED / PROCESSED / FAILED), and Date.
-//
-// The `payload` column is stored as JSONB on the server; pg returns it as a
-// parsed JS object, so we can read payload.customer_name directly.
 function IntegrationLogsTable({ logs, loading }) {
   if (loading) return <div className="state-box"><Spinner /><p>Loading integration logs…</p></div>;
   if (!logs.length) return (
@@ -587,17 +619,9 @@ function IntegrationLogsTable({ logs, loading }) {
             <tr key={log.id} className="data-row">
               <td className="td--index">{i + 1}</td>
               <td>
-                {/*
-                  Transaction ID shown in a monospace chip — it is a technical
-                  identifier (e.g. "TXN-2026-001234"), not a human-readable value.
-                */}
                 <code className="code-chip">{log.transaction_id}</code>
               </td>
               <td className="td--name">
-                {/*
-                  payload is a JSONB object returned as a parsed JS object by pg.
-                  We safely fall back to "—" if the field is absent.
-                */}
                 {log.payload?.customer_name ?? '—'}
               </td>
               <td>
@@ -614,12 +638,7 @@ function IntegrationLogsTable({ logs, loading }) {
   );
 }
 
-// ─── 9. IntegrationStatusPill ─────────────────────────────────────────────────
-//
-// Colour-coded pill for the integration_logs status column.
-//   RECEIVED  → amber/yellow  — webhook received, processing in progress
-//   PROCESSED → green         — referral created successfully
-//   FAILED    → red           — processing failed (see error_message in DB)
+// ─── 10. IntegrationStatusPill ────────────────────────────────────────────────
 function IntegrationStatusPill({ status }) {
   return (
     <span className={`integ-status-pill integ-status-pill--${status}`}>
@@ -628,7 +647,7 @@ function IntegrationStatusPill({ status }) {
   );
 }
 
-// ─── 10. App (root) ───────────────────────────────────────────────────────────
+// ─── 11. App (root) ───────────────────────────────────────────────────────────
 export default function App() {
   const { user, loading, logout } = useAuth();
 
@@ -669,7 +688,7 @@ export default function App() {
   />;
 }
 
-// ─── 11. Dashboard ────────────────────────────────────────────────────────────
+// ─── 12. Dashboard ────────────────────────────────────────────────────────────
 //
 // Extracted so all hooks run unconditionally (Rules of Hooks).
 function Dashboard({
@@ -689,20 +708,21 @@ function Dashboard({
   const [integLogs,        setIntegLogs]        = useState([]);
   const [integLogsLoading, setIntegLogsLoading] = useState(true);
 
+  // ── Per-row loading state for approve / reject actions ───────────────────
+  // Stores the Set of agent IDs currently being approved or rejected.
+  const [actioning, setActioning] = useState(new Set());
+
   // ── Initial data load ────────────────────────────────────────────────────
   useEffect(() => {
     async function load() {
       try {
-        // Agents and referrals are needed by both roles.
         const fetches = [
           fetch(`${API}/agents`,    FETCH_OPTS),
           fetch(`${API}/referrals`, FETCH_OPTS),
         ];
-        // Campaign and integration-log fetches are ADMIN-only — skipping them
-        // for agents avoids unnecessary 403 errors in the console.
         if (isAdmin) {
-          fetches.push(fetch(`${API}/campaigns`,         FETCH_OPTS));
-          fetches.push(fetch(`${API}/integration/logs`,  FETCH_OPTS));
+          fetches.push(fetch(`${API}/campaigns`,        FETCH_OPTS));
+          fetches.push(fetch(`${API}/integration/logs`, FETCH_OPTS));
         }
 
         const responses = await Promise.all(fetches);
@@ -711,10 +731,7 @@ function Dashboard({
           responses[1].json(),
         ]);
 
-        // GET /api/agents returns a plain array.
         setAgents(Array.isArray(aData) ? aData : []);
-        // GET /api/referrals returns { referrals: [...], total, page, limit }
-        // after the V2 pagination update. Guard against both shapes.
         setReferrals(Array.isArray(rData) ? rData : (rData.referrals ?? []));
 
         if (isAdmin) {
@@ -738,6 +755,17 @@ function Dashboard({
   }, []);
 
   // ── Refresh helpers ──────────────────────────────────────────────────────
+  const refreshAgents = useCallback(async () => {
+    try {
+      const res  = await fetch(`${API}/agents`, FETCH_OPTS);
+      const data = await res.json();
+      setAgents(Array.isArray(data) ? data : []);
+    } catch {
+      showToast({ type: 'error', message: '🔴 Could not refresh agent list.' });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const refreshCampaigns = useCallback(async () => {
     try {
       const res  = await fetch(`${API}/campaigns`, FETCH_OPTS);
@@ -767,12 +795,65 @@ function Dashboard({
     toastTimer.current = setTimeout(() => setToast(null), 6000);
   }
 
-  // ── Agent created ────────────────────────────────────────────────────────
+  // ── Agent created (admin manually registers) ─────────────────────────────
   function handleAgentCreated(newAgent) {
     setAgents(prev => [newAgent, ...prev]);
   }
 
-  // ── Status update (Approve / Reject) ────────────────────────────────────
+  // ── Approve a pending agent ──────────────────────────────────────────────
+  async function handleApprove(id, name) {
+    setActioning(prev => new Set(prev).add(id));
+    try {
+      const res  = await fetch(`${API}/agents/${id}/approve`, {
+        method: 'PATCH',
+        ...FETCH_OPTS,
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showToast({ type: 'error', message: data.error ?? 'Approval failed.' });
+        return;
+      }
+
+      // Refresh the full agent list so status pill updates everywhere.
+      await refreshAgents();
+
+      showToast({
+        type: 'success',
+        message: `✅ "${name}" approved — Code: ${data.referral_code} · Temp Password: ${data.temp_password}`,
+      });
+    } catch {
+      showToast({ type: 'error', message: '🔴 Cannot reach the server.' });
+    } finally {
+      setActioning(prev => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  }
+
+  // ── Reject a pending agent ───────────────────────────────────────────────
+  async function handleReject(id, name) {
+    setActioning(prev => new Set(prev).add(id));
+    try {
+      const res  = await fetch(`${API}/agents/${id}/reject`, {
+        method: 'PATCH',
+        ...FETCH_OPTS,
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showToast({ type: 'error', message: data.error ?? 'Rejection failed.' });
+        return;
+      }
+
+      await refreshAgents();
+      showToast({ type: 'success', message: `Application from "${name}" has been rejected.` });
+    } catch {
+      showToast({ type: 'error', message: '🔴 Cannot reach the server.' });
+    } finally {
+      setActioning(prev => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  }
+
+  // ── Status update (Approve / Reject referral) ────────────────────────────
   async function handleStatusChange(referralId, newStatus) {
     try {
       const res = await fetch(`${API}/referrals/${referralId}/status`, {
@@ -812,6 +893,13 @@ function Dashboard({
   async function handleLogout() {
     await logout();
   }
+
+  // ── Derived: pending agent applications (filtered client-side) ───────────
+  //
+  // Client-side filter is intentional — GET /api/agents already returns the
+  // full list for ADMIN users (including PENDING/REJECTED rows).  We do not
+  // need a separate API call; we simply partition the array.
+  const pendingAgents = agents.filter(a => a.status === 'PENDING');
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
@@ -866,8 +954,92 @@ function Dashboard({
               {agents.length} agent{agents.length !== 1 ? 's' : ''}
             </span>
           </div>
-          <AgentTable agents={agents} loading={agentsLoading} />
+          <AgentTable agents={agents} loading={agentsLoading} isAdmin={isAdmin} />
         </section>
+
+        {/*
+          ── ADMIN: Pending Agent Applications ────────────────────────────────
+          Only shown to ADMIN users. Displays applicants who submitted via the
+          public POST /api/agents/apply endpoint and are awaiting review.
+          Filtered client-side from the agents array (status === 'PENDING').
+        */}
+        {isAdmin && (
+          <section className="card" aria-labelledby="pending-agents-heading">
+            <div className="section-header">
+              <h2 id="pending-agents-heading" className="section-header__title">
+                Pending Agent Applications
+              </h2>
+              <span
+                className={`section-header__count${pendingAgents.length > 0 ? ' section-header__count--alert' : ''}`}
+              >
+                {pendingAgents.length} pending
+              </span>
+            </div>
+
+            {agentsLoading ? (
+              <div className="state-box"><Spinner /><p>Loading applications…</p></div>
+            ) : pendingAgents.length === 0 ? (
+              <EmptyState
+                icon="✅"
+                title="No pending applications"
+                sub="All agent applications have been reviewed. New applicants appear here automatically."
+              />
+            ) : (
+              <div className="table-wrap">
+                <table className="data-table" aria-label="Pending agent applications">
+                  <thead>
+                    <tr>
+                      <th scope="col">#</th>
+                      <th scope="col">Name</th>
+                      <th scope="col">Phone</th>
+                      <th scope="col">Email</th>
+                      <th scope="col">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingAgents.map((a, i) => {
+                      const busy = actioning.has(a.id);
+                      return (
+                        <tr key={a.id} className="data-row">
+                          <td className="td--index">{i + 1}</td>
+                          <td className="td--name">{a.name}</td>
+                          <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)' }}>
+                            {a.phone ?? '—'}
+                          </td>
+                          <td style={{ color: 'var(--text-2)' }}>
+                            {a.email ?? '—'}
+                          </td>
+                          <td>
+                            <div className="action-group">
+                              <button
+                                id={`agent-approve-btn-${a.id}`}
+                                className="btn btn--approve"
+                                disabled={busy}
+                                onClick={() => handleApprove(a.id, a.name)}
+                                aria-label={`Approve application from ${a.name}`}
+                              >
+                                {busy ? <Spinner small /> : '✓ Approve'}
+                              </button>
+                              <button
+                                id={`agent-reject-btn-${a.id}`}
+                                className="btn btn--reject"
+                                disabled={busy}
+                                onClick={() => handleReject(a.id, a.name)}
+                                aria-label={`Reject application from ${a.name}`}
+                              >
+                                {busy ? <Spinner small /> : '✕ Reject'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
 
         {/*
           ── V2 Architecture: Referral Registration Removed ─────────────────
@@ -947,7 +1119,6 @@ function Dashboard({
                   <span className="section-header__count">
                     {integLogs.length} event{integLogs.length !== 1 ? 's' : ''}
                   </span>
-                  {/* Manual refresh button — lets admin pull latest events */}
                   <button
                     className="btn btn--ghost"
                     onClick={refreshIntegLogs}

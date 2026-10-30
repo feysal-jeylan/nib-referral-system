@@ -3,10 +3,18 @@
  * ------------------------------
  * Router for all /api/agents endpoints.
  *
- * Current endpoints:
- *   GET  /api/agents           — List agents (ADMIN: all, AGENT: own row only).
- *   POST /api/agents           — Create a new agent + linked user account (ADMIN only, transactional).
- *   GET  /api/agents/:id/stats — Get a single agent's referral count and reward tier.
+ * Current endpoints (V5):
+ *   POST /api/agents/apply       — PUBLIC: submit a self-registration application.
+ *   GET  /api/agents             — List agents (ADMIN: all, AGENT: own row only).
+ *   POST /api/agents             — Create a new approved agent + user account (ADMIN only, transactional).
+ *   PATCH /api/agents/:id/approve — Approve a PENDING agent; generate referral code + user account (ADMIN only).
+ *   PATCH /api/agents/:id/reject  — Reject a PENDING agent (ADMIN only).
+ *   GET  /api/agents/:id/stats   — Get a single agent's referral count and reward tier.
+ *
+ * ROUTE ORDER MATTERS:
+ *   Express matches routes in declaration order.  Literal-path routes like
+ *   POST /apply must be declared BEFORE parameterised routes like PATCH /:id/*
+ *   so Express does not try to parse "apply" as an integer ID.
  *
  * Per RULES.md:
  *   - All inputs are validated server-side before touching the database.
@@ -26,108 +34,6 @@ const { authenticateToken, authorizeRole } = require('../middleware/authMiddlewa
 const router = express.Router();
 
 // ---------------------------------------------------------------------------
-// GET /api/agents
-// Return every agent together with their SUCCESSFUL referral count
-// and the highest reward tier they currently qualify for.
-//
-// Success response — 200 OK (array, newest agent first):
-//   [
-//     {
-//       "id":                  1,
-//       "name":                "Abebe Kebede",
-//       "referral_code":       "NIB-X7KP2A",
-//       "successful_referrals": 4,
-//       "current_reward":       "Bronze"
-//     },
-//     ...
-//   ]
-//
-// Error responses:
-//   500 Server Error — unexpected DB failure
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// GET /api/agents — requires authentication (any role).
-//
-// RBAC filtering:
-//   ADMIN  → returns ALL agents.
-//   AGENT  → returns ONLY the row for their own agent_id (req.user.agent_id).
-//
-// This means the frontend does not need to filter client-side; the server
-// enforces the boundary. An AGENT simply cannot see other agents' data.
-// ---------------------------------------------------------------------------
-router.get('/', authenticateToken, async (req, res, next) => {
-  try {
-    // ── RBAC: build the WHERE clause based on the caller's role ────────────
-    //
-    // For AGENT users, req.user.agent_id is the FK from their users row to
-    // the agents table. We inject it as a parameterized value to prevent
-    // SQL injection — never via string concatenation.
-    //
-    // For ADMIN users, we add no WHERE filter (queryParams stays empty, and
-    // the agentFilter fragment is an empty string).
-    let agentFilter = '';
-    const queryParams = [];
-
-    if (req.user.role === 'AGENT') {
-      queryParams.push(req.user.agent_id);
-      // $1 will be bound to req.user.agent_id — safe from injection.
-      agentFilter = 'WHERE a.id = $1';
-    }
-
-    // This single query does everything in one round-trip:
-    //
-    // 1. For each agent (LEFT JOIN so agents with zero referrals appear too),
-    //    COUNT only the referral rows where status = 'SUCCESSFUL'.
-    //
-    // 2. Find the highest qualifying reward tier with a correlated subquery.
-    //
-    // The agentFilter fragment is either '' (ADMIN) or 'WHERE a.id = $1' (AGENT).
-    const result = await pool.query(`
-      SELECT
-        sub.id,
-        sub.name,
-        sub.referral_code,
-        sub.successful_count,
-        rr.reward_name AS current_reward
-      FROM (
-        SELECT
-          a.id,
-          a.name,
-          a.referral_code,
-          a.created_at,
-          COUNT(r.id) FILTER (WHERE r.status = 'SUCCESSFUL') AS successful_count
-        FROM agents a
-        LEFT JOIN referrals r ON r.agent_id = a.id
-        ${agentFilter}
-        GROUP BY a.id, a.name, a.referral_code, a.created_at
-      ) sub
-      LEFT JOIN reward_rules rr
-        ON rr.min_referrals = (
-          SELECT MAX(min_referrals)
-          FROM   reward_rules
-          WHERE  min_referrals <= sub.successful_count
-        )
-      ORDER BY sub.created_at DESC
-    `, queryParams);
-
-    const agents = result.rows.map(row => ({
-      id:                   row.id,
-      name:                 row.name,
-      referral_code:        row.referral_code,
-      // COUNT returns a PG bigint which arrives as a string — coerce to number.
-      successful_referrals: parseInt(row.successful_count, 10),
-      current_reward:       row.current_reward ?? null,
-    }));
-
-    return res.status(200).json(agents);
-
-  } catch (err) {
-    console.error('[GET /api/agents] Unexpected DB error:', err.message);
-    next(err);
-  }
-});
-
-// ---------------------------------------------------------------------------
 // Helper: generate a unique referral code in the format NIB-XXXXXX
 //
 // Math.random().toString(36) converts a random float to base-36 (0-9, a-z).
@@ -142,37 +48,197 @@ function generateReferralCode() {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/agents
-// Create a new agent record.
+// POST /api/agents/apply  — PUBLIC (no auth required)
+//
+// Allows anyone on the internet to submit an application to become a Nib
+// referral agent.  The application lands in the agents table with
+// status = 'PENDING' and referral_code = NULL.  An Admin must explicitly
+// approve (PATCH /:id/approve) before the applicant can log in.
+//
+// Why no auth here?
+//   This is the entry point for strangers — they have no account yet, so they
+//   cannot have a JWT.  The endpoint is intentionally public.  No sensitive
+//   data is returned, and the DB uniqueness constraints prevent abuse.
+//
+// Request body (JSON):
+//   { "name": "Sara Tesfaye", "phone": "0912345678", "email": "sara@example.com" }
+//
+// Success response — 201 Created:
+//   { "message": "Application submitted. Awaiting Admin approval." }
+//
+// Error responses:
+//   400 Bad Request  — missing or invalid fields
+//   409 Conflict     — phone or email already registered
+//   500 Server Error — unexpected DB failure
+// ---------------------------------------------------------------------------
+router.post('/apply', async (req, res, next) => {
+  // ── Step 1: Extract and sanitise inputs ──────────────────────────────────
+  const name  = req.body.name?.trim();
+  const phone = req.body.phone?.trim();
+  const email = req.body.email?.trim()?.toLowerCase();
+
+  // ── Step 2: Validate ─────────────────────────────────────────────────────
+  if (!name || !phone || !email) {
+    return res.status(400).json({
+      error: 'All fields are required: name, phone, email.',
+      code:  'MISSING_FIELDS',
+    });
+  }
+
+  if (!email.includes('@')) {
+    return res.status(400).json({
+      error: 'A valid email address is required.',
+      code:  'INVALID_EMAIL',
+    });
+  }
+
+  // ── Step 3: Insert the application ───────────────────────────────────────
+  //
+  // status defaults to 'PENDING' via the column DEFAULT set in the V5 migration.
+  // referral_code is NULL — generated only on approval.
+  // No users row is created yet; the applicant cannot log in until approved.
+  try {
+    await pool.query(
+      `INSERT INTO agents (name, phone, email, referral_code, status)
+       VALUES ($1, $2, $3, NULL, 'PENDING')`,
+      [name, phone, email]
+    );
+
+    return res.status(201).json({
+      message: 'Application submitted. Awaiting Admin approval.',
+    });
+
+  } catch (err) {
+    // 23505 = unique_violation (phone or email already exists)
+    if (err.code === '23505') {
+      return res.status(409).json({
+        error: 'An agent with this phone number or email already exists.',
+        code:  'DUPLICATE_ENTRY',
+      });
+    }
+    console.error('[POST /api/agents/apply] Unexpected DB error:', err.message);
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/agents
+// Return every agent together with their SUCCESSFUL referral count,
+// the highest reward tier they currently qualify for, and their status.
+//
+// RBAC filtering:
+//   ADMIN  → returns ALL agents (all statuses).
+//   AGENT  → returns ONLY the row for their own agent_id (req.user.agent_id).
+//
+// Success response — 200 OK (array, newest agent first):
+//   [
+//     {
+//       "id":                  1,
+//       "name":                "Abebe Kebede",
+//       "phone":               "0911234567",
+//       "email":               "abebe@nib.com",
+//       "referral_code":       "NIB-X7KP2A",
+//       "status":              "APPROVED",
+//       "successful_referrals": 4,
+//       "current_reward":       "Bronze"
+//     },
+//     ...
+//   ]
+//
+// Error responses:
+//   500 Server Error — unexpected DB failure
+// ---------------------------------------------------------------------------
+router.get('/', authenticateToken, async (req, res, next) => {
+  try {
+    // ── RBAC: build the WHERE clause based on the caller's role ────────────
+    let agentFilter = '';
+    const queryParams = [];
+
+    if (req.user.role === 'AGENT') {
+      queryParams.push(req.user.agent_id);
+      agentFilter = 'WHERE a.id = $1';
+    }
+
+    const result = await pool.query(`
+      SELECT
+        sub.id,
+        sub.name,
+        sub.phone,
+        sub.email,
+        sub.referral_code,
+        sub.status,
+        sub.successful_count,
+        rr.reward_name AS current_reward
+      FROM (
+        SELECT
+          a.id,
+          a.name,
+          a.phone,
+          a.email,
+          a.referral_code,
+          a.status,
+          a.created_at,
+          COUNT(r.id) FILTER (WHERE r.status = 'SUCCESSFUL') AS successful_count
+        FROM agents a
+        LEFT JOIN referrals r ON r.agent_id = a.id
+        ${agentFilter}
+        GROUP BY a.id, a.name, a.phone, a.email, a.referral_code, a.status, a.created_at
+      ) sub
+      LEFT JOIN reward_rules rr
+        ON rr.min_referrals = (
+          SELECT MAX(min_referrals)
+          FROM   reward_rules
+          WHERE  min_referrals <= sub.successful_count
+        )
+      ORDER BY sub.created_at DESC
+    `, queryParams);
+
+    const agents = result.rows.map(row => ({
+      id:                   row.id,
+      name:                 row.name,
+      phone:                row.phone,
+      email:                row.email,
+      referral_code:        row.referral_code,
+      status:               row.status,
+      // COUNT returns a PG bigint which arrives as a string — coerce to number.
+      successful_referrals: parseInt(row.successful_count, 10),
+      current_reward:       row.current_reward ?? null,
+    }));
+
+    return res.status(200).json(agents);
+
+  } catch (err) {
+    console.error('[GET /api/agents] Unexpected DB error:', err.message);
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/agents  — ADMIN only
+//
+// Create a new APPROVED agent with a linked user account in a single
+// transaction.  The Admin hands the temp_password to the new agent
+// out-of-band (it is shown in the success response and logged to the server
+// terminal — in production it would be emailed via SendGrid / SES).
 //
 // Request body (JSON):
 //   { "name": "Abebe Kebede", "phone": "0911234567", "email": "abebe@nib.com" }
 //
 // Success response — 201 Created:
-//   { "id": 1, "referral_code": "NIB-X7KP2A", "name": "Abebe Kebede" }
+//   {
+//     "id":            1,
+//     "name":          "Abebe Kebede",
+//     "referral_code": "NIB-X7KP2A",
+//     "status":        "APPROVED",
+//     "created_at":    "2026-10-27T...",
+//     "message":       "Agent created. Temporary credentials ...",
+//     "temp_password": "a3f8..."
+//   }
 //
 // Error responses:
-//   400 Bad Request   — missing name, phone, or email
-//   409 Conflict      — phone or email already exists in the DB
-//   500 Server Error  — unexpected DB failure (details logged server-side only)
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// POST /api/agents — ADMIN only: create a new agent with a linked user account.
-//
-// This route is wrapped in a database transaction so that both the agents INSERT
-// and the users INSERT succeed or fail together — no orphaned rows possible.
-//
-// On success the response includes the temporary password so the Admin can
-// hand it to the new agent. The agent must change it after first login.
-//
-// New response shape (201 Created):
-//   {
-//     "id":               1,
-//     "name":             "Abebe Kebede",
-//     "referral_code":    "NIB-X7KP2A",
-//     "created_at":       "2026-10-27T...",
-//     "temp_password":    "NibBank2026!"
-//   }
+//   400 Bad Request  — missing or invalid fields
+//   409 Conflict     — phone or email already exists
+//   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
 router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
   // ── Step 1: Extract and trim inputs ────────────────────────────────────────
@@ -180,7 +246,7 @@ router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, n
   const phone = req.body.phone?.trim();
   const email = req.body.email?.trim();
 
-  // ── Step 2: Validate — all fields are required ────────────────────────────
+  // ── Step 2: Validate ─────────────────────────────────────────────────────
   if (!name || !phone || !email) {
     return res.status(400).json({
       error: 'All fields are required: name, phone, email.',
@@ -195,90 +261,52 @@ router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, n
     });
   }
 
-  // ── Step 3: Generate referral code and a cryptographically random temp password ─
-  //
-  // WHY crypto.randomBytes instead of a fixed string:
-  //   A fixed password like 'NibBank2026!' is the same for EVERY new agent.
-  //   If it leaks once (e.g., in a git commit), ALL new agents are vulnerable.
-  //   crypto.randomBytes(16) draws from the OS CSPRNG — each agent gets a
-  //   unique 32-character hex string with ~128 bits of entropy.
-  //
-  // WHY console.log and NOT in the HTTP response:
-  //   Returning secrets in HTTP responses is risky: they appear in browser
-  //   history, proxy logs, and DevTools network tabs. In production this
-  //   console.log would be replaced by a secure email/SMS delivery system.
-  //   The Admin reads it from the terminal and hands it to the agent out-of-band.
+  // ── Step 3: Generate referral code and temp password ──────────────────────
   const referralCode  = generateReferralCode();
-  const tempPassword  = crypto.randomBytes(16).toString('hex'); // 32-char hex string
+  const tempPassword  = crypto.randomBytes(16).toString('hex');
   const passwordHash  = await bcrypt.hash(tempPassword, 12);
 
-  // ▶ Simulate sending the temp password to the agent via email.
-  //   In production: replace this with nodemailer / SendGrid / AWS SES.
   console.log(`[AGENT ONBOARDING] Temp password for ${email}: ${tempPassword}`);
   console.log(`[AGENT ONBOARDING] ⚠️  This should be delivered via secure email, not stored anywhere.`);
 
-  // ── Step 4: Open a transaction — two tables must succeed together ──────────
-  //
-  // WHY A TRANSACTION?
-  //   We write to both `agents` and `users`. If the agents INSERT succeeds
-  //   but users fails (e.g. email collision), we'd have an agent with no
-  //   login account — an inconsistent state. BEGIN/COMMIT/ROLLBACK prevents this.
-  //
-  // WHY pool.connect() instead of pool.query()?
-  //   pool.query() picks a fresh connection for every call; it cannot maintain
-  //   transaction state across calls. We need ONE dedicated connection so that
-  //   BEGIN, the two INSERTs, and COMMIT/ROLLBACK all run on the same session.
-  //
-  // CRITICAL: client.release() MUST be called in finally — otherwise the
-  //   connection is permanently "checked out" and the pool slowly starves.
+  // ── Step 4: Transaction — agents + users must succeed together ────────────
   const client = await pool.connect();
 
   try {
-    // ── BEGIN ─────────────────────────────────────────────────────────────
     await client.query('BEGIN');
 
-    // ── INSERT 1: agents ──────────────────────────────────────────────────
-    // RETURNING gives us the auto-generated id without a second SELECT.
+    // INSERT into agents with status = 'APPROVED' (admin-created agents are
+    // immediately active — they do not go through the PENDING approval flow).
     const agentResult = await client.query(
-      `INSERT INTO agents (name, phone, email, referral_code)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, referral_code, created_at`,
+      `INSERT INTO agents (name, phone, email, referral_code, status)
+       VALUES ($1, $2, $3, $4, 'APPROVED')
+       RETURNING id, name, referral_code, status, created_at`,
       [name, phone, email, referralCode]
     );
     const newAgent = agentResult.rows[0];
 
-    // ── INSERT 2: users ───────────────────────────────────────────────────
-    // Creates the login account linked to the new agent.
-    //   username      = agent's email (unique, used as login credential)
-    //   password_hash = bcrypt hash of the temporary password
-    //   role          = 'AGENT'
-    //   agent_id      = FK to the row we just inserted above
+    // CREATE the login account linked to the new agent.
     await client.query(
       `INSERT INTO users (username, password_hash, role, agent_id)
        VALUES ($1, $2, 'AGENT', $3)`,
       [email, passwordHash, newAgent.id]
     );
 
-    // ── COMMIT ────────────────────────────────────────────────────────────
-    // Both INSERTs succeeded — make all changes permanent.
     await client.query('COMMIT');
 
-    // Return agent details. The temp password is NOT in the response — it was
-    // printed to the server terminal above (simulating email delivery).
     return res.status(201).json({
       id:            newAgent.id,
       name:          newAgent.name,
       referral_code: newAgent.referral_code,
+      status:        newAgent.status,
       created_at:    newAgent.created_at,
       message:       `Agent created. Temporary credentials have been dispatched to ${email}.`,
+      temp_password: tempPassword,
     });
 
   } catch (err) {
-    // ── ROLLBACK ──────────────────────────────────────────────────────────
-    // Something failed — undo everything so neither table gets a partial write.
     await client.query('ROLLBACK');
 
-    // '23505' = unique_violation — phone, email, or referral_code collision.
     if (err.code === '23505') {
       let field = 'phone or email';
       if (err.constraint && err.constraint.includes('phone'))         field = 'phone number';
@@ -296,8 +324,171 @@ router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, n
     next(err);
 
   } finally {
-    // Always return the connection to the pool — no matter what happened.
     client.release();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/agents/:id/approve  — ADMIN only
+//
+// Approves a PENDING agent application.
+//
+// What this endpoint does:
+//   1. Validates the ID.
+//   2. Fetches the agent row (needs email for the users INSERT).
+//   3. Generates a referral code if the agent doesn't already have one.
+//   4. In a single transaction:
+//        a. Sets status = 'APPROVED' and writes referral_code.
+//        b. Creates a users row (username = email, role = 'AGENT').
+//   5. Returns the updated agent data + temp_password for the Admin to hand
+//      to the newly approved agent.
+//
+// Success response — 200 OK:
+//   {
+//     "id":            3,
+//     "name":          "Sara Tesfaye",
+//     "referral_code": "NIB-K9MX2P",
+//     "status":        "APPROVED",
+//     "temp_password": "b4a9..."
+//   }
+//
+// Error responses:
+//   400 Bad Request  — ID not an integer
+//   404 Not Found    — no agent with that ID
+//   409 Conflict     — email already has a user account (was approved before?)
+//   500 Server Error — unexpected DB failure
+// ---------------------------------------------------------------------------
+router.patch('/:id/approve', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
+  const agentId = parseInt(req.params.id, 10);
+
+  if (isNaN(agentId)) {
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  // ── Fetch the agent so we have their email for the users INSERT ───────────
+  let agent;
+  try {
+    const check = await pool.query(
+      'SELECT id, name, email, referral_code, status FROM agents WHERE id = $1',
+      [agentId]
+    );
+    if (check.rows.length === 0) {
+      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
+    }
+    agent = check.rows[0];
+  } catch (err) {
+    console.error('[PATCH /api/agents/:id/approve] DB lookup error:', err.message);
+    return next(err);
+  }
+
+  // ── Generate a referral code if the agent doesn't have one yet ───────────
+  const referralCode = agent.referral_code ?? generateReferralCode();
+
+  // ── Generate a temporary password for the new user account ───────────────
+  const tempPassword = crypto.randomBytes(16).toString('hex');
+  const passwordHash = await bcrypt.hash(tempPassword, 12);
+
+  console.log(`[AGENT APPROVAL] Temp password for ${agent.email}: ${tempPassword}`);
+  console.log(`[AGENT APPROVAL] ⚠️  Deliver this via secure email in production.`);
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // Update the agent: set APPROVED status and assign the referral code.
+    const updateResult = await client.query(
+      `UPDATE agents
+       SET status = 'APPROVED', referral_code = $1
+       WHERE id = $2
+       RETURNING id, name, referral_code, status`,
+      [referralCode, agentId]
+    );
+    const updated = updateResult.rows[0];
+
+    // Create the login account.  username = agent's email.
+    // If a users row already exists for this email, the UNIQUE constraint
+    // triggers a 23505 error which we catch below (409 Conflict).
+    await client.query(
+      `INSERT INTO users (username, password_hash, role, agent_id)
+       VALUES ($1, $2, 'AGENT', $3)`,
+      [agent.email, passwordHash, agentId]
+    );
+
+    await client.query('COMMIT');
+
+    return res.status(200).json({
+      id:            updated.id,
+      name:          updated.name,
+      referral_code: updated.referral_code,
+      status:        updated.status,
+      temp_password: tempPassword,
+      message:       `Agent approved. Temporary credentials dispatched to ${agent.email}.`,
+    });
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+
+    if (err.code === '23505') {
+      return res.status(409).json({
+        error: 'A user account for this agent already exists.',
+        code:  'DUPLICATE_ENTRY',
+      });
+    }
+
+    console.error('[PATCH /api/agents/:id/approve] Unexpected DB error:', err.message);
+    next(err);
+
+  } finally {
+    client.release();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/agents/:id/reject  — ADMIN only
+//
+// Rejects a PENDING agent application.  Sets status = 'REJECTED'.
+// No users row is created.  The applicant is simply marked as rejected in the
+// agents table.  No data is deleted — the record is retained for audit purposes.
+//
+// Success response — 200 OK:
+//   { "id": 3, "name": "Sara Tesfaye", "status": "REJECTED" }
+//
+// Error responses:
+//   400 Bad Request — ID not an integer
+//   404 Not Found   — no agent with that ID
+//   500 Server Error
+// ---------------------------------------------------------------------------
+router.patch('/:id/reject', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
+  const agentId = parseInt(req.params.id, 10);
+
+  if (isNaN(agentId)) {
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE agents
+       SET status = 'REJECTED'
+       WHERE id = $1
+       RETURNING id, name, status`,
+      [agentId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
+    }
+
+    const updated = result.rows[0];
+    return res.status(200).json({
+      id:     updated.id,
+      name:   updated.name,
+      status: updated.status,
+    });
+
+  } catch (err) {
+    console.error('[PATCH /api/agents/:id/reject] Unexpected DB error:', err.message);
+    next(err);
   }
 });
 
@@ -334,14 +525,6 @@ router.get('/:id/stats', authenticateToken, async (req, res, next) => {
   }
 
   // ── Step 1b: RBAC — agents can only view their own stats ─────────────────
-  //
-  // req.user is set by authenticateToken (the decoded JWT payload).
-  // For AGENT users, req.user.agent_id is the FK that links the user account
-  // to the specific agent row. If an AGENT tries to request stats for a
-  // *different* agent's id, we return 403 immediately — before hitting the DB.
-  //
-  // ADMIN users (req.user.role === 'ADMIN') have no agent_id restriction;
-  // they can view stats for any agent.
   if (req.user.role === 'AGENT' && req.user.agent_id !== agentId) {
     return res.status(403).json({
       error: 'Access denied. Agents can only view their own stats.',
@@ -350,11 +533,7 @@ router.get('/:id/stats', authenticateToken, async (req, res, next) => {
   }
 
   try {
-    // ── Step 2: Verify the agent exists ─────────────────────────────────
-    //
-    // We check the agents table first so we can return a meaningful 404 if
-    // the agent does not exist, rather than just returning 0 successful referrals
-    // (which would be misleading for a non-existent agent).
+    // ── Step 2: Verify the agent exists ──────────────────────────────────────
     const agentCheck = await pool.query(
       'SELECT id, name FROM agents WHERE id = $1',
       [agentId]
@@ -368,30 +547,6 @@ router.get('/:id/stats', authenticateToken, async (req, res, next) => {
     }
 
     // ── Step 3: Count SUCCESSFUL referrals and find the top reward tier ────
-    //
-    // This single query does two things at once:
-    //
-    // Part A — COUNT(r.id) FILTER (WHERE r.status = 'SUCCESSFUL')
-    //   Counts only the rows where status = 'SUCCESSFUL'. The FILTER clause
-    //   is a PostgreSQL shorthand for a conditional aggregate; it is equivalent
-    //   to COUNT(CASE WHEN r.status = 'SUCCESSFUL' THEN 1 END).
-    //   We alias it as "successful_count" for use in the JOIN below.
-    //
-    // Part B — LEFT JOIN reward_rules rr ON rr.min_referrals <= successful_count
-    //   Joins every reward tier whose minimum threshold is <= the agent's count.
-    //   For example, if count = 4:
-    //     Bronze  (min 3)  ✔ qualifies  → joined
-    //     Silver  (min 5)  ✖ too high   → not joined
-    //     Gold    (min 10) ✖ too high   → not joined
-    //   This gives us potentially multiple matching rows, so we use MAX() on
-    //   min_referrals to pick only the highest qualifying tier.
-    //
-    // LEFT JOIN ensures we still get a row back (with reward_name = NULL)
-    // when the agent has 0 successful referrals and qualifies for nothing.
-    //
-    // Using a subquery (the inner SELECT) lets us reference successful_count
-    // in the JOIN condition, which is not possible when it is just a column alias
-    // in the outer SELECT.
     const statsResult = await pool.query(
       `SELECT
          sub.successful_count,
@@ -414,9 +569,7 @@ router.get('/:id/stats', authenticateToken, async (req, res, next) => {
 
     return res.status(200).json({
       agent_id:             agentId,
-      // COUNT() in PostgreSQL returns a string (bigint). Coerce to a JS number.
       successful_referrals: parseInt(row.successful_count, 10),
-      // LEFT JOIN returns NULL when no tier qualifies; surface that as null.
       current_reward:       row.current_reward ?? null,
     });
 
