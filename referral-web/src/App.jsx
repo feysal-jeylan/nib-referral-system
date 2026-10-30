@@ -13,31 +13,38 @@
  * browser attaches the HttpOnly JWT cookie automatically. No token is
  * ever stored in JavaScript — it lives only in the browser's cookie jar.
  *
- * V2 Architecture change (RULES.md §6):
- *   The manual "Register Referral" form (ReferralForm) has been removed.
- *   Customers are now registered exclusively via the Temenos webhook
- *   (POST /api/integration/account-opened). A static informational box
- *   replaces the form in both the Admin Dashboard and Agent Portal.
+ * V2 Architecture (RULES.md §6): Manual ReferralForm removed. Referrals
+ *   arrive exclusively via the Temenos webhook.
  *
- * V5 Architecture change (RULES.md §6):
- *   Public agent self-registration is now supported. Applicants submit via
- *   POST /api/agents/apply (no auth). Admins approve via the new
- *   "Pending Agent Applications" section which calls PATCH /api/agents/:id/approve.
- *   The AgentTable now shows a Status column for Admin users.
+ * V5 Architecture: Public agent self-registration flow. Admin approval UI.
+ *   AgentStatusPill, Pending Agent Applications section.
+ *
+ * V6 Architecture — Rule Engine:
+ *   CampaignForm now includes:
+ *     - description (optional text)
+ *     - reward_threshold (optional integer)
+ *     - In-line Rules Builder: add/remove rules before creating the campaign.
+ *       Each rule has rule_type (MIN_DEPOSIT | ACCOUNT_TYPE), operator
+ *       (GREATER_THAN | LESS_THAN | EQUALS | …), and rule_value (text input).
+ *       On submit the form first POSTs /api/campaigns, then POSTs each rule
+ *       to /api/campaigns/:id/rules in sequence.
+ *   CampaignTable now shows description, reward_threshold, and operator in
+ *   the rule tags (e.g. "MIN_DEPOSIT ≥ 5000").
  *
  * Sections:
- *   1.  Primitive UI components (Toast, StatusPill, RewardBadge, Spinner, InfoBox)
- *   2.  AgentStatusPill       — coloured pill for PENDING / APPROVED / REJECTED agents
- *   3.  AgentForm             — ADMIN: register a new agent (POST /api/agents)
- *   4.  AgentTable            — show all agents with reward tier and status (ADMIN)
- *   5.  ReferralTable         — show referrals with approve/reject actions (ADMIN)
- *   6.  CampaignForm          — ADMIN: create a new campaign (POST /api/campaigns)
- *   7.  CampaignTable         — ADMIN: list campaigns with rules + activate action
- *   8.  CampaignStatusPill    — coloured pill for DRAFT / ACTIVE / EXPIRED
- *   9.  IntegrationLogsTable  — ADMIN: Temenos webhook audit log
- *  10.  IntegrationStatusPill — coloured pill for RECEIVED / PROCESSED / FAILED
- *  11.  App (root)            — auth gate, orchestrates state, data fetching, toasts
- *  12.  Dashboard             — rendered when authenticated, holds all business logic
+ *   1.  Primitive UI components (Toast, StatusPill, RewardBadge, Spinner,
+ *       EmptyState, InfoBox)
+ *   2.  AgentStatusPill
+ *   3.  AgentForm
+ *   4.  AgentTable
+ *   5.  ReferralTable
+ *   6.  CampaignForm   (V6: description, reward_threshold, Rules Builder)
+ *   7.  CampaignTable  (V6: shows operator in rules, description)
+ *   8.  CampaignStatusPill
+ *   9.  IntegrationLogsTable
+ *  10.  IntegrationStatusPill
+ *  11.  App (root)
+ *  12.  Dashboard
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -48,11 +55,9 @@ import Login from './Login';
 import ChangePassword from './ChangePassword';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const API = '/api'; // Vite dev-proxy rewrites /api → http://localhost:3000
+const API = '/api';
 
-// ─── Shared fetch options — ALWAYS include credentials ───────────────────────
-// credentials: 'include' tells the browser to attach all cookies (including
-// the HttpOnly JWT token) to every request. Without this, the API returns 401.
+// ─── Shared fetch options ────────────────────────────────────────────────────
 const FETCH_OPTS = { credentials: 'include' };
 
 // ─── Reward badge metadata ────────────────────────────────────────────────────
@@ -60,6 +65,27 @@ const REWARD_META = {
   Gold:   { cls: 'badge--gold',   label: '🥇 Gold'   },
   Silver: { cls: 'badge--silver', label: '🥈 Silver' },
   Bronze: { cls: 'badge--bronze', label: '🥉 Bronze' },
+};
+
+// ─── Rule Engine constants (must match VALID_OPERATORS in campaigns.js) ───────
+const RULE_TYPES = ['MIN_DEPOSIT', 'ACCOUNT_TYPE'];
+const OPERATORS  = [
+  { value: 'GREATER_THAN',          label: '> Greater Than'           },
+  { value: 'LESS_THAN',             label: '< Less Than'              },
+  { value: 'EQUALS',                label: '= Equals'                 },
+  { value: 'GREATER_THAN_OR_EQUAL', label: '≥ Greater Than or Equal'  },
+  { value: 'LESS_THAN_OR_EQUAL',    label: '≤ Less Than or Equal'     },
+  { value: 'NOT_EQUALS',            label: '≠ Not Equals'             },
+];
+
+// Human-readable operator symbols for display in rule tags
+const OPERATOR_SYMBOL = {
+  GREATER_THAN:          '>',
+  LESS_THAN:             '<',
+  EQUALS:                '=',
+  GREATER_THAN_OR_EQUAL: '≥',
+  LESS_THAN_OR_EQUAL:    '≤',
+  NOT_EQUALS:            '≠',
 };
 
 // ─── 1. Primitive UI ─────────────────────────────────────────────────────────
@@ -103,11 +129,6 @@ function EmptyState({ icon, title, sub }) {
   );
 }
 
-/*
-  InfoBox — replaces the removed ReferralForm in both Admin and Agent views.
-  Communicates the V2 architecture to users so they understand why there is no
-  manual entry form — referrals arrive automatically from Temenos.
-*/
 function InfoBox({ message }) {
   return (
     <div className="info-box" role="note">
@@ -118,11 +139,6 @@ function InfoBox({ message }) {
 }
 
 // ─── 2. AgentStatusPill ───────────────────────────────────────────────────────
-//
-// Colour-coded pill for the agent `status` field added in V5.
-//   PENDING  → amber/yellow — awaiting Admin review
-//   APPROVED → green        — agent is active and can log in
-//   REJECTED → muted grey   — application was declined
 function AgentStatusPill({ status }) {
   if (!status) return null;
   return (
@@ -226,9 +242,6 @@ function AgentForm({ onCreated, onToast }) {
 }
 
 // ─── 4. AgentTable ────────────────────────────────────────────────────────────
-//
-// isAdmin controls whether the Status column is shown. Agents only see their
-// own row and do not need to see a status pill (they are already approved).
 function AgentTable({ agents, loading, isAdmin }) {
   if (loading) return <div className="state-box"><Spinner /><p>Loading agents…</p></div>;
   if (!agents.length) return (
@@ -263,9 +276,7 @@ function AgentTable({ agents, loading, isAdmin }) {
                 <span className="count-pill">{a.successful_referrals}</span>
               </td>
               <td><RewardBadge tier={a.current_reward} /></td>
-              {isAdmin && (
-                <td><AgentStatusPill status={a.status} /></td>
-              )}
+              {isAdmin && <td><AgentStatusPill status={a.status} /></td>}
             </tr>
           ))}
         </tbody>
@@ -275,10 +286,6 @@ function AgentTable({ agents, loading, isAdmin }) {
 }
 
 // ─── 5. ReferralTable ─────────────────────────────────────────────────────────
-//
-// isAdmin controls whether the Actions column (Approve / Reject) is shown.
-// When false (AGENT view), the column is hidden entirely — agents can only
-// read their own referral list, not modify statuses.
 function ReferralTable({ referrals, loading, onStatusChange, isAdmin }) {
   const [updating, setUpdating] = useState(new Set());
 
@@ -361,27 +368,95 @@ function ReferralTable({ referrals, loading, onStatusChange, isAdmin }) {
 }
 
 // ─── 6. CampaignForm ──────────────────────────────────────────────────────────
+//
+// V6 update: adds description, reward_threshold, and an in-line Rules Builder.
+//
+// The Rules Builder lets an Admin queue up rules BEFORE hitting "Create Campaign".
+// On submit we:
+//   1. POST /api/campaigns → get the new campaign id
+//   2. POST /api/campaigns/:id/rules for each queued rule (sequential awaits)
+//   3. Call onCreated() to trigger a list refresh
+//
+// This approach keeps the API atomic enough for an MVP while staying simple —
+// no need for a draft-and-save flow.
 function CampaignForm({ onCreated, onToast }) {
-  const EMPTY = { name: '', start_date: '', end_date: '', reward_type: 'CASH', reward_value: '' };
-  const [form, setForm]             = useState(EMPTY);
-  const [submitting, setSubmitting] = useState(false);
+  const EMPTY_CAMPAIGN = {
+    name: '', start_date: '', end_date: '',
+    reward_type: 'CASH', reward_value: '',
+    description: '', reward_threshold: '',
+  };
+  const EMPTY_RULE = { rule_type: 'MIN_DEPOSIT', operator: 'GREATER_THAN_OR_EQUAL', rule_value_raw: '' };
+
+  const [form, setForm]               = useState(EMPTY_CAMPAIGN);
+  const [pendingRules, setPendingRules] = useState([]);   // rules queued for POST after campaign creation
+  const [currentRule, setCurrentRule] = useState(EMPTY_RULE); // rule currently being built in the builder
+  const [submitting, setSubmitting]   = useState(false);
   const nameRef = useRef(null);
 
-  function handleChange(e) {
+  function handleCampaignChange(e) {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  }
+
+  function handleRuleChange(e) {
+    setCurrentRule(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  }
+
+  // Convert the raw text input into the correct rule_value JSON shape
+  // expected by the rule engine (services/ruleEngine.js).
+  function buildRuleValue(rule) {
+    if (rule.rule_type === 'MIN_DEPOSIT') {
+      // rule_value.amount must be numeric — the engine reads rule_value.amount
+      return { amount: parseFloat(rule.rule_value_raw) || 0 };
+    }
+    if (rule.rule_type === 'ACCOUNT_TYPE') {
+      // rule_value.type must be the account type string (uppercased)
+      return { type: rule.rule_value_raw.trim().toUpperCase() };
+    }
+    return { value: rule.rule_value_raw.trim() };
+  }
+
+  function handleAddRule() {
+    if (!currentRule.rule_value_raw.trim()) {
+      onToast({ type: 'error', message: '⚠️ Please enter a rule value before adding.' });
+      return;
+    }
+    setPendingRules(prev => [...prev, { ...currentRule }]);
+    setCurrentRule(EMPTY_RULE);
+  }
+
+  function handleRemoveRule(index) {
+    setPendingRules(prev => prev.filter((_, i) => i !== index));
+  }
+
+  // Returns the human-readable summary of a pending rule for the preview list.
+  function ruleLabel(rule) {
+    const sym = OPERATOR_SYMBOL[rule.operator] ?? rule.operator;
+    if (rule.rule_type === 'MIN_DEPOSIT') {
+      return `MIN_DEPOSIT ${sym} ${rule.rule_value_raw} ETB`;
+    }
+    if (rule.rule_type === 'ACCOUNT_TYPE') {
+      return `ACCOUNT_TYPE ${sym} ${rule.rule_value_raw.toUpperCase()}`;
+    }
+    return `${rule.rule_type} ${sym} ${rule.rule_value_raw}`;
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     setSubmitting(true);
+
     try {
+      // ── Step 1: Create the campaign ─────────────────────────────────────────
       const res = await fetch(`${API}/campaigns`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...form,
-          start_date: form.start_date ? new Date(form.start_date).toISOString() : '',
-          end_date:   form.end_date   ? new Date(form.end_date).toISOString()   : '',
+          name:             form.name,
+          description:      form.description || undefined,
+          start_date:       form.start_date ? new Date(form.start_date).toISOString() : '',
+          end_date:         form.end_date   ? new Date(form.end_date).toISOString()   : '',
+          reward_type:      form.reward_type,
+          reward_value:     form.reward_value,
+          reward_threshold: form.reward_threshold ? parseInt(form.reward_threshold, 10) : undefined,
         }),
         ...FETCH_OPTS,
       });
@@ -396,16 +471,62 @@ function CampaignForm({ onCreated, onToast }) {
         return;
       }
 
+      const campaignId = data.campaign.id;
+
+      // ── Step 2: POST each queued rule ────────────────────────────────────────
+      // Rules are posted sequentially. On any failure we stop and surface the
+      // error, but we do NOT delete the campaign — the Admin can add rules
+      // manually via the existing rules endpoint.
+      for (const rule of pendingRules) {
+        const ruleRes = await fetch(`${API}/campaigns/${campaignId}/rules`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            rule_type:  rule.rule_type,
+            operator:   rule.operator,
+            rule_value: buildRuleValue(rule),
+          }),
+          ...FETCH_OPTS,
+        });
+
+        if (!ruleRes.ok) {
+          const ruleData = await ruleRes.json();
+          onToast({
+            type: 'error',
+            message: `⚠️ Campaign created but rule "${rule.rule_type}" failed: ${ruleData.error ?? 'Unknown error'}`,
+          });
+          onCreated();
+          setForm(EMPTY_CAMPAIGN);
+          setPendingRules([]);
+          return;
+        }
+      }
+
+      // ── Step 3: Success ──────────────────────────────────────────────────────
       onCreated();
-      onToast({ type: 'success', message: `✅ Campaign "${data.campaign.name}" created as DRAFT.` });
-      setForm(EMPTY);
+      const ruleCount = pendingRules.length;
+      onToast({
+        type: 'success',
+        message: `✅ Campaign "${data.campaign.name}" created as DRAFT` +
+          (ruleCount > 0 ? ` with ${ruleCount} rule${ruleCount !== 1 ? 's' : ''}.` : '.'),
+      });
+      setForm(EMPTY_CAMPAIGN);
+      setPendingRules([]);
       nameRef.current?.focus();
+
     } catch {
       onToast({ type: 'error', message: '🔴 Cannot reach the server. Is the API running?' });
     } finally {
       setSubmitting(false);
     }
   }
+
+  // Placeholder hint for the rule value input — changes based on rule_type
+  const rulePlaceholder = currentRule.rule_type === 'MIN_DEPOSIT'
+    ? 'e.g. 5000'
+    : currentRule.rule_type === 'ACCOUNT_TYPE'
+      ? 'e.g. SAVINGS'
+      : 'Value…';
 
   return (
     <form
@@ -416,13 +537,15 @@ function CampaignForm({ onCreated, onToast }) {
       aria-label="Create a new campaign"
     >
       <h2 className="form__title">Create New Campaign</h2>
+
+      {/* ── Core campaign fields ────────────────────────────────────────── */}
       <div className="form__grid form__grid--3col">
         <div className="form__field">
           <label htmlFor="camp-name">Campaign Name</label>
           <input
             id="camp-name" name="name" type="text"
             placeholder="e.g. Q4 Savings Drive"
-            value={form.name} onChange={handleChange}
+            value={form.name} onChange={handleCampaignChange}
             required ref={nameRef} autoComplete="off"
           />
         </div>
@@ -430,7 +553,7 @@ function CampaignForm({ onCreated, onToast }) {
           <label htmlFor="camp-start">Start Date</label>
           <input
             id="camp-start" name="start_date" type="date"
-            value={form.start_date} onChange={handleChange}
+            value={form.start_date} onChange={handleCampaignChange}
             required
           />
         </div>
@@ -438,7 +561,7 @@ function CampaignForm({ onCreated, onToast }) {
           <label htmlFor="camp-end">End Date</label>
           <input
             id="camp-end" name="end_date" type="date"
-            value={form.end_date} onChange={handleChange}
+            value={form.end_date} onChange={handleCampaignChange}
             required
           />
         </div>
@@ -446,23 +569,137 @@ function CampaignForm({ onCreated, onToast }) {
           <label htmlFor="camp-reward-type">Reward Type</label>
           <select
             id="camp-reward-type" name="reward_type"
-            value={form.reward_type} onChange={handleChange}
+            value={form.reward_type} onChange={handleCampaignChange}
             required
           >
             <option value="CASH">CASH</option>
             <option value="BADGE">BADGE</option>
           </select>
         </div>
-        <div className="form__field form__field--wide">
+        <div className="form__field">
           <label htmlFor="camp-reward-value">Reward Value</label>
           <input
             id="camp-reward-value" name="reward_value" type="text"
-            placeholder="e.g. 500 ETB or Gold Tier Badge"
-            value={form.reward_value} onChange={handleChange}
+            placeholder="e.g. 500 ETB"
+            value={form.reward_value} onChange={handleCampaignChange}
             required autoComplete="off"
           />
         </div>
+        <div className="form__field">
+          <label htmlFor="camp-threshold">Reward Threshold <span className="form__optional">(optional)</span></label>
+          <input
+            id="camp-threshold" name="reward_threshold" type="number"
+            placeholder="e.g. 5 referrals"
+            value={form.reward_threshold} onChange={handleCampaignChange}
+            min="0" autoComplete="off"
+          />
+        </div>
+        <div className="form__field form__field--wide">
+          <label htmlFor="camp-desc">Description <span className="form__optional">(optional)</span></label>
+          <input
+            id="camp-desc" name="description" type="text"
+            placeholder="e.g. Year-end savings promotion for SAVINGS accounts"
+            value={form.description} onChange={handleCampaignChange}
+            autoComplete="off"
+          />
+        </div>
       </div>
+
+      {/* ── Rules Builder ───────────────────────────────────────────────── */}
+      {/*
+        The rule builder lets admins queue qualification rules before saving.
+        Each rule will be POSTed to /api/campaigns/:id/rules after the campaign
+        is created. Rules are evaluated by services/ruleEngine.js on every
+        Temenos webhook — ALL rules must pass for a referral to be created.
+      */}
+      <div className="rules-builder">
+        <div className="rules-builder__header">
+          <span className="rules-builder__title">Qualification Rules</span>
+          <span className="rules-builder__hint">
+            All rules must pass for a referral to be accepted (logical AND).
+          </span>
+        </div>
+
+        {/* ── Rule input row ─────────────────────────────────────────── */}
+        <div className="rules-builder__inputs">
+          <div className="form__field">
+            <label htmlFor="rule-type">Rule Type</label>
+            <select
+              id="rule-type" name="rule_type"
+              value={currentRule.rule_type}
+              onChange={handleRuleChange}
+            >
+              {RULE_TYPES.map(rt => (
+                <option key={rt} value={rt}>{rt.replace('_', ' ')}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form__field">
+            <label htmlFor="rule-operator">Operator</label>
+            <select
+              id="rule-operator" name="operator"
+              value={currentRule.operator}
+              onChange={handleRuleChange}
+            >
+              {OPERATORS.map(op => (
+                <option key={op.value} value={op.value}>{op.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form__field">
+            <label htmlFor="rule-value">Value</label>
+            <input
+              id="rule-value" name="rule_value_raw" type="text"
+              placeholder={rulePlaceholder}
+              value={currentRule.rule_value_raw}
+              onChange={handleRuleChange}
+              autoComplete="off"
+            />
+          </div>
+
+          <button
+            type="button"
+            className="btn btn--add-rule"
+            onClick={handleAddRule}
+            aria-label="Add this rule to the campaign"
+          >
+            + Add Rule
+          </button>
+        </div>
+
+        {/* ── Queued rules preview ───────────────────────────────────── */}
+        {pendingRules.length > 0 && (
+          <div className="rules-builder__preview">
+            <p className="rules-builder__preview-label">
+              Rules to be applied ({pendingRules.length}):
+            </p>
+            <ul className="rules-builder__list">
+              {pendingRules.map((rule, i) => (
+                <li key={i} className="rules-builder__item">
+                  <span className="rule-preview-chip">{ruleLabel(rule)}</span>
+                  <button
+                    type="button"
+                    className="rule-preview-remove"
+                    onClick={() => handleRemoveRule(i)}
+                    aria-label={`Remove rule: ${ruleLabel(rule)}`}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {pendingRules.length === 0 && (
+          <p className="rules-builder__empty">
+            No rules added yet — this campaign will accept all customers.
+          </p>
+        )}
+      </div>
+
       <button id="submit-campaign-btn" type="submit" className="btn btn--primary" disabled={submitting}>
         {submitting && <Spinner small />}
         {submitting ? 'Creating…' : 'Create Campaign'}
@@ -472,6 +709,11 @@ function CampaignForm({ onCreated, onToast }) {
 }
 
 // ─── 7. CampaignTable ─────────────────────────────────────────────────────────
+//
+// V6 update:
+//   - Shows campaign description (if present) below the name.
+//   - Shows reward_threshold badge (if present).
+//   - Rule tags now include the operator symbol: "MIN_DEPOSIT ≥ 5000".
 function CampaignTable({ campaigns, loading, onActivated, onToast }) {
   const [activating, setActivating] = useState(new Set());
 
@@ -509,9 +751,9 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
           <tr>
             <th scope="col">#</th>
             <th scope="col">Name / Rules</th>
-            <th scope="col">Start Date</th>
-            <th scope="col">End Date</th>
+            <th scope="col">Dates</th>
             <th scope="col">Reward</th>
+            <th scope="col">Threshold</th>
             <th scope="col">Status</th>
             <th scope="col">Actions</th>
           </tr>
@@ -523,33 +765,57 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
             return (
               <tr key={c.id} className="data-row">
                 <td className="td--index">{i + 1}</td>
+
+                {/* Name + optional description + rule tags */}
                 <td className="td--name">
                   <span>{c.name}</span>
+                  {c.description && (
+                    <p className="campaign-description">{c.description}</p>
+                  )}
                   {rules.length > 0 && (
                     <div className="rule-tags">
                       {rules.map(r => {
-                        const val = Object.values(r.rule_value ?? {})[0] ?? '';
+                        // Extract the display value from rule_value JSONB.
+                        // For MIN_DEPOSIT: rule_value.amount; for ACCOUNT_TYPE: rule_value.type
+                        const val = r.rule_value?.amount ?? r.rule_value?.type
+                          ?? Object.values(r.rule_value ?? {})[0] ?? '';
+                        const sym = OPERATOR_SYMBOL[r.operator] ?? r.operator ?? '=';
                         return (
                           <span key={r.id} className="rule-tag">
-                            {r.rule_type}: {String(val)}
+                            {r.rule_type} {sym} {String(val)}
                           </span>
                         );
                       })}
                     </div>
                   )}
                 </td>
-                <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)' }}>
-                  {new Date(c.start_date).toLocaleDateString()}
+
+                {/* Date range */}
+                <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+                  <span>{new Date(c.start_date).toLocaleDateString()}</span>
+                  <span style={{ color: 'var(--text-3)', margin: '0 4px' }}>→</span>
+                  <span>{new Date(c.end_date).toLocaleDateString()}</span>
                 </td>
-                <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)' }}>
-                  {new Date(c.end_date).toLocaleDateString()}
-                </td>
+
+                {/* Reward */}
                 <td>
                   <span className="reward-chip reward-chip--type">{c.reward_type}</span>
                   {' '}
                   <span className="reward-chip reward-chip--value">{c.reward_value}</span>
                 </td>
+
+                {/* Threshold */}
+                <td className="td--count">
+                  {c.reward_threshold != null
+                    ? <span className="count-pill" title="Min referrals for reward">{c.reward_threshold}</span>
+                    : <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>—</span>
+                  }
+                </td>
+
+                {/* Status pill */}
                 <td><CampaignStatusPill status={c.status} /></td>
+
+                {/* Actions */}
                 <td>
                   {c.status === 'DRAFT' ? (
                     <button
@@ -588,10 +854,6 @@ function CampaignStatusPill({ status }) {
 }
 
 // ─── 9. IntegrationLogsTable ─────────────────────────────────────────────────
-//
-// ADMIN-ONLY. Displays the last 20 rows from integration_logs in a table.
-// Each row shows: Transaction ID, Customer Name (from JSONB payload),
-// Status pill (RECEIVED / PROCESSED / FAILED), and Date.
 function IntegrationLogsTable({ logs, loading }) {
   if (loading) return <div className="state-box"><Spinner /><p>Loading integration logs…</p></div>;
   if (!logs.length) return (
@@ -611,6 +873,7 @@ function IntegrationLogsTable({ logs, loading }) {
             <th scope="col">Transaction ID</th>
             <th scope="col">Customer Name</th>
             <th scope="col">Status</th>
+            <th scope="col">Reason / Error</th>
             <th scope="col">Date</th>
           </tr>
         </thead>
@@ -618,14 +881,15 @@ function IntegrationLogsTable({ logs, loading }) {
           {logs.map((log, i) => (
             <tr key={log.id} className="data-row">
               <td className="td--index">{i + 1}</td>
-              <td>
-                <code className="code-chip">{log.transaction_id}</code>
-              </td>
-              <td className="td--name">
-                {log.payload?.customer_name ?? '—'}
-              </td>
-              <td>
-                <IntegrationStatusPill status={log.status} />
+              <td><code className="code-chip">{log.transaction_id}</code></td>
+              <td className="td--name">{log.payload?.customer_name ?? '—'}</td>
+              <td><IntegrationStatusPill status={log.status} /></td>
+              <td style={{ color: 'var(--text-3)', fontSize: '12px', maxWidth: '220px' }}>
+                {/* Show error_message for FAILED events — helps admins debug rule failures */}
+                {log.error_message
+                  ? <span className="log-error-msg" title={log.error_message}>{log.error_message}</span>
+                  : <span style={{ color: 'var(--text-3)' }}>—</span>
+                }
               </td>
               <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
                 {new Date(log.created_at).toLocaleString()}
@@ -658,7 +922,6 @@ export default function App() {
   const [toast,      setToast]      = useState(null);
   const toastTimer = useRef(null);
 
-  // ── Gate 1: Auth loading ─────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="auth-loading" role="status" aria-label="Checking authentication…">
@@ -668,13 +931,9 @@ export default function App() {
     );
   }
 
-  // ── Gate 2: Not authenticated ────────────────────────────────────────────
   if (!user) return <Login />;
-
-  // ── Gate 2.5: Forced password change ─────────────────────────────────────
   if (user.must_change_password) return <ChangePassword />;
 
-  // ── Gate 3: Authenticated + password set → Dashboard ─────────────────────
   // eslint-disable-next-line react-hooks/rules-of-hooks
   return <Dashboard
     user={user}
@@ -689,8 +948,6 @@ export default function App() {
 }
 
 // ─── 12. Dashboard ────────────────────────────────────────────────────────────
-//
-// Extracted so all hooks run unconditionally (Rules of Hooks).
 function Dashboard({
   user, logout,
   agents, setAgents,
@@ -700,17 +957,12 @@ function Dashboard({
   toast, setToast, toastTimer,
 }) {
   const isAdmin = user.role === 'ADMIN';
-  const isAgent = user.role === 'AGENT';
 
-  // ── ADMIN-only state ─────────────────────────────────────────────────────
   const [campaigns,        setCampaigns]        = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(true);
   const [integLogs,        setIntegLogs]        = useState([]);
   const [integLogsLoading, setIntegLogsLoading] = useState(true);
-
-  // ── Per-row loading state for approve / reject actions ───────────────────
-  // Stores the Set of agent IDs currently being approved or rejected.
-  const [actioning, setActioning] = useState(new Set());
+  const [actioning,        setActioning]        = useState(new Set());
 
   // ── Initial data load ────────────────────────────────────────────────────
   useEffect(() => {
@@ -795,29 +1047,19 @@ function Dashboard({
     toastTimer.current = setTimeout(() => setToast(null), 6000);
   }
 
-  // ── Agent created (admin manually registers) ─────────────────────────────
+  // ── Agent created (manually by admin) ────────────────────────────────────
   function handleAgentCreated(newAgent) {
     setAgents(prev => [newAgent, ...prev]);
   }
 
-  // ── Approve a pending agent ──────────────────────────────────────────────
+  // ── Agent approve / reject ───────────────────────────────────────────────
   async function handleApprove(id, name) {
     setActioning(prev => new Set(prev).add(id));
     try {
-      const res  = await fetch(`${API}/agents/${id}/approve`, {
-        method: 'PATCH',
-        ...FETCH_OPTS,
-      });
+      const res  = await fetch(`${API}/agents/${id}/approve`, { method: 'PATCH', ...FETCH_OPTS });
       const data = await res.json();
-
-      if (!res.ok) {
-        showToast({ type: 'error', message: data.error ?? 'Approval failed.' });
-        return;
-      }
-
-      // Refresh the full agent list so status pill updates everywhere.
+      if (!res.ok) { showToast({ type: 'error', message: data.error ?? 'Approval failed.' }); return; }
       await refreshAgents();
-
       showToast({
         type: 'success',
         message: `✅ "${name}" approved — Code: ${data.referral_code} · Temp Password: ${data.temp_password}`,
@@ -829,21 +1071,12 @@ function Dashboard({
     }
   }
 
-  // ── Reject a pending agent ───────────────────────────────────────────────
   async function handleReject(id, name) {
     setActioning(prev => new Set(prev).add(id));
     try {
-      const res  = await fetch(`${API}/agents/${id}/reject`, {
-        method: 'PATCH',
-        ...FETCH_OPTS,
-      });
+      const res  = await fetch(`${API}/agents/${id}/reject`, { method: 'PATCH', ...FETCH_OPTS });
       const data = await res.json();
-
-      if (!res.ok) {
-        showToast({ type: 'error', message: data.error ?? 'Rejection failed.' });
-        return;
-      }
-
+      if (!res.ok) { showToast({ type: 'error', message: data.error ?? 'Rejection failed.' }); return; }
       await refreshAgents();
       showToast({ type: 'success', message: `Application from "${name}" has been rejected.` });
     } catch {
@@ -853,7 +1086,7 @@ function Dashboard({
     }
   }
 
-  // ── Status update (Approve / Reject referral) ────────────────────────────
+  // ── Referral status change ───────────────────────────────────────────────
   async function handleStatusChange(referralId, newStatus) {
     try {
       const res = await fetch(`${API}/referrals/${referralId}/status`, {
@@ -862,24 +1095,19 @@ function Dashboard({
         body:    JSON.stringify({ status: newStatus }),
         ...FETCH_OPTS,
       });
-
       if (!res.ok) {
         const data = await res.json();
         showToast({ type: 'error', message: data.error ?? 'Status update failed.' });
         return;
       }
-
-      // Update in-place — no full reload needed.
       setReferrals(prev =>
         prev.map(r => r.id === referralId ? { ...r, status: newStatus } : r)
       );
-
       if (newStatus === 'SUCCESSFUL') {
         const aRes  = await fetch(`${API}/agents`, FETCH_OPTS);
         const aData = await aRes.json();
         setAgents(Array.isArray(aData) ? aData : []);
       }
-
       showToast({
         type: 'success',
         message: `✅ Referral ${newStatus === 'SUCCESSFUL' ? 'approved' : 'rejected'} successfully.`,
@@ -889,16 +1117,8 @@ function Dashboard({
     }
   }
 
-  // ── Logout ───────────────────────────────────────────────────────────────
-  async function handleLogout() {
-    await logout();
-  }
+  async function handleLogout() { await logout(); }
 
-  // ── Derived: pending agent applications (filtered client-side) ───────────
-  //
-  // Client-side filter is intentional — GET /api/agents already returns the
-  // full list for ADMIN users (including PENDING/REJECTED rows).  We do not
-  // need a separate API call; we simply partition the array.
   const pendingAgents = agents.filter(a => a.status === 'PENDING');
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -924,9 +1144,7 @@ function Dashboard({
           <div className="header-user">
             <div className="header-user__info">
               <p className="header-user__name">{user.username}</p>
-              <p className="header-user__role">
-                {isAdmin ? '🛡️ Admin' : '👤 Agent'}
-              </p>
+              <p className="header-user__role">{isAdmin ? '🛡️ Admin' : '👤 Agent'}</p>
             </div>
             <button id="logout-btn" className="btn--logout" onClick={handleLogout} aria-label="Sign out">
               ↩ Sign Out
@@ -937,14 +1155,14 @@ function Dashboard({
 
       <main className="app-main">
 
-        {/* ── ADMIN: Register Agent form ──────────────────────────────── */}
+        {/* ── ADMIN: Register Agent form ──────────────────────────── */}
         {isAdmin && (
           <section className="card" aria-labelledby="agent-form-heading">
             <AgentForm onCreated={handleAgentCreated} onToast={showToast} />
           </section>
         )}
 
-        {/* ── Agent Dashboard — ALL roles ─────────────────────────────── */}
+        {/* ── Agent Dashboard — ALL roles ─────────────────────────── */}
         <section className="card" aria-labelledby="agent-dashboard-heading">
           <div className="section-header">
             <h2 id="agent-dashboard-heading" className="section-header__title">
@@ -957,12 +1175,7 @@ function Dashboard({
           <AgentTable agents={agents} loading={agentsLoading} isAdmin={isAdmin} />
         </section>
 
-        {/*
-          ── ADMIN: Pending Agent Applications ────────────────────────────────
-          Only shown to ADMIN users. Displays applicants who submitted via the
-          public POST /api/agents/apply endpoint and are awaiting review.
-          Filtered client-side from the agents array (status === 'PENDING').
-        */}
+        {/* ── ADMIN: Pending Agent Applications ─────────────────────── */}
         {isAdmin && (
           <section className="card" aria-labelledby="pending-agents-heading">
             <div className="section-header">
@@ -975,15 +1188,11 @@ function Dashboard({
                 {pendingAgents.length} pending
               </span>
             </div>
-
             {agentsLoading ? (
               <div className="state-box"><Spinner /><p>Loading applications…</p></div>
             ) : pendingAgents.length === 0 ? (
-              <EmptyState
-                icon="✅"
-                title="No pending applications"
-                sub="All agent applications have been reviewed. New applicants appear here automatically."
-              />
+              <EmptyState icon="✅" title="No pending applications"
+                sub="All agent applications have been reviewed. New applicants appear here automatically." />
             ) : (
               <div className="table-wrap">
                 <table className="data-table" aria-label="Pending agent applications">
@@ -1003,12 +1212,8 @@ function Dashboard({
                         <tr key={a.id} className="data-row">
                           <td className="td--index">{i + 1}</td>
                           <td className="td--name">{a.name}</td>
-                          <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)' }}>
-                            {a.phone ?? '—'}
-                          </td>
-                          <td style={{ color: 'var(--text-2)' }}>
-                            {a.email ?? '—'}
-                          </td>
+                          <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)' }}>{a.phone ?? '—'}</td>
+                          <td style={{ color: 'var(--text-2)' }}>{a.email ?? '—'}</td>
                           <td>
                             <div className="action-group">
                               <button
@@ -1016,7 +1221,6 @@ function Dashboard({
                                 className="btn btn--approve"
                                 disabled={busy}
                                 onClick={() => handleApprove(a.id, a.name)}
-                                aria-label={`Approve application from ${a.name}`}
                               >
                                 {busy ? <Spinner small /> : '✓ Approve'}
                               </button>
@@ -1025,7 +1229,6 @@ function Dashboard({
                                 className="btn btn--reject"
                                 disabled={busy}
                                 onClick={() => handleReject(a.id, a.name)}
-                                aria-label={`Reject application from ${a.name}`}
                               >
                                 {busy ? <Spinner small /> : '✕ Reject'}
                               </button>
@@ -1041,13 +1244,7 @@ function Dashboard({
           </section>
         )}
 
-        {/*
-          ── V2 Architecture: Referral Registration Removed ─────────────────
-          The manual "Register Referral" form has been removed per the V2
-          architecture approved by the supervisor (RULES.md §6). Customers
-          arrive exclusively via the Temenos core banking webhook. This
-          informational box replaces the form for both Admin and Agent users.
-        */}
+        {/* ── Core Banking Integration notice ─────────────────────── */}
         <section className="card" aria-labelledby="temenos-info-heading">
           <div className="section-header">
             <h2 id="temenos-info-heading" className="section-header__title">
@@ -1061,7 +1258,7 @@ function Dashboard({
           </div>
         </section>
 
-        {/* ── Recent Referrals — ALL roles ─────────────────────────────── */}
+        {/* ── Recent Referrals — ALL roles ─────────────────────────── */}
         <section className="card" aria-labelledby="referral-table-heading">
           <div className="section-header">
             <h2 id="referral-table-heading" className="section-header__title">
@@ -1079,14 +1276,10 @@ function Dashboard({
           />
         </section>
 
-        {/*
-          ── ADMIN-ONLY sections below this point ───────────────────────────
-          The isAgent check at the top of the component tree is the primary
-          guard; the backend also enforces ADMIN-only on all these endpoints.
-        */}
+        {/* ── ADMIN-ONLY sections ──────────────────────────────────── */}
         {isAdmin && (
           <>
-            {/* Campaign creation form */}
+            {/* Campaign creation form (with Rules Builder) */}
             <section className="card" aria-labelledby="campaign-form-heading">
               <CampaignForm onCreated={refreshCampaigns} onToast={showToast} />
             </section>
@@ -1136,7 +1329,6 @@ function Dashboard({
 
       </main>
 
-      {/* ── Toast ───────────────────────────────────────────────────── */}
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );

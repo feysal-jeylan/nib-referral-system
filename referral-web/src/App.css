@@ -3,7 +3,7 @@
    ─────────────────────────
    Nib International Bank — Internal Referral System
    Enterprise corporate banking design.
-   No emojis. No gradients on buttons. Institutional typography.
+   No gradients on buttons. Institutional typography.
 
    Palette
    ───────
@@ -17,6 +17,13 @@
    Text-1  : #111827  headings
    Text-2  : #374151  body text
    Text-3  : #6B7280  muted / labels
+
+   Versions
+   ────────
+   V1–V4  : Initial referral dashboard
+   V5     : Agent status pills, pending-applications section, login apply form
+   V6     : Rules Builder, campaign description, operator display in rule tags,
+            error_message column in integration logs table
    ============================================================================= */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -173,10 +180,7 @@ body {
   border-radius: 999px;
 }
 
-/*
-  Alert variant — used when there are pending applications waiting for review.
-  Amber background draws the Admin's eye without being alarming.
-*/
+/* Alert count badge — used when pending agents are waiting for review */
 .section-header__count--alert {
   color:        var(--pending-txt);
   background:   var(--pending-bg);
@@ -210,6 +214,15 @@ body {
   background:    var(--gold);
   border-radius: 2px;
   flex-shrink:   0;
+}
+
+/* "optional" label suffix */
+.form__optional {
+  font-size:      10px;
+  font-weight:    400;
+  color:          var(--text-3);
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .form__grid {
@@ -302,7 +315,7 @@ body {
 }
 .btn--primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Ghost — subtle outlined button for secondary actions (e.g. Refresh) */
+/* Ghost — subtle outlined button (Refresh, etc.) */
 .btn--ghost {
   background:   transparent;
   color:        var(--text-3);
@@ -361,6 +374,29 @@ body {
 }
 .btn--activate:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/*
+  Add Rule button — V6 Rules Builder.
+  Navy outline style, sits inline with the rule inputs row.
+  Smaller than btn--primary so it doesn't dominate the builder section.
+*/
+.btn--add-rule {
+  background:     transparent;
+  color:          var(--navy);
+  border-color:   var(--navy);
+  padding:        0 14px;
+  font-size:      12px;
+  font-weight:    700;
+  height:         38px;          /* aligns with form inputs */
+  align-self:     flex-end;      /* aligns to bottom of flex row */
+  white-space:    nowrap;
+  letter-spacing: 0.2px;
+}
+.btn--add-rule:hover {
+  background:   var(--navy);
+  color:        #fff;
+  border-color: var(--navy);
+}
+
 /* ── Tables ───────────────────────────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; }
 
@@ -397,7 +433,6 @@ body {
 .data-table td:last-child { border-right: none; }
 .data-table tbody tr:last-child td { border-bottom: none; }
 
-/* Zebra striping */
 .data-table tbody tr:nth-child(even) { background: var(--stripe); }
 .data-table tbody tr:nth-child(odd)  { background: var(--surface); }
 .data-table tbody tr:hover            { background: var(--navy-light); }
@@ -461,7 +496,6 @@ body {
 .badge--bronze { background: #6B3A15; color: #FEF3C7; border-color: #6B3A15; }
 .badge--none   { background: var(--bg); color: var(--text-3); border-color: var(--border); }
 
-/* "Active" indicator in Campaign table Actions column */
 .badge--active-indicator {
   background:     var(--gold-light);
   color:          var(--gold);
@@ -506,15 +540,6 @@ body {
 .status-pill--REJECTED::before   { background: #EF4444; }
 
 /* ── Agent status pills (PENDING / APPROVED / REJECTED) ──────────────────── */
-/*
-  Used in the AgentTable status column and the Pending Applications section.
-  Rectangular (no leading dot) — visually distinct from the referral status
-  pills so admins can instantly tell which type of status they are reading.
-
-  PENDING  → amber — awaiting Admin review, action required
-  APPROVED → green — agent is active, has a referral code and login account
-  REJECTED → muted grey — application declined, no action outstanding
-*/
 .agent-status-pill {
   display:        inline-block;
   font-size:      10.5px;
@@ -527,32 +552,11 @@ body {
   text-transform: uppercase;
 }
 
-.agent-status-pill--PENDING {
-  background:   var(--pending-bg);
-  color:        var(--pending-txt);
-  border-color: var(--pending-bdr);
-}
-
-.agent-status-pill--APPROVED {
-  background:   var(--success-bg);
-  color:        var(--success-txt);
-  border-color: var(--success-bdr);
-}
-
-.agent-status-pill--REJECTED {
-  background:   #F3F4F6;
-  color:        #6B7280;
-  border-color: #D1D5DB;
-}
+.agent-status-pill--PENDING  { background: var(--pending-bg); color: var(--pending-txt); border-color: var(--pending-bdr); }
+.agent-status-pill--APPROVED { background: var(--success-bg); color: var(--success-txt); border-color: var(--success-bdr); }
+.agent-status-pill--REJECTED { background: #F3F4F6; color: #6B7280; border-color: #D1D5DB; }
 
 /* ── Campaign status pills (DRAFT / ACTIVE / EXPIRED) ────────────────────── */
-/*
-  Rectangular — no leading dot — to visually distinguish campaign status from
-  the referral status pills at a glance.
-  DRAFT   → neutral grey
-  ACTIVE  → corporate green
-  EXPIRED → muted red
-*/
 .camp-status-pill {
   display:        inline-block;
   font-size:      10.5px;
@@ -570,15 +574,6 @@ body {
 .camp-status-pill--EXPIRED { background: var(--reject-bg);  color: var(--reject-txt);  border-color: var(--reject-bdr);  }
 
 /* ── Integration log status pills (RECEIVED / PROCESSED / FAILED) ─────────── */
-/*
-  Three distinct colours that match the semantic meaning of each webhook state:
-  RECEIVED  → amber/yellow — event arrived, processing in progress or queued
-  PROCESSED → green        — referral was created successfully end-to-end
-  FAILED    → red          — processing failed (e.g. bad referral code, no campaign)
-
-  Shares the pill shape of .camp-status-pill so both status systems feel
-  consistent but uses slightly different hues to prevent confusion.
-*/
 .integ-status-pill {
   display:        inline-block;
   font-size:      10.5px;
@@ -591,23 +586,9 @@ body {
   text-transform: uppercase;
 }
 
-.integ-status-pill--RECEIVED  {
-  background:   var(--pending-bg);
-  color:        var(--pending-txt);
-  border-color: var(--pending-bdr);
-}
-
-.integ-status-pill--PROCESSED {
-  background:   var(--success-bg);
-  color:        var(--success-txt);
-  border-color: var(--success-bdr);
-}
-
-.integ-status-pill--FAILED {
-  background:   var(--reject-bg);
-  color:        var(--reject-txt);
-  border-color: var(--reject-bdr);
-}
+.integ-status-pill--RECEIVED  { background: var(--pending-bg); color: var(--pending-txt); border-color: var(--pending-bdr); }
+.integ-status-pill--PROCESSED { background: var(--success-bg); color: var(--success-txt); border-color: var(--success-bdr); }
+.integ-status-pill--FAILED    { background: var(--reject-bg);  color: var(--reject-txt);  border-color: var(--reject-bdr); }
 
 /* ── Reward chips (Campaign table) ───────────────────────────────────────── */
 .reward-chip {
@@ -628,12 +609,30 @@ body {
 }
 
 .reward-chip--value {
-  background:   var(--gold-light);
-  color:        var(--gold);
-  border:       1px solid rgba(150,114,12,0.22);
+  background: var(--gold-light);
+  color:      var(--gold);
+  border:     1px solid rgba(150,114,12,0.22);
+}
+
+/* ── Campaign description (V6) ────────────────────────────────────────────── */
+/*
+  Shows below the campaign name in the Campaign table — a one-line muted
+  summary. Uses a slightly smaller font so it reads as secondary metadata.
+*/
+.campaign-description {
+  font-size:   11.5px;
+  font-weight: 400;
+  color:       var(--text-3);
+  margin-top:  3px;
+  line-height: 1.4;
 }
 
 /* ── Campaign rule tags ───────────────────────────────────────────────────── */
+/*
+  V6 update: rule tags now render the operator symbol between type and value,
+  e.g. "MIN_DEPOSIT ≥ 5000" or "ACCOUNT_TYPE = SAVINGS".
+  The monospace font makes the operator character sharp and readable.
+*/
 .rule-tags {
   display:    flex;
   flex-wrap:  wrap;
@@ -655,12 +654,165 @@ body {
   white-space:    nowrap;
 }
 
-/* ── Info Box — V2 architecture notice replacing the manual referral form ─── */
+/* ── Rules Builder (V6) ───────────────────────────────────────────────────── */
 /*
-  Sits inside the "Core Banking Integration" card. Uses a left-border accent
-  (gold) to signal "institutional information" without the alarm of a warning
-  colour. The icon (ℹ) is purely decorative and hidden from screen readers.
+  The Rules Builder lets admins queue qualification rules before creating a
+  campaign. It sits between the campaign fields and the Create button inside
+  the CampaignForm.
+
+  .rules-builder           — outer wrapper, bordered section within the form
+  .rules-builder__header   — title + hint text row
+  .rules-builder__title    — "Qualification Rules" label
+  .rules-builder__hint     — "All rules must pass…" explanation
+  .rules-builder__inputs   — flex row: rule_type | operator | value | Add Rule btn
+  .rules-builder__preview  — list of queued rules
+  .rules-builder__preview-label — "Rules to be applied (N):" caption
+  .rules-builder__list     — <ul> of rule preview items
+  .rules-builder__item     — single rule preview row
+  .rules-builder__empty    — "No rules added yet" placeholder text
+  .rule-preview-chip       — monospace label showing the rule expression
+  .rule-preview-remove     — ✕ delete button next to each queued rule
 */
+.rules-builder {
+  background:    var(--bg);
+  border:        1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding:       16px 18px;
+  display:       flex;
+  flex-direction: column;
+  gap:           14px;
+}
+
+.rules-builder__header {
+  display:     flex;
+  align-items: baseline;
+  gap:         12px;
+  flex-wrap:   wrap;
+}
+
+.rules-builder__title {
+  font-size:      11px;
+  font-weight:    700;
+  color:          var(--navy);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.rules-builder__hint {
+  font-size:  11.5px;
+  color:      var(--text-3);
+  font-style: italic;
+}
+
+/*
+  The rule input row: three form fields (rule_type, operator, value) and the
+  "Add Rule" button. Use display:flex so the button aligns with the inputs.
+  The fields grow equally; the button takes its natural size.
+*/
+.rules-builder__inputs {
+  display:     flex;
+  align-items: flex-end;
+  gap:         10px;
+  flex-wrap:   wrap;
+}
+
+.rules-builder__inputs .form__field {
+  flex: 1 1 140px;  /* grows to fill, min 140px — collapses gracefully */
+}
+
+/*
+  Preview list of queued rules.
+  Each item is a flex row: chip on the left, ✕ button on the right.
+*/
+.rules-builder__preview {
+  border-top:  1px solid var(--border);
+  padding-top: 12px;
+}
+
+.rules-builder__preview-label {
+  font-size:      10.5px;
+  font-weight:    700;
+  color:          var(--text-3);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  margin-bottom:  8px;
+}
+
+.rules-builder__list {
+  list-style:     none;
+  display:        flex;
+  flex-direction: column;
+  gap:            6px;
+}
+
+.rules-builder__item {
+  display:     flex;
+  align-items: center;
+  gap:         10px;
+}
+
+.rules-builder__empty {
+  font-size:  12.5px;
+  color:      var(--text-3);
+  font-style: italic;
+}
+
+/*
+  The monospace chip showing the rule expression ("MIN_DEPOSIT ≥ 5000").
+  Navy-light background matches the code-chip style used for referral codes.
+*/
+.rule-preview-chip {
+  font-family:    ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size:      11.5px;
+  font-weight:    600;
+  background:     var(--navy-light);
+  color:          var(--navy);
+  padding:        3px 10px;
+  border-radius:  3px;
+  border:         1px solid rgba(0,43,91,0.14);
+  letter-spacing: 0.3px;
+  white-space:    nowrap;
+}
+
+/*
+  The ✕ button to remove a queued rule.
+  Bare / no background — looks like a close button, not a form action.
+*/
+.rule-preview-remove {
+  background:    none;
+  border:        none;
+  cursor:        pointer;
+  color:         var(--text-3);
+  font-size:     13px;
+  line-height:   1;
+  padding:       2px 5px;
+  border-radius: 3px;
+  transition:    color var(--transition), background var(--transition);
+  flex-shrink:   0;
+}
+.rule-preview-remove:hover {
+  color:       var(--reject-txt);
+  background:  var(--reject-bg);
+}
+
+/* ── Integration log error message (V6) ──────────────────────────────────── */
+/*
+  FAILED integration_log rows now show the error_message in a dedicated column.
+  Long messages are truncated with an ellipsis; the full text is in the title
+  attribute for hover-tooltip accessibility.
+*/
+.log-error-msg {
+  display:       block;
+  max-width:     220px;
+  overflow:      hidden;
+  text-overflow: ellipsis;
+  white-space:   nowrap;
+  font-size:     11.5px;
+  color:         var(--reject-txt);
+  cursor:        help;
+}
+
+/* ── Info Box ─────────────────────────────────────────────────────────────── */
 .info-box {
   display:       flex;
   align-items:   flex-start;
@@ -678,14 +830,13 @@ body {
   color:       var(--gold);
   flex-shrink: 0;
   margin-top:  1px;
-  /* render the ℹ as text, not emoji, on all platforms */
   font-style:  normal;
 }
 
 .info-box__text {
   font-size:   13.5px;
   font-weight: 500;
-  color:       #78520A;   /* slightly darker than --gold for readability */
+  color:       #78520A;
   line-height: 1.5;
 }
 
@@ -770,26 +921,8 @@ body {
 }
 .toast__close:hover { opacity: 1; }
 
-/* ── Header user / logout (defined in Login.css, referenced here) ─────────── */
-/* See Login.css for .header-user, .btn--logout, .auth-loading */
-
-/* ── Login: apply view inside the card ────────────────────────────────────── */
-/*
-  Styles for the AgentApplyForm and the "Want to become an agent?" link that
-  live inside the existing login card.  They reuse login-card internals
-  (login-field, login-btn) so no duplicate declarations needed.
-
-  .login-apply-view     — wrapper for the apply form inside the card body
-  .login-back-link      — "← Back to Sign In" subtle text link
-  .login-apply-row      — row that holds the "Not a staff member?" + link
-  .login-apply-link     — the clickable text link to switch to apply view
-  .login-apply-success  — green banner shown after a successful application
-*/
-.login-apply-view {
-  display:        flex;
-  flex-direction: column;
-  gap:            14px;
-}
+/* ── Login: apply-view styles (V5, preserved) ─────────────────────────────── */
+.login-apply-view { display: flex; flex-direction: column; gap: 14px; }
 
 .login-back-link {
   display:        inline-flex;
@@ -803,7 +936,6 @@ body {
   font-weight:    600;
   color:          var(--navy);
   padding:        0;
-  letter-spacing: 0.1px;
   opacity:        0.7;
   transition:     opacity var(--transition);
   align-self:     flex-start;
@@ -817,32 +949,23 @@ body {
   margin-top:  4px;
   flex-wrap:   wrap;
 }
-
-.login-apply-row__text {
-  font-size:  12.5px;
-  color:      var(--text-3);
-}
+.login-apply-row__text { font-size: 12.5px; color: var(--text-3); }
 
 .login-apply-link {
-  background:     none;
-  border:         none;
-  cursor:         pointer;
-  font-family:    var(--font);
-  font-size:      12.5px;
-  font-weight:    600;
-  color:          var(--navy);
-  padding:        0;
-  text-decoration: underline;
+  background:          none;
+  border:              none;
+  cursor:              pointer;
+  font-family:         var(--font);
+  font-size:           12.5px;
+  font-weight:         600;
+  color:               var(--navy);
+  padding:             0;
+  text-decoration:     underline;
   text-underline-offset: 2px;
-  transition:     color var(--transition), opacity var(--transition);
+  transition:          color var(--transition), opacity var(--transition);
 }
 .login-apply-link:hover { color: var(--navy-hover); opacity: 0.85; }
 
-/*
-  Green success banner that replaces the apply form on the login view after
-  a successful application is submitted.  Uses the same palette as toast--success
-  but is embedded inline rather than floating.
-*/
 .login-apply-success {
   display:       flex;
   align-items:   flex-start;
@@ -859,30 +982,30 @@ body {
   margin-bottom: 4px;
 }
 
+/* ── Header user / logout ─────────────────────────────────────────────────── */
+/* See Login.css for .header-user, .btn--logout, .auth-loading */
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 700px) {
   .app-main           { padding: 18px 14px 56px; gap: 18px; }
   .agent-form         { padding: 18px 16px; }
   .section-header     { padding: 16px 16px 0; }
 
-  /* Collapse all grids to single column */
   .form__grid,
   .form__grid--3col   { grid-template-columns: 1fr; }
   .form__field--wide  { grid-column: 1; }
 
-  /* Hide the # index column to save horizontal space */
   .data-table th:first-child,
   .data-table td:first-child { display: none; }
 
   .rule-tags          { gap: 3px; }
   .reward-chip        { display: inline-block; }
-
-  /* InfoBox stacks icon and text vertically on very narrow screens */
   .info-box           { flex-direction: column; gap: 6px; }
-
-  /* Action groups in the pending-applications table wrap on small screens */
   .action-group       { flex-wrap: wrap; }
-
-  /* Apply row stacks vertically on narrow screens */
   .login-apply-row    { flex-direction: column; align-items: flex-start; gap: 2px; }
+
+  /* Rules Builder collapses inputs to single column on mobile */
+  .rules-builder__inputs { flex-direction: column; }
+  .rules-builder__inputs .form__field { flex: none; width: 100%; }
+  .btn--add-rule { align-self: flex-start; width: 100%; }
 }

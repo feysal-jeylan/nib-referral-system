@@ -11,8 +11,16 @@
  * Endpoints:
  *   POST  /api/campaigns              — Create a new campaign (status = 'DRAFT')
  *   POST  /api/campaigns/:id/rules    — Add a qualification rule to a campaign
+ *   DELETE /api/campaigns/:id/rules/:ruleId — Remove a rule from a campaign
  *   PATCH /api/campaigns/:id/activate — Transition campaign from DRAFT → ACTIVE
  *   GET   /api/campaigns              — List all campaigns with their rules (paginated)
+ *   GET   /api/campaigns/:id/stats    — Referral count for a single campaign
+ *
+ * V6 additions per Task 4:
+ *   - POST /api/campaigns now accepts: description, reward_threshold
+ *   - POST /api/campaigns/:id/rules now accepts: operator
+ *   - GET  /api/campaigns now returns: description, reward_threshold, is_active,
+ *     and operator inside each rule object
  *
  * Per RULES.md §3 & §7:
  *   - All inputs validated before touching the DB.
@@ -32,6 +40,19 @@ const router = express.Router();
 // Convenience shorthand — every campaign route is ADMIN-only.
 const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 
+// Valid operator values (must match CHECK constraint in schema_v6_rule_engine.sql)
+const VALID_OPERATORS = [
+  'GREATER_THAN',
+  'LESS_THAN',
+  'EQUALS',
+  'GREATER_THAN_OR_EQUAL',
+  'LESS_THAN_OR_EQUAL',
+  'NOT_EQUALS',
+];
+
+// Valid rule types supported by the rule engine (services/ruleEngine.js)
+const VALID_RULE_TYPES = ['MIN_DEPOSIT', 'ACCOUNT_TYPE'];
+
 
 // ---------------------------------------------------------------------------
 // POST /api/campaigns
@@ -39,11 +60,15 @@ const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 // explicitly activated via PATCH /:id/activate once the admin is ready.
 //
 // Request body:
-//   { name, start_date, end_date, reward_type, reward_value }
+//   {
+//     name, start_date, end_date, reward_type, reward_value,
+//     description?,       // optional text summary
+//     reward_threshold?   // optional integer min referrals
+//   }
 //
 // Success response — 201 Created:
-//   { campaign: { id, name, start_date, end_date, reward_type, reward_value,
-//                 status, created_at } }
+//   { campaign: { id, name, description, start_date, end_date, reward_type,
+//                 reward_value, reward_threshold, is_active, status, created_at } }
 //
 // Error responses:
 //   400 Bad Request  — missing or invalid fields
@@ -51,11 +76,17 @@ const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 // ---------------------------------------------------------------------------
 router.post('/', ...adminOnly, async (req, res, next) => {
   try {
-    const { name, start_date, end_date, reward_type, reward_value } = req.body;
+    const {
+      name,
+      start_date,
+      end_date,
+      reward_type,
+      reward_value,
+      description,       // optional
+      reward_threshold,  // optional integer
+    } = req.body;
 
     // ── Input Validation ─────────────────────────────────────────────────────
-    // All five fields are required. We check for truthiness to catch both
-    // missing keys (undefined) and empty strings ('').
     const missing = [];
     if (!name)         missing.push('name');
     if (!start_date)   missing.push('start_date');
@@ -70,7 +101,6 @@ router.post('/', ...adminOnly, async (req, res, next) => {
       });
     }
 
-    // Validate that start_date and end_date are parseable dates.
     const start = new Date(start_date);
     const end   = new Date(end_date);
 
@@ -93,23 +123,29 @@ router.post('/', ...adminOnly, async (req, res, next) => {
       });
     }
 
+    // reward_threshold, if provided, must be a positive integer.
+    const threshold = reward_threshold != null ? parseInt(reward_threshold, 10) : null;
+    if (reward_threshold != null && (isNaN(threshold) || threshold < 0)) {
+      return res.status(400).json({
+        error: 'reward_threshold must be a non-negative integer.',
+        code:  'INVALID_REWARD_THRESHOLD',
+      });
+    }
+
     // ── Database Insert ───────────────────────────────────────────────────────
-    // Status is NOT accepted from the request body — it is always forced to
-    // 'DRAFT' here. This prevents a caller from creating an already-ACTIVE
-    // campaign, bypassing the activation step (and any future pre-activation
-    // checks we may add).
     const result = await pool.query(
-      `INSERT INTO campaigns (name, start_date, end_date, reward_type, reward_value, status)
-       VALUES ($1, $2, $3, $4, $5, 'DRAFT')
-       RETURNING id, name, start_date, end_date, reward_type, reward_value, status, created_at`,
-      [name, start, end, reward_type, reward_value]
+      `INSERT INTO campaigns
+         (name, description, start_date, end_date, reward_type, reward_value,
+          reward_threshold, is_active, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, 'DRAFT')
+       RETURNING id, name, description, start_date, end_date, reward_type, reward_value,
+                 reward_threshold, is_active, status, created_at`,
+      [name, description ?? null, start, end, reward_type, reward_value, threshold]
     );
 
     return res.status(201).json({ campaign: result.rows[0] });
 
   } catch (err) {
-    // Pass unexpected errors to the global error handler in index.js,
-    // which logs the full stack and sends a safe 500 to the client.
     next(err);
   }
 });
@@ -119,20 +155,24 @@ router.post('/', ...adminOnly, async (req, res, next) => {
 // POST /api/campaigns/:id/rules
 // Add a qualification rule to an existing campaign.
 //
-// Rules are stored as JSONB so we can support any structure without future
-// schema changes. Examples:
-//   rule_type = 'MIN_DEPOSIT',   rule_value = { "amount": 5000, "currency": "ETB" }
-//   rule_type = 'ACCOUNT_TYPE',  rule_value = { "type": "SAVINGS" }
-//   rule_type = 'BRANCH_REGION', rule_value = { "region": "Addis Ababa" }
+// V6 update: now also accepts `operator` (required).
+//
+// Supported rule_types: MIN_DEPOSIT, ACCOUNT_TYPE
+// Supported operators:  GREATER_THAN, LESS_THAN, EQUALS,
+//                       GREATER_THAN_OR_EQUAL, LESS_THAN_OR_EQUAL, NOT_EQUALS
 //
 // Request body:
-//   { rule_type, rule_value }   — rule_value must be a JSON object/array, not a scalar.
+//   {
+//     rule_type,   // 'MIN_DEPOSIT' | 'ACCOUNT_TYPE'
+//     operator,    // one of VALID_OPERATORS
+//     rule_value   // JSON object: { "amount": 5000 } or { "type": "SAVINGS" }
+//   }
 //
 // Success response — 201 Created:
-//   { rule: { id, campaign_id, rule_type, rule_value } }
+//   { rule: { id, campaign_id, rule_type, operator, rule_value } }
 //
 // Error responses:
-//   400 Bad Request  — missing fields or non-object rule_value
+//   400 Bad Request  — missing fields, invalid operator, non-object rule_value
 //   404 Not Found    — campaign_id does not exist
 //   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
@@ -146,7 +186,7 @@ router.post('/:id/rules', ...adminOnly, async (req, res, next) => {
       });
     }
 
-    const { rule_type, rule_value } = req.body;
+    const { rule_type, operator, rule_value } = req.body;
 
     // ── Input Validation ─────────────────────────────────────────────────────
     if (!rule_type) {
@@ -155,24 +195,43 @@ router.post('/:id/rules', ...adminOnly, async (req, res, next) => {
         code:  'MISSING_FIELDS',
       });
     }
-    // rule_value must be provided and must be a JSON object/array (not a primitive).
-    // We store it as JSONB; sending a plain string like "hello" would be misleading.
+
+    if (!VALID_RULE_TYPES.includes(rule_type)) {
+      return res.status(400).json({
+        error: `Invalid rule_type "${rule_type}". Valid values: ${VALID_RULE_TYPES.join(', ')}.`,
+        code:  'INVALID_RULE_TYPE',
+      });
+    }
+
+    // operator is required in V6
+    if (!operator) {
+      return res.status(400).json({
+        error: 'Missing required field: operator.',
+        code:  'MISSING_FIELDS',
+      });
+    }
+
+    if (!VALID_OPERATORS.includes(operator)) {
+      return res.status(400).json({
+        error: `Invalid operator "${operator}". Valid values: ${VALID_OPERATORS.join(', ')}.`,
+        code:  'INVALID_OPERATOR',
+      });
+    }
+
     if (rule_value === undefined || rule_value === null) {
       return res.status(400).json({
         error: 'Missing required field: rule_value.',
         code:  'MISSING_FIELDS',
       });
     }
-    if (typeof rule_value !== 'object') {
+    if (typeof rule_value !== 'object' || Array.isArray(rule_value)) {
       return res.status(400).json({
-        error: 'rule_value must be a JSON object or array, not a scalar.',
+        error: 'rule_value must be a JSON object (e.g., { "amount": 5000 }).',
         code:  'INVALID_RULE_VALUE',
       });
     }
 
     // ── Verify campaign exists ────────────────────────────────────────────────
-    // We check this explicitly so we can return a clear 404 rather than a
-    // cryptic FK violation error from the DB.
     const campaignCheck = await pool.query(
       'SELECT id, name, status FROM campaigns WHERE id = $1',
       [campaignId]
@@ -185,13 +244,11 @@ router.post('/:id/rules', ...adminOnly, async (req, res, next) => {
     }
 
     // ── Database Insert ───────────────────────────────────────────────────────
-    // pg automatically serializes a JS object to a JSONB-compatible string
-    // when the column type is JSONB. We pass rule_value as-is.
     const result = await pool.query(
-      `INSERT INTO campaign_rules (campaign_id, rule_type, rule_value)
-       VALUES ($1, $2, $3)
-       RETURNING id, campaign_id, rule_type, rule_value`,
-      [campaignId, rule_type, rule_value]
+      `INSERT INTO campaign_rules (campaign_id, rule_type, operator, rule_value)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, campaign_id, rule_type, operator, rule_value`,
+      [campaignId, rule_type, operator, rule_value]
     );
 
     return res.status(201).json({ rule: result.rows[0] });
@@ -203,15 +260,57 @@ router.post('/:id/rules', ...adminOnly, async (req, res, next) => {
 
 
 // ---------------------------------------------------------------------------
+// DELETE /api/campaigns/:id/rules/:ruleId
+// Remove a single rule from a campaign.
+//
+// Allows the Admin to correct a mistakenly added rule in the Rules Builder UI
+// without having to recreate the entire campaign.
+//
+// Success response — 200 OK:
+//   { message: "Rule deleted." }
+//
+// Error responses:
+//   400 Bad Request — invalid campaign or rule id
+//   404 Not Found   — rule does not exist for this campaign
+//   500 Server Error
+// ---------------------------------------------------------------------------
+router.delete('/:id/rules/:ruleId', ...adminOnly, async (req, res, next) => {
+  try {
+    const campaignId = parseInt(req.params.id, 10);
+    const ruleId     = parseInt(req.params.ruleId, 10);
+
+    if (isNaN(campaignId) || isNaN(ruleId)) {
+      return res.status(400).json({
+        error: 'Campaign ID and Rule ID must be valid integers.',
+        code:  'INVALID_ID',
+      });
+    }
+
+    const result = await pool.query(
+      `DELETE FROM campaign_rules
+       WHERE id = $1 AND campaign_id = $2
+       RETURNING id`,
+      [ruleId, campaignId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: `Rule ${ruleId} not found for campaign ${campaignId}.`,
+        code:  'RULE_NOT_FOUND',
+      });
+    }
+
+    return res.status(200).json({ message: 'Rule deleted.' });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// ---------------------------------------------------------------------------
 // PATCH /api/campaigns/:id/activate
 // Transition a campaign from 'DRAFT' → 'ACTIVE'.
-//
-// WHY A DEDICATED ENDPOINT (not just PATCH /campaigns/:id with { status })?
-//   - State transitions in a banking context must be explicit and auditable.
-//   - A future version will add pre-activation checks here (e.g., "must have
-//     at least one rule", "dates must not overlap another ACTIVE campaign").
-//   - The DB CHECK constraint already prevents invalid status values, but this
-//     endpoint also prevents backwards transitions (EXPIRED → ACTIVE).
 //
 // Success response — 200 OK:
 //   { campaign: { id, name, status: 'ACTIVE', ... } }
@@ -231,7 +330,6 @@ router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
       });
     }
 
-    // ── Fetch current state ───────────────────────────────────────────────────
     const campaignCheck = await pool.query(
       'SELECT id, name, status FROM campaigns WHERE id = $1',
       [campaignId]
@@ -245,10 +343,6 @@ router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
 
     const campaign = campaignCheck.rows[0];
 
-    // ── Guard: only DRAFT campaigns can be activated ──────────────────────────
-    // This enforces the DRAFT → ACTIVE one-way transition.
-    // An already-ACTIVE campaign cannot be re-activated (idempotent but harmless).
-    // An EXPIRED campaign cannot be brought back to ACTIVE (business rule).
     if (campaign.status !== 'DRAFT') {
       return res.status(400).json({
         error: `Campaign "${campaign.name}" is already '${campaign.status}'. Only 'DRAFT' campaigns can be activated.`,
@@ -256,12 +350,12 @@ router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
       });
     }
 
-    // ── Activate ──────────────────────────────────────────────────────────────
     const result = await pool.query(
       `UPDATE campaigns
        SET status = 'ACTIVE'
        WHERE id = $1
-       RETURNING id, name, start_date, end_date, reward_type, reward_value, status, created_at`,
+       RETURNING id, name, description, start_date, end_date, reward_type, reward_value,
+                 reward_threshold, is_active, status, created_at`,
       [campaignId]
     );
 
@@ -277,8 +371,8 @@ router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
 // GET /api/campaigns
 // List all campaigns with their rules aggregated as a JSON array.
 //
-// The GET /api/campaigns endpoint already uses json_agg + LEFT JOIN to embed
-// each campaign's rules array in a single query — no N+1 problem.
+// V6 update: includes description, reward_threshold, is_active in campaign rows
+// and operator inside each rule object.
 //
 // Supports pagination per RULES.md §7:
 //   ?page=1&limit=20   (defaults: page=1, limit=20)
@@ -290,19 +384,15 @@ router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
 //     "limit": 20,
 //     "campaigns": [
 //       {
-//         "id": 1,
-//         "name": "Q4 Savings Drive",
-//         "status": "ACTIVE",
+//         "id": 1, "name": "Q4 Savings Drive", "status": "ACTIVE",
+//         "description": "...", "reward_threshold": 5, "is_active": true,
 //         "rules": [
-//           { "id": 1, "rule_type": "MIN_DEPOSIT", "rule_value": { "amount": 5000 } }
+//           { "id": 1, "rule_type": "MIN_DEPOSIT", "operator": "GREATER_THAN_OR_EQUAL",
+//             "rule_value": { "amount": 5000 } }
 //         ]
-//       },
-//       ...
+//       }
 //     ]
 //   }
-//
-// Error responses:
-//   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
 router.get('/', ...adminOnly, async (req, res, next) => {
   try {
@@ -311,22 +401,23 @@ router.get('/', ...adminOnly, async (req, res, next) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const offset = (page - 1) * limit;
 
-    // ── Total count (for the frontend paginator) ──────────────────────────────
     const countResult = await pool.query('SELECT COUNT(*) AS total FROM campaigns');
     const total = parseInt(countResult.rows[0].total, 10);
 
     // ── Main query: campaigns + aggregated rules ───────────────────────────────
-    // LEFT JOIN ensures campaigns with zero rules still appear (rules = []).
-    // json_agg FILTER (WHERE cr.id IS NOT NULL) prevents [null] in the array.
-    // All parameters are passed as $1/$2 — no string interpolation per RULES.md §2.
+    // json_agg FILTER (WHERE cr.id IS NOT NULL) prevents [null] when no rules exist.
+    // operator is now included in the rule JSON object.
     const result = await pool.query(
       `SELECT
          c.id,
          c.name,
+         c.description,
          c.start_date,
          c.end_date,
          c.reward_type,
          c.reward_value,
+         c.reward_threshold,
+         c.is_active,
          c.status,
          c.created_at,
          COALESCE(
@@ -334,6 +425,7 @@ router.get('/', ...adminOnly, async (req, res, next) => {
              json_build_object(
                'id',         cr.id,
                'rule_type',  cr.rule_type,
+               'operator',   cr.operator,
                'rule_value', cr.rule_value
              ) ORDER BY cr.id
            ) FILTER (WHERE cr.id IS NOT NULL),
@@ -364,25 +456,8 @@ router.get('/', ...adminOnly, async (req, res, next) => {
 // GET /api/campaigns/:id/stats
 // Return aggregate statistics for a single campaign.
 //
-// Currently surfaces:
-//   total_referrals — how many referral rows are linked to this campaign_id.
-//
-// The frontend uses this to show a live "X referrals" counter on each campaign
-// card without re-fetching the entire referrals table.
-//
-// WHY COUNT on referrals.campaign_id?
-//   The referrals table has a nullable campaign_id FK (set during the v4
-//   migration). Each referral that was processed through the integration
-//   webhook will have this FK populated. Counting them gives the campaign's
-//   reach without a slow full-table scan (idx_referrals_campaign_id covers this).
-//
 // Success response — 200 OK:
 //   { "campaign_id": 1, "total_referrals": 42 }
-//
-// Error responses:
-//   400 Bad Request — id is not a number
-//   404 Not Found   — campaign does not exist
-//   500 Server Error
 // ---------------------------------------------------------------------------
 router.get('/:id/stats', ...adminOnly, async (req, res, next) => {
   try {
@@ -394,9 +469,6 @@ router.get('/:id/stats', ...adminOnly, async (req, res, next) => {
       });
     }
 
-    // ── Verify the campaign exists before counting ────────────────────────────
-    // Explicit 404 is friendlier than returning { total_referrals: 0 } for a
-    // campaign that doesn't exist, which would be a silent data error.
     const campaignCheck = await pool.query(
       'SELECT id FROM campaigns WHERE id = $1',
       [campaignId]
@@ -408,17 +480,14 @@ router.get('/:id/stats', ...adminOnly, async (req, res, next) => {
       });
     }
 
-    // ── Count referrals linked to this campaign ───────────────────────────────
-    // referrals.campaign_id is the FK set by the integration webhook.
-    // COUNT(*) returns 0 (not null) when no rows match, so no COALESCE needed.
     const statsResult = await pool.query(
       'SELECT COUNT(*) AS total_referrals FROM referrals WHERE campaign_id = $1',
       [campaignId]
     );
 
     return res.status(200).json({
-      campaign_id:      campaignId,
-      total_referrals:  parseInt(statsResult.rows[0].total_referrals, 10),
+      campaign_id:     campaignId,
+      total_referrals: parseInt(statsResult.rows[0].total_referrals, 10),
     });
 
   } catch (err) {

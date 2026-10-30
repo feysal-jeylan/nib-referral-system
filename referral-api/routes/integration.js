@@ -21,10 +21,18 @@
  *     sees success and stops retrying. The agent is NOT double-credited.
  *
  *   ATOMIC TRANSACTION
- *     The multi-step processing (log → find agent → find campaign → create
- *     referral → update log) is wrapped in a BEGIN/COMMIT block acquired from
- *     the connection pool. If any step fails, ROLLBACK fires and the database
- *     is left clean — no orphaned integration_log rows, no partial referrals.
+ *     The multi-step processing (log → find agent → find campaign → evaluate
+ *     rules → create referral → update log) is wrapped in a BEGIN/COMMIT block
+ *     acquired from the connection pool. If any step fails, ROLLBACK fires and
+ *     the database is left clean — no orphaned integration_log rows, no
+ *     partial referrals.
+ *
+ *   RULE ENGINE (V6)
+ *     After finding an active campaign, the webhook now calls evaluateRules()
+ *     from services/ruleEngine.js. If any campaign rule fails (e.g. deposit
+ *     below threshold, wrong account type), the integration_log is marked
+ *     FAILED with the specific rule that was violated. No referral is created.
+ *     This means campaigns now actually ENFORCE their qualification rules.
  *
  *   IMMEDIATE 202 RESPONSE (design intent, synchronous for now)
  *     RULES.md §7 says the webhook should respond immediately (202 Accepted)
@@ -37,9 +45,10 @@
 
 'use strict';
 
-const express = require('express');
-const pool    = require('../db');
+const express            = require('express');
+const pool               = require('../db');
 const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
+const { evaluateRules }  = require('../services/ruleEngine');
 
 const router = express.Router();
 
@@ -62,7 +71,7 @@ const router = express.Router();
 // Response lifecycle:
 //   200 OK           — duplicate event (already processed), Temenos should stop retrying
 //   202 Accepted     — new event, successfully recorded as PENDING referral
-//   400 Bad Request  — missing fields, or no active campaign found
+//   400 Bad Request  — missing fields, no active campaign, or rule evaluation failed
 //   404 Not Found    — referral_code does not match any agent
 //   500 Server Error — unexpected failure
 // ---------------------------------------------------------------------------
@@ -117,8 +126,6 @@ router.post('/account-opened', async (req, res, next) => {
   );
 
   if (existingLog.rows.length > 0) {
-    // This event was already received and processed (or is currently being
-    // processed). Return 200 so Temenos stops retrying.
     console.log(`[integration] Duplicate event ignored: transaction_id=${transaction_id}`);
     return res.status(200).json({
       message: 'Already processed',
@@ -165,26 +172,29 @@ router.post('/account-opened', async (req, res, next) => {
 
     // ── Step 3b: Find the Agent by referral_code ─────────────────────────────
     // referral_code is how we trace which agent referred this customer.
-    // The agents table has a UNIQUE constraint on referral_code, so this
-    // query returns at most one row.
+    // We also enforce that the agent must be APPROVED — PENDING/REJECTED agents
+    // cannot generate referrals even if their code somehow leaked.
     const agentResult = await client.query(
-      'SELECT id, name, referral_code FROM agents WHERE referral_code = $1',
+      `SELECT id, name, referral_code
+       FROM   agents
+       WHERE  referral_code = $1
+         AND  status = 'APPROVED'`,
       [referral_code]
     );
 
     if (agentResult.rows.length === 0) {
-      // No agent found — mark the log as FAILED and return 404.
+      // No approved agent found — mark the log as FAILED and return 404.
       // We still COMMIT so the FAILED log record is persisted for audit.
       await client.query(
         `UPDATE integration_logs
          SET status = 'FAILED', error_message = $1
          WHERE id = $2`,
-        ['Invalid referral code: no agent found.', logId]
+        ['Invalid referral code: no approved agent found.', logId]
       );
       await client.query('COMMIT');
 
       return res.status(404).json({
-        error: `No agent found with referral_code '${referral_code}'.`,
+        error: `No approved agent found with referral_code '${referral_code}'.`,
         code:  'AGENT_NOT_FOUND',
       });
     }
@@ -192,23 +202,23 @@ router.post('/account-opened', async (req, res, next) => {
     const agent = agentResult.rows[0];
 
     // ── Step 3c: Find the active campaign ────────────────────────────────────
-    // An ACTIVE campaign whose date window covers right now.
+    // An ACTIVE campaign whose date window covers right now AND is_active = true.
     // We use CURRENT_TIMESTAMP (server time) for the comparison — no client
     // time is trusted. If multiple ACTIVE campaigns overlap (a data integrity
     // issue), we pick the one that started most recently (ORDER BY start_date DESC
     // LIMIT 1). A future version may link the referral_code to a specific campaign.
     const campaignResult = await client.query(
-      `SELECT id, name, reward_type, reward_value
-       FROM campaigns
-       WHERE status = 'ACTIVE'
-         AND start_date <= CURRENT_TIMESTAMP
-         AND end_date   >= CURRENT_TIMESTAMP
-       ORDER BY start_date DESC
-       LIMIT 1`
+      `SELECT id, name, reward_type, reward_value, description, reward_threshold
+       FROM   campaigns
+       WHERE  status = 'ACTIVE'
+         AND  is_active = TRUE
+         AND  start_date <= CURRENT_TIMESTAMP
+         AND  end_date   >= CURRENT_TIMESTAMP
+       ORDER  BY start_date DESC
+       LIMIT  1`
     );
 
     if (campaignResult.rows.length === 0) {
-      // No active campaign — the referral cannot be credited right now.
       await client.query(
         `UPDATE integration_logs
          SET status = 'FAILED', error_message = $1
@@ -225,7 +235,51 @@ router.post('/account-opened', async (req, res, next) => {
 
     const campaign = campaignResult.rows[0];
 
-    // ── Step 3d: Create the referral record ──────────────────────────────────
+    // ── Step 3d: Evaluate campaign rules (V6 Rule Engine) ───────────────────
+    //
+    // This is the critical new step. We pass the campaign id, the customer
+    // data from this webhook, and the current DB client (so rule evaluation
+    // happens inside the same transaction as everything else).
+    //
+    // If any rule fails, we:
+    //   1. Mark the integration_log as FAILED with the specific rule description.
+    //   2. COMMIT the log update (audit trail preserved).
+    //   3. Return 202 Accepted (not 400) — the event was legitimately received
+    //      and processed; the customer simply did not qualify. Temenos should
+    //      NOT retry this event.
+    //
+    // WHY 202 instead of 400 for rule failures?
+    //   400 implies the *request* was malformed. The request is perfectly valid —
+    //   the customer just doesn't meet the campaign criteria. Returning 202 with
+    //   a disqualification message is cleaner and prevents Temenos retries.
+    const customer_data = { account_type, deposit_amount, customer_name, customer_phone };
+    const ruleResult = await evaluateRules(campaign.id, customer_data, client);
+
+    if (!ruleResult.passed) {
+      const reason = `Customer did not meet campaign rules: ${ruleResult.failedRule}`;
+      console.log(
+        `[integration] Rule evaluation FAILED for transaction_id=${transaction_id}: ${ruleResult.failedRule}`
+      );
+
+      await client.query(
+        `UPDATE integration_logs
+         SET status = 'FAILED', error_message = $1
+         WHERE id = $2`,
+        [reason, logId]
+      );
+      await client.query('COMMIT');
+
+      // 202 Accepted — we processed the event, but the customer was disqualified.
+      return res.status(202).json({
+        message:     'Event received. Customer did not meet campaign qualification rules.',
+        transaction_id,
+        disqualified: true,
+        reason:       ruleResult.failedRule,
+      });
+    }
+
+    // ── Step 3e: Create the referral record ──────────────────────────────────
+    // All rules passed — create the PENDING referral.
     // Status defaults to 'PENDING' — an admin must later review and mark it
     // 'SUCCESSFUL' or 'REJECTED' after verifying the account opening with ops.
     //
@@ -240,7 +294,7 @@ router.post('/account-opened', async (req, res, next) => {
 
     const referral = referralResult.rows[0];
 
-    // ── Step 3e: Mark integration_log as PROCESSED ───────────────────────────
+    // ── Step 3f: Mark integration_log as PROCESSED ───────────────────────────
     await client.query(
       `UPDATE integration_logs
        SET status = 'PROCESSED'
@@ -248,10 +302,9 @@ router.post('/account-opened', async (req, res, next) => {
       [logId]
     );
 
-    // ── Step 3f: Commit all changes atomically ────────────────────────────────
+    // ── Step 3g: Commit all changes atomically ────────────────────────────────
     await client.query('COMMIT');
 
-    // Server-side audit log — useful during development and production debugging.
     console.log(
       `[integration] New referral recorded: agent=${agent.name} (id=${agent.id}), ` +
       `customer=${customer_name}, campaign="${campaign.name}", referral_id=${referral.id}`
@@ -276,7 +329,6 @@ router.post('/account-opened', async (req, res, next) => {
       await client.query('ROLLBACK');
       console.error(`[integration] ROLLBACK executed for transaction_id=${transaction_id}`);
     } catch (rollbackErr) {
-      // Extremely unlikely, but log if ROLLBACK itself fails.
       console.error('[integration] ROLLBACK failed:', rollbackErr.message);
     }
 
@@ -297,7 +349,7 @@ router.post('/account-opened', async (req, res, next) => {
 // ---------------------------------------------------------------------------
 // GET /api/integration/logs  — ADMIN only.
 //
-// Returns the 20 most recent rows from integration_logs, ordered newest first.
+// Returns the most recent rows from integration_logs, ordered newest first.
 // Used by the Admin Dashboard to display the Temenos Integration Logs table.
 //
 // WHY ADMIN-ONLY?
@@ -326,11 +378,6 @@ router.post('/account-opened', async (req, res, next) => {
 //       ...
 //     ]
 //   }
-//
-// Error responses:
-//   401 Unauthorized — no valid session
-//   403 Forbidden    — caller is not an ADMIN
-//   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
 router.get('/logs', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
   try {
@@ -344,9 +391,6 @@ router.get('/logs', authenticateToken, authorizeRole(['ADMIN']), async (req, res
     const total = parseInt(countResult.rows[0].total, 10);
 
     // ── Main query ────────────────────────────────────────────────────────────
-    // We select all columns. The payload is already stored as JSONB so pg
-    // returns it as a parsed JS object — no JSON.parse() needed on the frontend.
-    // Parameters $1 and $2 are LIMIT and OFFSET — always parameterized per RULES.md §2.
     const result = await pool.query(
       `SELECT
          id,
