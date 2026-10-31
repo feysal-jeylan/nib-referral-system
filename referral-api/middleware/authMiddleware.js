@@ -22,17 +22,27 @@
  *
  *   // Only ADMINs:
  *   router.post('/data', authenticateToken, authorizeRole(['ADMIN']), handler);
+ *
+ * Cookie name:
+ *   The JWT cookie is named 'token' — this MUST match the name used in
+ *   routes/auth.js (res.cookie('token', ...) in /login and /change-password).
+ *   If the names diverge the middleware reads undefined and returns 401 on
+ *   every request, even after a successful login.
  */
 
 'use strict';
 
 const jwt = require('jsonwebtoken');
 
+// The cookie name must stay in sync with routes/auth.js COOKIE_NAME = 'token'.
+// Defined as a constant here so a future rename is a one-line change in each file.
+const COOKIE_NAME = 'token';
+
 // ---------------------------------------------------------------------------
 // authenticateToken
 //
 // How it works:
-//   1. Reads req.cookies.token (populated by cookie-parser in index.js).
+//   1. Reads req.cookies[COOKIE_NAME] (populated by cookie-parser in index.js).
 //      Because the cookie is HttpOnly, it was never readable by client JS —
 //      only the browser attaches it automatically to requests.
 //   2. Calls jwt.verify() which:
@@ -48,7 +58,7 @@ function authenticateToken(req, res, next) {
   // Read the JWT from the HttpOnly cookie, NOT from the Authorization header.
   // This is the HttpOnly cookie approach: the client cannot access this value
   // via JavaScript at all — the browser sends it transparently on each request.
-  const token = req.cookies?.token;
+  const token = req.cookies?.[COOKIE_NAME];
 
   if (!token) {
     return res.status(401).json({

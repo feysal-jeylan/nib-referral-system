@@ -12,6 +12,19 @@
  *
  * Key design decisions per RULES.md §6 & §7:
  *
+ *   PAYLOAD WHITELIST (V7)
+ *     The webhook now enforces a strict field whitelist. Any key in the JSON
+ *     body that is not in ALLOWED_FIELDS triggers an immediate 400 rejection.
+ *     This prevents the core banking system from injecting arbitrary data into
+ *     our database (e.g., an attacker who can forge Temenos payloads cannot
+ *     add unexpected fields that might confuse downstream logic or leak into
+ *     JSONB storage). The check runs before any DB work — cheap and safe.
+ *
+ *   AUTOMATED QUALIFICATION (V7)
+ *     When evaluateRules() returns passed: true, the referral is inserted
+ *     directly as 'SUCCESSFUL' — no manual admin approval required for events
+ *     that arrive via the Temenos webhook. The rules engine IS the approval gate.
+ *
  *   IDEMPOTENCY
  *     The `transaction_id` field in every Temenos event is guaranteed unique
  *     by the banking system. We store it in integration_logs with a UNIQUE
@@ -28,11 +41,10 @@
  *     partial referrals.
  *
  *   RULE ENGINE (V6)
- *     After finding an active campaign, the webhook now calls evaluateRules()
+ *     After finding an active campaign, the webhook calls evaluateRules()
  *     from services/ruleEngine.js. If any campaign rule fails (e.g. deposit
  *     below threshold, wrong account type), the integration_log is marked
  *     FAILED with the specific rule that was violated. No referral is created.
- *     This means campaigns now actually ENFORCE their qualification rules.
  *
  *   IMMEDIATE 202 RESPONSE (design intent, synchronous for now)
  *     RULES.md §7 says the webhook should respond immediately (202 Accepted)
@@ -52,31 +64,105 @@ const { evaluateRules }  = require('../services/ruleEngine');
 
 const router = express.Router();
 
+// ---------------------------------------------------------------------------
+// ALLOWED_FIELDS whitelist (V7 — Payload Validation)
+//
+// Only these exact keys are permitted in the Temenos webhook body. Any
+// additional key is treated as an unauthorized field injection attempt and
+// results in a 400 rejection.
+//
+// WHY a whitelist instead of just ignoring unknown fields?
+//   Silent ignoring can mask integration errors (Temenos sending the wrong
+//   schema). An explicit rejection forces the integration team to notice and
+//   correct the payload. It is also a security control — an attacker who can
+//   forge Temenos payloads cannot inject unexpected data.
+// ---------------------------------------------------------------------------
+const ALLOWED_FIELDS = new Set([
+  'transaction_id',
+  'referral_code',
+  'customer_name',
+  'customer_phone',
+  'account_type',
+  'deposit_amount',
+  'date_of_transaction',
+]);
+
 
 // ---------------------------------------------------------------------------
 // POST /api/integration/account-opened  (PUBLIC — called by Temenos server-to-server)
 //
 // Called by Temenos when a referred customer successfully opens a bank account.
 //
-// Expected payload:
+// Expected payload (only these fields allowed):
 //   {
-//     "transaction_id":  "TXN-2026-001234",   // Temenos unique event ID
-//     "customer_name":   "Fatuma Ali",
-//     "customer_phone":  "+251911234567",
-//     "referral_code":   "NIB-X7KP2A",        // The agent's referral code
-//     "account_type":    "SAVINGS",
-//     "deposit_amount":  10000                 // Opening deposit in ETB
+//     "transaction_id":    "TXN-2026-001234",   // Temenos unique event ID
+//     "customer_name":     "Fatuma Ali",
+//     "customer_phone":    "+251911234567",
+//     "referral_code":     "NIB-X7KP2A",        // The agent's referral code
+//     "account_type":      "SAVINGS",
+//     "deposit_amount":    10000,                // Opening deposit in ETB
+//     "date_of_transaction": "2026-10-31"        // optional ISO date string
 //   }
 //
 // Response lifecycle:
 //   200 OK           — duplicate event (already processed), Temenos should stop retrying
-//   202 Accepted     — new event, successfully recorded as PENDING referral
-//   400 Bad Request  — missing fields, no active campaign, or rule evaluation failed
-//   404 Not Found    — referral_code does not match any agent
+//   202 Accepted     — new event, referral created as SUCCESSFUL (rules passed)
+//   400 Bad Request  — unauthorized payload fields, missing fields, or no active campaign
+//   404 Not Found    — referral_code does not match any approved agent
 //   500 Server Error — unexpected failure
 // ---------------------------------------------------------------------------
 router.post('/account-opened', async (req, res, next) => {
-  // ── Step 1: Input Validation ─────────────────────────────────────────────
+  // ── Step 1a: Payload Whitelist Check (V7) ────────────────────────────────
+  // This runs BEFORE any DB access — pure CPU, no resources allocated.
+  // We check every key in req.body against ALLOWED_FIELDS.
+  const unauthorizedFields = Object.keys(req.body).filter(k => !ALLOWED_FIELDS.has(k));
+
+  if (unauthorizedFields.length > 0) {
+    console.warn(
+      `[integration] Payload whitelist violation — unauthorized fields: [${unauthorizedFields.join(', ')}]`
+    );
+
+    // We still want an audit trail for this rejection, but we have not yet
+    // opened a transaction (and may not have a valid transaction_id). We
+    // write the log using pool.query() directly — outside any transaction —
+    // only if transaction_id is present and looks valid (to avoid storing
+    // garbage). If that insert itself fails, we silently continue and still
+    // return the 400 to the caller.
+    const tid = typeof req.body.transaction_id === 'string' && req.body.transaction_id.trim()
+      ? req.body.transaction_id.trim()
+      : null;
+
+    if (tid) {
+      try {
+        // Check for idempotency first — don't insert a duplicate log row.
+        const existCheck = await pool.query(
+          'SELECT id FROM integration_logs WHERE transaction_id = $1',
+          [tid]
+        );
+        if (existCheck.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO integration_logs (transaction_id, payload, status, error_message)
+             VALUES ($1, $2, 'FAILED', $3)`,
+            [
+              tid,
+              JSON.stringify({ unauthorized_fields: unauthorizedFields }),
+              `Payload contains unauthorized fields: ${unauthorizedFields.join(', ')}`,
+            ]
+          );
+        }
+      } catch (logErr) {
+        // Non-fatal — log attempt failed; still return 400.
+        console.error('[integration] Could not write whitelist-failure log:', logErr.message);
+      }
+    }
+
+    return res.status(400).json({
+      error: `Payload contains unauthorized fields: ${unauthorizedFields.join(', ')}.`,
+      code:  'UNAUTHORIZED_FIELDS',
+    });
+  }
+
+  // ── Step 1b: Required-field Validation ───────────────────────────────────
   // We validate BEFORE acquiring a DB connection or starting a transaction.
   // Malformed requests are cheap to reject — no DB resources wasted.
   const {
@@ -151,6 +237,8 @@ router.post('/account-opened', async (req, res, next) => {
     // one INSERT will succeed; the other throws PG error 23505.
     //
     // We store the full payload as JSONB for debugging and audit purposes.
+    // Only whitelisted fields reach this point — the whitelist check above
+    // already rejected anything unexpected.
     const logInsert = await client.query(
       `INSERT INTO integration_logs (transaction_id, payload, status)
        VALUES ($1, $2, 'RECEIVED')
@@ -237,9 +325,9 @@ router.post('/account-opened', async (req, res, next) => {
 
     // ── Step 3d: Evaluate campaign rules (V6 Rule Engine) ───────────────────
     //
-    // This is the critical new step. We pass the campaign id, the customer
-    // data from this webhook, and the current DB client (so rule evaluation
-    // happens inside the same transaction as everything else).
+    // This is the critical enforcement step. We pass the campaign id, the
+    // customer data from this webhook, and the current DB client (so rule
+    // evaluation happens inside the same transaction as everything else).
     //
     // If any rule fails, we:
     //   1. Mark the integration_log as FAILED with the specific rule description.
@@ -279,15 +367,19 @@ router.post('/account-opened', async (req, res, next) => {
     }
 
     // ── Step 3e: Create the referral record ──────────────────────────────────
-    // All rules passed — create the PENDING referral.
-    // Status defaults to 'PENDING' — an admin must later review and mark it
-    // 'SUCCESSFUL' or 'REJECTED' after verifying the account opening with ops.
+    // All rules passed — create the referral as 'SUCCESSFUL' directly.
+    //
+    // V7 change: status is now 'SUCCESSFUL' (not 'PENDING').
+    // The evaluateRules() gate IS the qualification check. If a Temenos webhook
+    // makes it this far, the referral is automatically approved — no manual
+    // admin review is needed. This matches the automated banking workflow where
+    // Temenos is the authoritative source of truth for account openings.
     //
     // customer_name and customer_phone are stored directly on the referral row
     // (denormalized in V4 migration — the customers table is gone).
     const referralResult = await client.query(
       `INSERT INTO referrals (agent_id, customer_name, customer_phone, campaign_id, status)
-       VALUES ($1, $2, $3, $4, 'PENDING')
+       VALUES ($1, $2, $3, $4, 'SUCCESSFUL')
        RETURNING id, agent_id, customer_name, customer_phone, campaign_id, status, created_at`,
       [agent.id, customer_name, customer_phone, campaign.id]
     );
@@ -306,16 +398,15 @@ router.post('/account-opened', async (req, res, next) => {
     await client.query('COMMIT');
 
     console.log(
-      `[integration] New referral recorded: agent=${agent.name} (id=${agent.id}), ` +
+      `[integration] Referral SUCCESSFUL: agent=${agent.name} (id=${agent.id}), ` +
       `customer=${customer_name}, campaign="${campaign.name}", referral_id=${referral.id}`
     );
 
     // ── Step 4: Return 202 Accepted ───────────────────────────────────────────
     // 202 (not 201) because Temenos treats this as an acknowledgement:
-    // "we received and queued your event". The actual reward calculation
-    // happens later when an admin marks the referral SUCCESSFUL.
+    // "we received and queued your event". The referral is now SUCCESSFUL.
     return res.status(202).json({
-      message:     'Referral recorded successfully. Pending admin verification.',
+      message:     'Referral recorded and automatically qualified.',
       referral_id: referral.id,
       agent:       agent.name,
       campaign:    campaign.name,

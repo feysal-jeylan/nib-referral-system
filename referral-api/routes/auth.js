@@ -13,9 +13,14 @@
  * Security model:
  *   - Passwords are NEVER stored or compared in plaintext.
  *   - Temporary passwords are generated with crypto.randomBytes (CSPRNG).
- *   - The JWT is sent ONLY as an HttpOnly, SameSite=Strict cookie.
+ *   - The JWT is sent ONLY as an HttpOnly, SameSite=Lax cookie named 'token'.
  *   - must_change_password in the JWT gates access to the dashboard until
  *     the agent sets their own permanent password.
+ *
+ * Cookie name: 'token'  (must match authMiddleware.js req.cookies.token)
+ * SameSite:    'Lax'    (not 'Strict' — Strict blocks the cookie on Vite
+ *                        proxy-forwarded requests in some browser/dev setups;
+ *                        Lax is the safe default for same-site navigation)
  */
 
 'use strict';
@@ -28,6 +33,42 @@ const pool    = require('../db');
 const { authenticateToken } = require('../middleware/authMiddleware');
 
 const router = express.Router();
+
+// ---------------------------------------------------------------------------
+// Shared cookie options
+//
+// Centralised here so every res.cookie() / res.clearCookie() call uses
+// identical settings — a mismatch (e.g. different sameSite values on set vs
+// clear) can cause the browser to treat them as different cookies and fail to
+// delete or re-send them.
+//
+// COOKIE_NAME:
+//   Must match the name read by authenticateToken() in authMiddleware.js
+//   (req.cookies.token) and by GET /api/auth/me below.
+//
+// sameSite: 'Lax'
+//   'Strict' was the original setting but caused the cookie to be silently
+//   dropped by some browsers when the Vite dev proxy forwards requests from
+//   localhost:5173 to localhost:3000 (cross-port is treated as cross-site).
+//   'Lax' allows the cookie to be sent on same-site navigations and all
+//   same-origin requests forwarded by the Vite proxy, while still blocking
+//   it on third-party cross-site POST requests (the threat SameSite defends).
+//
+// secure: false in development
+//   HttpOnly cookies with secure:true are only sent over HTTPS. Since the
+//   local dev server runs on HTTP, we set secure based on NODE_ENV so the
+//   cookie is sent over http://localhost in dev and only over HTTPS in prod.
+// ---------------------------------------------------------------------------
+const COOKIE_NAME = 'token';
+
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  sameSite: 'Lax',                                     // FIX: was 'Strict'
+  secure:   process.env.NODE_ENV === 'production',      // false in dev (HTTP)
+  maxAge:   8 * 60 * 60 * 1000,                        // 8 hours in ms
+  path:     '/',
+};
+
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/login
@@ -43,7 +84,7 @@ const router = express.Router();
 //       "must_change_password": false
 //     }
 //   }
-//   Cookie set: token=<JWT>; HttpOnly; SameSite=Strict; Path=/
+//   Cookie set: token=<JWT>; HttpOnly; SameSite=Lax; Path=/
 //
 // The must_change_password flag tells the frontend whether to render the
 // forced-password-change screen (true) or the full dashboard (false).
@@ -106,13 +147,9 @@ router.post('/login', async (req, res, next) => {
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' });
 
     // ── Step 6: Send token as HttpOnly cookie ───────────────────────────────
-    res.cookie('token', token, {
-      httpOnly: true,
-      sameSite: 'Strict',
-      secure:   process.env.NODE_ENV === 'production',
-      maxAge:   8 * 60 * 60 * 1000,
-      path:     '/',
-    });
+    // FIX: Cookie name was 'accessToken' — changed to 'token' to match
+    // authMiddleware.js (req.cookies.token) and GET /api/auth/me below.
+    res.cookie(COOKIE_NAME, token, COOKIE_OPTIONS);
 
     // ── Step 7: Return user info (no token in the body) ─────────────────────
     // must_change_password is included so the frontend (Login.jsx → AuthContext)
@@ -151,7 +188,9 @@ router.post('/login', async (req, res, next) => {
 //   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
 router.get('/me', async (req, res, next) => {
-  const token = req.cookies?.token;
+  // FIX: was req.cookies?.token — now uses COOKIE_NAME constant ('token')
+  // to ensure this always stays in sync with the login route above.
+  const token = req.cookies?.[COOKIE_NAME];
 
   if (!token) {
     return res.status(401).json({
@@ -205,12 +244,11 @@ router.get('/me', async (req, res, next) => {
 // POST /api/auth/logout
 // ---------------------------------------------------------------------------
 router.post('/logout', (req, res) => {
-  res.clearCookie('token', {
-    httpOnly: true,
-    sameSite: 'Strict',
-    secure:   process.env.NODE_ENV === 'production',
-    path:     '/',
-  });
+  // FIX: was res.clearCookie('token', ...) — now uses COOKIE_NAME constant
+  // and shared COOKIE_OPTIONS so the cookie attributes match exactly.
+  // A clearCookie() with mismatched attributes (e.g. different sameSite)
+  // is treated by the browser as a different cookie and won't be deleted.
+  res.clearCookie(COOKIE_NAME, COOKIE_OPTIONS);
 
   return res.status(200).json({ message: 'Logged out successfully.' });
 });
@@ -306,13 +344,9 @@ router.post('/change-password', authenticateToken, async (req, res, next) => {
 
     const newToken = jwt.sign(newPayload, process.env.JWT_SECRET, { expiresIn: '8h' });
 
-    res.cookie('token', newToken, {
-      httpOnly: true,
-      sameSite: 'Strict',
-      secure:   process.env.NODE_ENV === 'production',
-      maxAge:   8 * 60 * 60 * 1000,
-      path:     '/',
-    });
+    // FIX: was res.cookie('token', ...) with inline options — now uses
+    // COOKIE_NAME constant and shared COOKIE_OPTIONS for consistency.
+    res.cookie(COOKIE_NAME, newToken, COOKIE_OPTIONS);
 
     return res.status(200).json({
       message: 'Password changed successfully.',

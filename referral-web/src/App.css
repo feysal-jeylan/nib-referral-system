@@ -985,6 +985,108 @@ body {
 /* ── Header user / logout ─────────────────────────────────────────────────── */
 /* See Login.css for .header-user, .btn--logout, .auth-loading */
 
+/* =============================================================================
+   V7 — Campaign Edit / Delete styles
+   =============================================================================
+
+   .btn--edit    — secondary outlined button; navy border, navy text
+   .btn--delete  — destructive outlined button; red border, red text
+   These match the institutional no-gradient palette (RULES.md §1).
+
+   .campaign-edit-form — inline edit panel that appears below the action buttons
+   inside the Actions <td> when the admin clicks "Edit". It is styled to look
+   like a mini card nested inside the table row without breaking the layout.
+   ============================================================================= */
+
+/* ── Edit button ─────────────────────────────────────────────────────────── */
+.btn--edit {
+  display:         inline-flex;
+  align-items:     center;
+  gap:             4px;
+  padding:         5px 10px;
+  font-size:       12px;
+  font-weight:     600;
+  line-height:     1;
+  white-space:     nowrap;
+  border-radius:   var(--radius-btn);
+  cursor:          pointer;
+  transition:      background var(--transition), color var(--transition),
+                   border-color var(--transition);
+
+  background:      transparent;
+  color:           var(--navy);
+  border:          1.5px solid var(--navy);
+}
+.btn--edit:hover:not(:disabled) {
+  background: var(--navy-light);
+}
+.btn--edit:disabled {
+  opacity: 0.5;
+  cursor:  not-allowed;
+}
+
+/* ── Delete button ───────────────────────────────────────────────────────── */
+.btn--delete {
+  display:         inline-flex;
+  align-items:     center;
+  gap:             4px;
+  padding:         5px 10px;
+  font-size:       12px;
+  font-weight:     600;
+  line-height:     1;
+  white-space:     nowrap;
+  border-radius:   var(--radius-btn);
+  cursor:          pointer;
+  transition:      background var(--transition), color var(--transition),
+                   border-color var(--transition);
+
+  background:      transparent;
+  color:           #B91C1C;
+  border:          1.5px solid #FCA5A5;
+}
+.btn--delete:hover:not(:disabled) {
+  background:    var(--reject-bg);
+  border-color:  #EF4444;
+  color:         #991B1B;
+}
+.btn--delete:disabled {
+  opacity: 0.5;
+  cursor:  not-allowed;
+}
+
+/* ── Inline Campaign Edit Form ───────────────────────────────────────────── */
+/*
+  The edit form appears inside the Actions <td> as a flex column below the
+  action buttons. It uses the standard form__field / form__grid vocabulary so
+  inputs look consistent with the main CampaignForm above the table.
+*/
+.campaign-edit-form {
+  margin-top:      10px;
+  padding:         14px 16px;
+  background:      var(--stripe);
+  border:          1px solid var(--border);
+  border-radius:   var(--radius);
+  min-width:       420px;         /* enough room for the grid */
+}
+
+.campaign-edit-form__grid {
+  display:               grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap:                   10px 14px;
+  margin-bottom:         12px;
+}
+
+/* Wide fields (description) span all 3 columns */
+.campaign-edit-form__grid .form__field--wide {
+  grid-column: 1 / -1;
+}
+
+.campaign-edit-form__actions {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 700px) {
   .app-main           { padding: 18px 14px 56px; gap: 18px; }
@@ -1008,4 +1110,8 @@ body {
   .rules-builder__inputs { flex-direction: column; }
   .rules-builder__inputs .form__field { flex: none; width: 100%; }
   .btn--add-rule { align-self: flex-start; width: 100%; }
+
+  /* Campaign edit form collapses to single column on mobile */
+  .campaign-edit-form       { min-width: 0; }
+  .campaign-edit-form__grid { grid-template-columns: 1fr; }
 }

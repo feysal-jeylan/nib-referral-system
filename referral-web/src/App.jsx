@@ -31,6 +31,14 @@
  *   CampaignTable now shows description, reward_threshold, and operator in
  *   the rule tags (e.g. "MIN_DEPOSIT ≥ 5000").
  *
+ * V7 Architecture — Finalization:
+ *   - Webhook payload whitelist enforced on backend (integration.js).
+ *   - Webhook referrals now land as 'SUCCESSFUL' automatically (no manual approval).
+ *   - CampaignTable: Edit and Delete buttons for each campaign row.
+ *     Edit opens a compact inline form; Delete is guarded by a confirm dialog.
+ *     Both call the new PUT /api/campaigns/:id and DELETE /api/campaigns/:id
+ *     endpoints added in V7 campaigns.js.
+ *
  * Sections:
  *   1.  Primitive UI components (Toast, StatusPill, RewardBadge, Spinner,
  *       EmptyState, InfoBox)
@@ -39,7 +47,7 @@
  *   4.  AgentTable
  *   5.  ReferralTable
  *   6.  CampaignForm   (V6: description, reward_threshold, Rules Builder)
- *   7.  CampaignTable  (V6: shows operator in rules, description)
+ *   7.  CampaignTable  (V7: Edit + Delete buttons; V6: operator in rules, description)
  *   8.  CampaignStatusPill
  *   9.  IntegrationLogsTable
  *  10.  IntegrationStatusPill
@@ -714,8 +722,116 @@ function CampaignForm({ onCreated, onToast }) {
 //   - Shows campaign description (if present) below the name.
 //   - Shows reward_threshold badge (if present).
 //   - Rule tags now include the operator symbol: "MIN_DEPOSIT ≥ 5000".
-function CampaignTable({ campaigns, loading, onActivated, onToast }) {
+//
+// V7 update:
+//   - Edit button: opens an inline edit form for that row. Saves via
+//     PUT /api/campaigns/:id. Only editable fields shown (name, dates,
+//     reward_value, description, reward_threshold).
+//   - Delete button: shows a confirm() dialog, then calls
+//     DELETE /api/campaigns/:id. Blocked by the API if referrals exist.
+function CampaignTable({ campaigns, loading, onActivated, onEdited, onDeleted, onToast }) {
   const [activating, setActivating] = useState(new Set());
+  const [deleting,   setDeleting]   = useState(new Set());
+
+  // editingId: which campaign row has its inline edit form open (null = none)
+  const [editingId,  setEditingId]  = useState(null);
+  // editForm: the current state of the inline edit form fields
+  const [editForm,   setEditForm]   = useState({});
+  const [saving,     setSaving]     = useState(false);
+
+  // ── Open the inline edit form for a campaign row ────────────────────────
+  function handleEditOpen(c) {
+    // Pre-fill the form with the campaign's current values.
+    // Dates: strip the time component so <input type="date"> works correctly.
+    const toDateInput = iso => iso ? iso.slice(0, 10) : '';
+    setEditForm({
+      name:             c.name,
+      start_date:       toDateInput(c.start_date),
+      end_date:         toDateInput(c.end_date),
+      reward_value:     c.reward_value,
+      description:      c.description ?? '',
+      reward_threshold: c.reward_threshold != null ? String(c.reward_threshold) : '',
+    });
+    setEditingId(c.id);
+  }
+
+  function handleEditCancel() {
+    setEditingId(null);
+    setEditForm({});
+  }
+
+  function handleEditChange(e) {
+    setEditForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  }
+
+  // ── Submit the inline edit form ─────────────────────────────────────────
+  async function handleEditSave(campaignId, campaignName) {
+    setSaving(true);
+    try {
+      const res = await fetch(`${API}/campaigns/${campaignId}`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:             editForm.name,
+          description:      editForm.description || null,
+          start_date:       editForm.start_date
+            ? new Date(editForm.start_date).toISOString() : '',
+          end_date:         editForm.end_date
+            ? new Date(editForm.end_date).toISOString() : '',
+          reward_value:     editForm.reward_value,
+          reward_threshold: editForm.reward_threshold !== ''
+            ? parseInt(editForm.reward_threshold, 10) : null,
+        }),
+        ...FETCH_OPTS,
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        onToast({ type: 'error', message: data.error ?? 'Failed to update campaign.' });
+        return;
+      }
+
+      setEditingId(null);
+      setEditForm({});
+      onEdited(); // triggers refreshCampaigns in Dashboard
+      onToast({ type: 'success', message: `✅ Campaign "${data.campaign.name}" updated.` });
+    } catch {
+      onToast({ type: 'error', message: '🔴 Cannot reach the server.' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ── Delete a campaign ───────────────────────────────────────────────────
+  async function handleDelete(id, name) {
+    // Guard with a native confirm dialog — simple, no extra component needed.
+    const confirmed = window.confirm(
+      `Delete campaign "${name}"?\n\nThis will permanently remove the campaign and all its rules.\nThis action cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setDeleting(prev => new Set(prev).add(id));
+    try {
+      const res  = await fetch(`${API}/campaigns/${id}`, {
+        method: 'DELETE',
+        ...FETCH_OPTS,
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        // 409 = campaign has referrals — surface the backend's clear message.
+        onToast({ type: 'error', message: data.error ?? 'Failed to delete campaign.' });
+        return;
+      }
+
+      onDeleted(); // triggers refreshCampaigns in Dashboard
+      onToast({ type: 'success', message: `🗑️ ${data.message}` });
+    } catch {
+      onToast({ type: 'error', message: '🔴 Cannot reach the server.' });
+    } finally {
+      setDeleting(prev => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  }
 
   async function handleActivate(id, name) {
     setActivating(prev => new Set(prev).add(id));
@@ -760,8 +876,11 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
         </thead>
         <tbody>
           {campaigns.map((c, i) => {
-            const busy  = activating.has(c.id);
-            const rules = Array.isArray(c.rules) ? c.rules : [];
+            const busy       = activating.has(c.id);
+            const busyDelete = deleting.has(c.id);
+            const isEditing  = editingId === c.id;
+            const rules      = Array.isArray(c.rules) ? c.rules : [];
+
             return (
               <tr key={c.id} className="data-row">
                 <td className="td--index">{i + 1}</td>
@@ -817,22 +936,130 @@ function CampaignTable({ campaigns, loading, onActivated, onToast }) {
 
                 {/* Actions */}
                 <td>
-                  {c.status === 'DRAFT' ? (
-                    <button
-                      id={`activate-btn-${c.id}`}
-                      className="btn btn--activate"
-                      disabled={busy}
-                      onClick={() => handleActivate(c.id, c.name)}
-                      aria-label={`Activate campaign ${c.name}`}
-                    >
-                      {busy ? <Spinner small /> : '▶ Activate'}
-                    </button>
-                  ) : c.status === 'ACTIVE' ? (
-                    <span className="badge badge--active-indicator" aria-label="Campaign is active">
-                      Active
-                    </span>
-                  ) : (
-                    <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>—</span>
+                  <div className="action-group">
+                    {/* Activate button — only for DRAFT campaigns */}
+                    {c.status === 'DRAFT' && !isEditing && (
+                      <button
+                        id={`activate-btn-${c.id}`}
+                        className="btn btn--activate"
+                        disabled={busy || busyDelete}
+                        onClick={() => handleActivate(c.id, c.name)}
+                        aria-label={`Activate campaign ${c.name}`}
+                      >
+                        {busy ? <Spinner small /> : '▶ Activate'}
+                      </button>
+                    )}
+
+                    {/* Edit button — toggles the inline edit form */}
+                    {!isEditing ? (
+                      <button
+                        id={`edit-btn-${c.id}`}
+                        className="btn btn--edit"
+                        disabled={busy || busyDelete}
+                        onClick={() => handleEditOpen(c)}
+                        aria-label={`Edit campaign ${c.name}`}
+                      >
+                        ✏ Edit
+                      </button>
+                    ) : null}
+
+                    {/* Delete button */}
+                    {!isEditing && (
+                      <button
+                        id={`delete-btn-${c.id}`}
+                        className="btn btn--delete"
+                        disabled={busy || busyDelete}
+                        onClick={() => handleDelete(c.id, c.name)}
+                        aria-label={`Delete campaign ${c.name}`}
+                      >
+                        {busyDelete ? <Spinner small /> : '🗑 Delete'}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* ── Inline Edit Form ──────────────────────────────── */}
+                  {isEditing && (
+                    <div className="campaign-edit-form">
+                      <div className="campaign-edit-form__grid">
+                        <div className="form__field">
+                          <label htmlFor={`edit-name-${c.id}`}>Name</label>
+                          <input
+                            id={`edit-name-${c.id}`}
+                            name="name" type="text"
+                            value={editForm.name}
+                            onChange={handleEditChange}
+                            autoComplete="off"
+                          />
+                        </div>
+                        <div className="form__field">
+                          <label htmlFor={`edit-start-${c.id}`}>Start Date</label>
+                          <input
+                            id={`edit-start-${c.id}`}
+                            name="start_date" type="date"
+                            value={editForm.start_date}
+                            onChange={handleEditChange}
+                          />
+                        </div>
+                        <div className="form__field">
+                          <label htmlFor={`edit-end-${c.id}`}>End Date</label>
+                          <input
+                            id={`edit-end-${c.id}`}
+                            name="end_date" type="date"
+                            value={editForm.end_date}
+                            onChange={handleEditChange}
+                          />
+                        </div>
+                        <div className="form__field">
+                          <label htmlFor={`edit-reward-${c.id}`}>Reward Value</label>
+                          <input
+                            id={`edit-reward-${c.id}`}
+                            name="reward_value" type="text"
+                            value={editForm.reward_value}
+                            onChange={handleEditChange}
+                            autoComplete="off"
+                          />
+                        </div>
+                        <div className="form__field">
+                          <label htmlFor={`edit-threshold-${c.id}`}>Threshold</label>
+                          <input
+                            id={`edit-threshold-${c.id}`}
+                            name="reward_threshold" type="number"
+                            min="0"
+                            value={editForm.reward_threshold}
+                            onChange={handleEditChange}
+                          />
+                        </div>
+                        <div className="form__field form__field--wide">
+                          <label htmlFor={`edit-desc-${c.id}`}>Description</label>
+                          <input
+                            id={`edit-desc-${c.id}`}
+                            name="description" type="text"
+                            value={editForm.description}
+                            onChange={handleEditChange}
+                            autoComplete="off"
+                          />
+                        </div>
+                      </div>
+                      <div className="campaign-edit-form__actions">
+                        <button
+                          type="button"
+                          className="btn btn--primary"
+                          disabled={saving}
+                          onClick={() => handleEditSave(c.id, c.name)}
+                        >
+                          {saving ? <Spinner small /> : null}
+                          {saving ? 'Saving…' : '✓ Save Changes'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn--ghost"
+                          disabled={saving}
+                          onClick={handleEditCancel}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </td>
               </tr>
@@ -1298,6 +1525,8 @@ function Dashboard({
                 campaigns={campaigns}
                 loading={campaignsLoading}
                 onActivated={refreshCampaigns}
+                onEdited={refreshCampaigns}
+                onDeleted={refreshCampaigns}
                 onToast={showToast}
               />
             </section>

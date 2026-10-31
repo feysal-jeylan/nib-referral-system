@@ -9,18 +9,25 @@
  *      with 403 Forbidden. Campaigns are an admin-only configuration concern.
  *
  * Endpoints:
- *   POST  /api/campaigns              — Create a new campaign (status = 'DRAFT')
- *   POST  /api/campaigns/:id/rules    — Add a qualification rule to a campaign
+ *   POST   /api/campaigns              — Create a new campaign (status = 'DRAFT')
+ *   POST   /api/campaigns/:id/rules    — Add a qualification rule to a campaign
  *   DELETE /api/campaigns/:id/rules/:ruleId — Remove a rule from a campaign
- *   PATCH /api/campaigns/:id/activate — Transition campaign from DRAFT → ACTIVE
- *   GET   /api/campaigns              — List all campaigns with their rules (paginated)
- *   GET   /api/campaigns/:id/stats    — Referral count for a single campaign
+ *   PATCH  /api/campaigns/:id/activate — Transition campaign from DRAFT → ACTIVE
+ *   PUT    /api/campaigns/:id          — Update campaign fields (V7)
+ *   DELETE /api/campaigns/:id          — Delete a campaign (V7, DRAFT/ACTIVE only)
+ *   GET    /api/campaigns              — List all campaigns with their rules (paginated)
+ *   GET    /api/campaigns/:id/stats    — Referral count for a single campaign
  *
  * V6 additions per Task 4:
  *   - POST /api/campaigns now accepts: description, reward_threshold
  *   - POST /api/campaigns/:id/rules now accepts: operator
  *   - GET  /api/campaigns now returns: description, reward_threshold, is_active,
  *     and operator inside each rule object
+ *
+ * V7 additions per Task 3:
+ *   - PUT    /api/campaigns/:id — update name, start_date, end_date, reward_value,
+ *     description, reward_threshold (partial updates allowed)
+ *   - DELETE /api/campaigns/:id — hard delete; blocked if campaign has referrals
  *
  * Per RULES.md §3 & §7:
  *   - All inputs validated before touching the DB.
@@ -360,6 +367,215 @@ router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
     );
 
     return res.status(200).json({ campaign: result.rows[0] });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// PUT /api/campaigns/:id   (V7)
+// Update editable fields on an existing campaign.
+//
+// Accepts a partial body — only provided fields are updated. Fields not
+// included in the body are left unchanged (COALESCE pattern).
+//
+// Editable fields:
+//   name, start_date, end_date, reward_value, description, reward_threshold
+//
+// NOT editable via this endpoint:
+//   reward_type — changing reward type on an existing campaign could break
+//                 referral calculations; requires a new campaign.
+//   status      — use PATCH /:id/activate for status transitions.
+//   is_active   — reserved for future deactivation endpoint.
+//
+// Success response — 200 OK:
+//   { campaign: { id, name, description, start_date, end_date, reward_type,
+//                 reward_value, reward_threshold, is_active, status, created_at } }
+//
+// Error responses:
+//   400 Bad Request — invalid id or date validation fails
+//   404 Not Found   — campaign not found
+//   500 Server Error
+// ---------------------------------------------------------------------------
+router.put('/:id', ...adminOnly, async (req, res, next) => {
+  try {
+    const campaignId = parseInt(req.params.id, 10);
+    if (isNaN(campaignId)) {
+      return res.status(400).json({
+        error: 'Campaign ID must be a number.',
+        code:  'INVALID_CAMPAIGN_ID',
+      });
+    }
+
+    // Verify campaign exists first
+    const existing = await pool.query(
+      'SELECT id, name, start_date, end_date, reward_value, description, reward_threshold FROM campaigns WHERE id = $1',
+      [campaignId]
+    );
+    if (existing.rows.length === 0) {
+      return res.status(404).json({
+        error: `Campaign with id ${campaignId} not found.`,
+        code:  'CAMPAIGN_NOT_FOUND',
+      });
+    }
+
+    const curr = existing.rows[0];
+
+    // Merge incoming values with current values (partial update)
+    const {
+      name          = curr.name,
+      start_date    = curr.start_date,
+      end_date      = curr.end_date,
+      reward_value  = curr.reward_value,
+      description   = curr.description,
+      reward_threshold,
+    } = req.body;
+
+    // Date validation (only if dates were provided)
+    const start = new Date(start_date);
+    const end   = new Date(end_date);
+
+    if (isNaN(start.getTime())) {
+      return res.status(400).json({
+        error: 'Invalid start_date. Use ISO 8601 format.',
+        code:  'INVALID_START_DATE',
+      });
+    }
+    if (isNaN(end.getTime())) {
+      return res.status(400).json({
+        error: 'Invalid end_date. Use ISO 8601 format.',
+        code:  'INVALID_END_DATE',
+      });
+    }
+    if (end <= start) {
+      return res.status(400).json({
+        error: 'end_date must be after start_date.',
+        code:  'INVALID_DATE_RANGE',
+      });
+    }
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({
+        error: 'name cannot be empty.',
+        code:  'MISSING_FIELDS',
+      });
+    }
+    if (!reward_value || !String(reward_value).trim()) {
+      return res.status(400).json({
+        error: 'reward_value cannot be empty.',
+        code:  'MISSING_FIELDS',
+      });
+    }
+
+    // reward_threshold: use provided value, or fall back to existing
+    const threshold = reward_threshold !== undefined
+      ? (reward_threshold != null ? parseInt(reward_threshold, 10) : null)
+      : curr.reward_threshold;
+
+    if (threshold !== null && (isNaN(threshold) || threshold < 0)) {
+      return res.status(400).json({
+        error: 'reward_threshold must be a non-negative integer or null.',
+        code:  'INVALID_REWARD_THRESHOLD',
+      });
+    }
+
+    const result = await pool.query(
+      `UPDATE campaigns
+       SET name             = $1,
+           start_date       = $2,
+           end_date         = $3,
+           reward_value     = $4,
+           description      = $5,
+           reward_threshold = $6
+       WHERE id = $7
+       RETURNING id, name, description, start_date, end_date, reward_type, reward_value,
+                 reward_threshold, is_active, status, created_at`,
+      [String(name).trim(), start, end, String(reward_value).trim(), description ?? null, threshold, campaignId]
+    );
+
+    return res.status(200).json({ campaign: result.rows[0] });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// DELETE /api/campaigns/:id   (V7)
+// Hard-delete a campaign and all its rules.
+//
+// Safety guard: If the campaign already has referrals linked to it, deletion
+// is blocked (409 Conflict). This preserves data integrity — you cannot delete
+// a campaign that is part of the audit trail for real referral events.
+//
+// Success response — 200 OK:
+//   { message: "Campaign deleted." }
+//
+// Error responses:
+//   400 Bad Request — invalid id
+//   404 Not Found   — campaign not found
+//   409 Conflict    — campaign has referrals; cannot delete
+//   500 Server Error
+// ---------------------------------------------------------------------------
+router.delete('/:id', ...adminOnly, async (req, res, next) => {
+  try {
+    const campaignId = parseInt(req.params.id, 10);
+    if (isNaN(campaignId)) {
+      return res.status(400).json({
+        error: 'Campaign ID must be a number.',
+        code:  'INVALID_CAMPAIGN_ID',
+      });
+    }
+
+    // Verify campaign exists
+    const campaignCheck = await pool.query(
+      'SELECT id, name FROM campaigns WHERE id = $1',
+      [campaignId]
+    );
+    if (campaignCheck.rows.length === 0) {
+      return res.status(404).json({
+        error: `Campaign with id ${campaignId} not found.`,
+        code:  'CAMPAIGN_NOT_FOUND',
+      });
+    }
+
+    const campaignName = campaignCheck.rows[0].name;
+
+    // Safety guard: block deletion if referrals exist for this campaign
+    const referralCheck = await pool.query(
+      'SELECT COUNT(*) AS total FROM referrals WHERE campaign_id = $1',
+      [campaignId]
+    );
+    const referralCount = parseInt(referralCheck.rows[0].total, 10);
+
+    if (referralCount > 0) {
+      return res.status(409).json({
+        error: `Cannot delete campaign "${campaignName}" — it has ${referralCount} referral(s) linked to it. ` +
+               `Deleting it would corrupt the referral audit trail.`,
+        code:  'CAMPAIGN_HAS_REFERRALS',
+      });
+    }
+
+    // Delete rules first (foreign key constraint), then the campaign itself.
+    // Both happen in a transaction so we never leave orphaned rules.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM campaign_rules WHERE campaign_id = $1', [campaignId]);
+      await client.query('DELETE FROM campaigns WHERE id = $1', [campaignId]);
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+    console.log(`[campaigns] Campaign "${campaignName}" (id=${campaignId}) deleted by admin.`);
+    return res.status(200).json({ message: `Campaign "${campaignName}" deleted.` });
 
   } catch (err) {
     next(err);
