@@ -7,7 +7,7 @@
  * and exposes an admin-only audit log endpoint.
  *
  * Current endpoints:
- *   POST /api/integration/account-opened — Receive a "new account opened" event (public)
+ *   POST /api/integration/account-opened — Receive a "new account opened" event (API-key protected)
  *   GET  /api/integration/logs           — View integration audit log (ADMIN only)
  *
  * Key design decisions per RULES.md §6 & §7:
@@ -63,6 +63,72 @@ const { authenticateToken, authorizeRole } = require('../middleware/authMiddlewa
 const { evaluateRules }  = require('../services/ruleEngine');
 
 const router = express.Router();
+
+// ---------------------------------------------------------------------------
+// API KEY AUTHENTICATION MIDDLEWARE (V8 — Server-to-Server Security)
+//
+// ALL routes on this router require a valid x-api-key header.
+// This enforces that only the authorised Mock Temenos backend (or any future
+// trusted CBS integration) can call these endpoints. Browser requests that
+// lack the key — including direct fetch() calls from the UI — are rejected
+// immediately with 401 Unauthorized before any DB work occurs.
+//
+// The key value must match NIB_SECURE_KEY_2026 exactly (constant-time
+// comparison is not needed here since this is not a HMAC secret, but in
+// production you would use crypto.timingSafeEqual()).
+//
+// On failure:
+//   1. Log the attempt to integration_logs with status FAILED.
+//   2. Return 401 {"error": "Unauthorized: Invalid API Key"}.
+// ---------------------------------------------------------------------------
+const API_KEY = 'NIB_SECURE_KEY_2026';
+
+router.use(async (req, res, next) => {
+  // The GET /logs endpoint is protected by JWT (admin auth), not by API key.
+  // Only the webhook POST requires the server-to-server API key.
+  if (req.method === 'GET') return next();
+
+  const providedKey = req.headers['x-api-key'];
+
+  if (providedKey !== API_KEY) {
+    const ip  = req.ip || req.connection.remoteAddress;
+    const tid = typeof req.body?.transaction_id === 'string' && req.body.transaction_id.trim()
+      ? req.body.transaction_id.trim()
+      : null;
+
+    console.warn(
+      `[integration] UNAUTHORIZED request — invalid or missing x-api-key. ` +
+      `IP: ${ip}, transaction_id: ${tid ?? 'N/A'}`
+    );
+
+    // Persist a FAILED audit log row (best-effort — never blocks the 401 response).
+    if (tid) {
+      try {
+        const existCheck = await pool.query(
+          'SELECT id FROM integration_logs WHERE transaction_id = $1',
+          [tid]
+        );
+        if (existCheck.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO integration_logs (transaction_id, payload, status, error_message)
+             VALUES ($1, $2, 'FAILED', $3)`,
+            [
+              tid,
+              JSON.stringify({ attempted_by: ip }),
+              'Invalid API Key',
+            ]
+          );
+        }
+      } catch (logErr) {
+        console.error('[integration] Could not write API-key failure log:', logErr.message);
+      }
+    }
+
+    return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
+  }
+
+  next();
+});
 
 // ---------------------------------------------------------------------------
 // ALLOWED_FIELDS whitelist (V7 — Payload Validation)
