@@ -13,16 +13,20 @@
  *   GET   /api/referrals            — List referrals (ADMIN: all, AGENT: own only).
  *   PATCH /api/referrals/:id/status — Approve or reject a referral (ADMIN only).
  *
+ * V8 (Prisma migration):
+ *   All raw pool.query() calls replaced with Prisma Client methods.
+ *   Response shapes are identical to the raw-SQL version.
+ *
  * Per RULES.md §2 & §3:
- *   - All queries use parameterized form ($1, $2, ...) — never string concatenation.
- *   - Raw DB errors are never sent to the client.
+ *   - Prisma uses parameterised queries internally — no string concatenation.
+ *   - Raw DB/Prisma errors are never sent to the client.
  *   - All inputs are validated server-side before touching the database.
  */
 
 'use strict';
 
 const express = require('express');
-const pool    = require('../db');
+const prisma  = require('../db-prisma');
 const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
 
 const router = express.Router();
@@ -33,12 +37,6 @@ const router = express.Router();
 // RBAC filtering:
 //   ADMIN  → returns ALL referrals.
 //   AGENT  → returns ONLY referrals where agent_id = req.user.agent_id.
-//
-// `customer_name` and `customer_phone` are columns directly on the referrals
-// table (denormalized in the V4 migration — customers table is gone).
-// We still JOIN agents to surface `agent_name` and `referral_code`.
-// LEFT JOIN is defensive: if an agent were somehow removed, referral rows
-// still appear rather than disappearing silently.
 //
 // Pagination per RULES.md §7:
 //   ?page=1&limit=20   (defaults: page=1, limit=20, max limit=100)
@@ -65,69 +63,58 @@ const router = express.Router();
 router.get('/', authenticateToken, async (req, res, next) => {
   try {
     // ── Pagination ────────────────────────────────────────────────────────────
-    const page   = Math.max(1, parseInt(req.query.page,  10) || 1);
-    const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
-    const offset = (page - 1) * limit;
+    const page  = Math.max(1, parseInt(req.query.page,  10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip  = (page - 1) * limit;
 
-    // ── RBAC: build the WHERE clause based on the caller's role ────────────
-    //
-    // ADMIN  → agentFilter = '' (no restriction), countParams / queryParams = []
-    // AGENT  → agentFilter uses $1, all param arrays are prefilled with agent_id
-    //
-    // The agent_id is always passed as a parameter — never interpolated —
-    // per RULES.md §2 "Never use string concatenation for SQL queries."
-    let agentFilter = '';
-    const countParams = [];
-    const queryParams = [];
+    // ── RBAC: build Prisma `where` clause based on caller's role ─────────────
+    // ADMIN  → {} (no restriction — see all referrals)
+    // AGENT  → { agent_id: req.user.agent_id } (own referrals only)
+    const where = req.user.role === 'AGENT'
+      ? { agent_id: req.user.agent_id }
+      : {};
 
-    if (req.user.role === 'AGENT') {
-      countParams.push(req.user.agent_id);
-      agentFilter = 'WHERE r.agent_id = $1';
-      // For the main query, agent_id is $1, limit is $2, offset is $3
-      queryParams.push(req.user.agent_id);
-    }
+    // ── Count + data in a single DB round-trip ────────────────────────────────
+    const [total, rows] = await prisma.$transaction([
+      prisma.referral.count({ where }),
+      prisma.referral.findMany({
+        where,
+        skip,
+        take:    limit,
+        orderBy: { created_at: 'desc' },
+        // Include the agent so we can expose agent_name and referral_code
+        // in the response — matching the old LEFT JOIN agents behaviour.
+        include: {
+          agent: {
+            select: { name: true, referral_code: true },
+          },
+        },
+      }),
+    ]);
 
-    // ── Total count (for frontend paginator) ──────────────────────────────
-    const countResult = await pool.query(
-      `SELECT COUNT(*) AS total FROM referrals r ${agentFilter}`,
-      countParams
-    );
-    const total = parseInt(countResult.rows[0].total, 10);
-
-    // ── Positional parameter indices for LIMIT / OFFSET ───────────────────
-    // If AGENT: $1 = agent_id, $2 = limit, $3 = offset
-    // If ADMIN: $1 = limit,    $2 = offset
-    const limitIdx  = queryParams.length + 1;
-    const offsetIdx = queryParams.length + 2;
-    queryParams.push(limit, offset);
-
-    // ── Main query ────────────────────────────────────────────────────────
-    const result = await pool.query(
-      `SELECT
-         r.id,
-         r.customer_name,
-         r.customer_phone,
-         a.name          AS agent_name,
-         a.referral_code,
-         r.status,
-         r.created_at
-       FROM   referrals r
-       LEFT JOIN agents a ON a.id = r.agent_id
-       ${agentFilter}
-       ORDER  BY r.created_at DESC
-       LIMIT  $${limitIdx} OFFSET $${offsetIdx}`,
-      queryParams
-    );
+    // ── Shape response to match existing raw-SQL format ───────────────────────
+    // Old format: { id, customer_name, customer_phone, agent_name,
+    //               referral_code, status, created_at }
+    // Prisma nests agent fields under `agent`; flatten them here.
+    const referrals = rows.map(r => ({
+      id:             r.id,
+      customer_name:  r.customer_name,
+      customer_phone: r.customer_phone,
+      agent_name:     r.agent?.name    ?? null,
+      referral_code:  r.agent?.referral_code ?? null,
+      status:         r.status,
+      created_at:     r.created_at,
+    }));
 
     return res.status(200).json({
-      total,
+      total:     Number(total),
       page,
       limit,
-      referrals: result.rows,
+      referrals,
     });
 
   } catch (err) {
-    console.error('[GET /api/referrals] Unexpected DB error:', err.message);
+    console.error('[GET /api/referrals] Prisma error:', err.message);
     next(err);
   }
 });
@@ -135,14 +122,10 @@ router.get('/', authenticateToken, async (req, res, next) => {
 // ---------------------------------------------------------------------------
 // PATCH /api/referrals/:id/status — ADMIN only: approve or reject a referral.
 //
-// URL parameter:
-//   :id  — the integer primary key of the referral row to update.
-//
 // Request body (JSON):
 //   { "status": "SUCCESSFUL" }   or   { "status": "REJECTED" }
 //
-// Callers CANNOT set status back to 'PENDING' — that is set automatically
-// by the integration webhook and represents the un-reviewed state.
+// Callers CANNOT set status back to 'PENDING'.
 //
 // Success response — 200 OK:
 //   {
@@ -162,9 +145,6 @@ router.get('/', authenticateToken, async (req, res, next) => {
 // ---------------------------------------------------------------------------
 router.patch('/:id/status', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
   // ── Step 1: Parse and validate the URL parameter ──────────────────────────
-  // parseInt() converts the string ':id' from the URL into an integer.
-  // If the user passes something non-numeric, parseInt returns NaN —
-  // we catch it immediately to avoid passing garbage to the DB.
   const referralId = parseInt(req.params.id, 10);
 
   if (isNaN(referralId)) {
@@ -175,11 +155,6 @@ router.patch('/:id/status', authenticateToken, authorizeRole(['ADMIN']), async (
   }
 
   // ── Step 2: Validate the status value ────────────────────────────────────
-  //
-  // Our schema has a CHECK constraint that only allows 'PENDING', 'SUCCESSFUL',
-  // or 'REJECTED'. We also whitelist at the application layer so we can:
-  //   1. Return a clear 400 instead of a raw constraint-violation DB error.
-  //   2. Explicitly block setting status back to 'PENDING' via this endpoint.
   const ALLOWED_STATUSES = ['SUCCESSFUL', 'REJECTED'];
   const status = req.body.status?.trim().toUpperCase();
 
@@ -190,30 +165,22 @@ router.patch('/:id/status', authenticateToken, authorizeRole(['ADMIN']), async (
     });
   }
 
-  // ── Step 3: Run the UPDATE query ─────────────────────────────────────────
-  //
-  // Single-table write — no transaction needed.
-  // RETURNING gives us the full updated row without a second SELECT round-trip.
   try {
-    const result = await pool.query(
-      `UPDATE referrals
-       SET    status = $1
-       WHERE  id     = $2
-       RETURNING id, agent_id, customer_name, customer_phone, status, created_at`,
-      [status, referralId]
-    );
-
-    // ── Step 4: 404 if the row didn't exist ───────────────────────────────
-    // rowCount === 0 means the UPDATE matched nothing — the id doesn't exist.
-    // This is a 404, not a 500.
-    if (result.rowCount === 0) {
-      return res.status(404).json({
-        error: `Referral with id ${referralId} not found.`,
-        code:  'REFERRAL_NOT_FOUND',
-      });
-    }
-
-    const updated = result.rows[0];
+    // ── Step 3: Update and return the row ────────────────────────────────────
+    // Prisma's update() throws P2025 (RecordNotFound) if id doesn't exist —
+    // we catch that specifically to return a clean 404.
+    const updated = await prisma.referral.update({
+      where: { id: referralId },
+      data:  { status },
+      select: {
+        id:             true,
+        agent_id:       true,
+        customer_name:  true,
+        customer_phone: true,
+        status:         true,
+        created_at:     true,
+      },
+    });
 
     return res.status(200).json({
       referral_id:    updated.id,
@@ -225,7 +192,14 @@ router.patch('/:id/status', authenticateToken, authorizeRole(['ADMIN']), async (
     });
 
   } catch (err) {
-    console.error('[PATCH /api/referrals/:id/status] Unexpected DB error:', err.message);
+    // P2025 = "Record to update not found."
+    if (err.code === 'P2025') {
+      return res.status(404).json({
+        error: `Referral with id ${referralId} not found.`,
+        code:  'REFERRAL_NOT_FOUND',
+      });
+    }
+    console.error('[PATCH /api/referrals/:id/status] Prisma error:', err.message);
     next(err);
   }
 });

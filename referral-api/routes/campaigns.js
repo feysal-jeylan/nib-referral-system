@@ -3,35 +3,26 @@
  * ----------------------------------
  * Router for all /api/campaigns endpoints.
  *
- * All routes in this file require:
+ * All routes require:
  *   1. authenticateToken  — a valid, unexpired JWT in the HttpOnly cookie.
- *   2. authorizeRole(['ADMIN']) — caller must be an ADMIN. AGENTs are blocked
- *      with 403 Forbidden. Campaigns are an admin-only configuration concern.
+ *   2. authorizeRole(['ADMIN']) — caller must be an ADMIN.
  *
  * Endpoints:
  *   POST   /api/campaigns              — Create a new campaign (status = 'DRAFT')
  *   POST   /api/campaigns/:id/rules    — Add a qualification rule to a campaign
  *   DELETE /api/campaigns/:id/rules/:ruleId — Remove a rule from a campaign
- *   PATCH  /api/campaigns/:id/activate — Transition campaign from DRAFT → ACTIVE
- *   PUT    /api/campaigns/:id          — Update campaign fields (V7)
- *   DELETE /api/campaigns/:id          — Delete a campaign (V7, DRAFT/ACTIVE only)
- *   GET    /api/campaigns              — List all campaigns with their rules (paginated)
+ *   PATCH  /api/campaigns/:id/activate — Transition campaign DRAFT -> ACTIVE
+ *   PUT    /api/campaigns/:id          — Update campaign fields (partial update)
+ *   DELETE /api/campaigns/:id          — Delete a campaign (blocked if has referrals)
+ *   GET    /api/campaigns              — List all campaigns with rules (paginated, Prisma)
  *   GET    /api/campaigns/:id/stats    — Referral count for a single campaign
  *
- * V6 additions per Task 4:
- *   - POST /api/campaigns now accepts: description, reward_threshold
- *   - POST /api/campaigns/:id/rules now accepts: operator
- *   - GET  /api/campaigns now returns: description, reward_threshold, is_active,
- *     and operator inside each rule object
+ * V8 (Prisma migration):
+ *   All raw pool.query() calls replaced with Prisma Client methods.
+ *   prisma.$transaction() used for the transactional DELETE.
  *
- * V7 additions per Task 3:
- *   - PUT    /api/campaigns/:id — update name, start_date, end_date, reward_value,
- *     description, reward_threshold (partial updates allowed)
- *   - DELETE /api/campaigns/:id — hard delete; blocked if campaign has referrals
- *
- * Per RULES.md §3 & §7:
- *   - All inputs validated before touching the DB.
- *   - All queries use parameterized form ($1, $2, ...) — NEVER string concat.
+ * Per RULES.md §2 & §3:
+ *   - Prisma uses parameterised queries internally — no string concatenation.
  *   - Raw DB errors are never sent to the client.
  *   - GET endpoints support pagination (?page=1&limit=20).
  */
@@ -39,16 +30,13 @@
 'use strict';
 
 const express = require('express');
-const pool    = require('../db');
 const prisma  = require('../db-prisma');
 const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// Convenience shorthand — every campaign route is ADMIN-only.
 const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 
-// Valid operator values (must match CHECK constraint in schema_v6_rule_engine.sql)
 const VALID_OPERATORS = [
   'GREATER_THAN',
   'LESS_THAN',
@@ -58,29 +46,12 @@ const VALID_OPERATORS = [
   'NOT_EQUALS',
 ];
 
-// Valid rule types supported by the rule engine (services/ruleEngine.js)
 const VALID_RULE_TYPES = ['MIN_DEPOSIT', 'ACCOUNT_TYPE'];
 
 
 // ---------------------------------------------------------------------------
 // POST /api/campaigns
-// Create a new campaign. Status always starts as 'DRAFT' — it must be
-// explicitly activated via PATCH /:id/activate once the admin is ready.
-//
-// Request body:
-//   {
-//     name, start_date, end_date, reward_type, reward_value,
-//     description?,       // optional text summary
-//     reward_threshold?   // optional integer min referrals
-//   }
-//
-// Success response — 201 Created:
-//   { campaign: { id, name, description, start_date, end_date, reward_type,
-//                 reward_value, reward_threshold, is_active, status, created_at } }
-//
-// Error responses:
-//   400 Bad Request  — missing or invalid fields
-//   500 Server Error — unexpected DB failure
+// Create a new campaign. Status always starts as 'DRAFT'.
 // ---------------------------------------------------------------------------
 router.post('/', ...adminOnly, async (req, res, next) => {
   try {
@@ -90,11 +61,10 @@ router.post('/', ...adminOnly, async (req, res, next) => {
       end_date,
       reward_type,
       reward_value,
-      description,       // optional
-      reward_threshold,  // optional integer
+      description,
+      reward_threshold,
     } = req.body;
 
-    // ── Input Validation ─────────────────────────────────────────────────────
     const missing = [];
     if (!name)         missing.push('name');
     if (!start_date)   missing.push('start_date');
@@ -113,45 +83,35 @@ router.post('/', ...adminOnly, async (req, res, next) => {
     const end   = new Date(end_date);
 
     if (isNaN(start.getTime())) {
-      return res.status(400).json({
-        error: 'Invalid start_date. Use ISO 8601 format (e.g., 2026-11-01T00:00:00Z).',
-        code:  'INVALID_START_DATE',
-      });
+      return res.status(400).json({ error: 'Invalid start_date. Use ISO 8601 format.', code: 'INVALID_START_DATE' });
     }
     if (isNaN(end.getTime())) {
-      return res.status(400).json({
-        error: 'Invalid end_date. Use ISO 8601 format (e.g., 2026-12-31T23:59:59Z).',
-        code:  'INVALID_END_DATE',
-      });
+      return res.status(400).json({ error: 'Invalid end_date. Use ISO 8601 format.', code: 'INVALID_END_DATE' });
     }
     if (end <= start) {
-      return res.status(400).json({
-        error: 'end_date must be after start_date.',
-        code:  'INVALID_DATE_RANGE',
-      });
+      return res.status(400).json({ error: 'end_date must be after start_date.', code: 'INVALID_DATE_RANGE' });
     }
 
-    // reward_threshold, if provided, must be a positive integer.
     const threshold = reward_threshold != null ? parseInt(reward_threshold, 10) : null;
     if (reward_threshold != null && (isNaN(threshold) || threshold < 0)) {
-      return res.status(400).json({
-        error: 'reward_threshold must be a non-negative integer.',
-        code:  'INVALID_REWARD_THRESHOLD',
-      });
+      return res.status(400).json({ error: 'reward_threshold must be a non-negative integer.', code: 'INVALID_REWARD_THRESHOLD' });
     }
 
-    // ── Database Insert ───────────────────────────────────────────────────────
-    const result = await pool.query(
-      `INSERT INTO campaigns
-         (name, description, start_date, end_date, reward_type, reward_value,
-          reward_threshold, is_active, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, 'DRAFT')
-       RETURNING id, name, description, start_date, end_date, reward_type, reward_value,
-                 reward_threshold, is_active, status, created_at`,
-      [name, description ?? null, start, end, reward_type, reward_value, threshold]
-    );
+    const campaign = await prisma.campaign.create({
+      data: {
+        name,
+        description:      description ?? null,
+        start_date:       start,
+        end_date:         end,
+        reward_type,
+        reward_value,
+        reward_threshold: threshold,
+        is_active:        true,
+        status:           'DRAFT',
+      },
+    });
 
-    return res.status(201).json({ campaign: result.rows[0] });
+    return res.status(201).json({ campaign });
 
   } catch (err) {
     next(err);
@@ -162,104 +122,57 @@ router.post('/', ...adminOnly, async (req, res, next) => {
 // ---------------------------------------------------------------------------
 // POST /api/campaigns/:id/rules
 // Add a qualification rule to an existing campaign.
-//
-// V6 update: now also accepts `operator` (required).
-//
-// Supported rule_types: MIN_DEPOSIT, ACCOUNT_TYPE
-// Supported operators:  GREATER_THAN, LESS_THAN, EQUALS,
-//                       GREATER_THAN_OR_EQUAL, LESS_THAN_OR_EQUAL, NOT_EQUALS
-//
-// Request body:
-//   {
-//     rule_type,   // 'MIN_DEPOSIT' | 'ACCOUNT_TYPE'
-//     operator,    // one of VALID_OPERATORS
-//     rule_value   // JSON object: { "amount": 5000 } or { "type": "SAVINGS" }
-//   }
-//
-// Success response — 201 Created:
-//   { rule: { id, campaign_id, rule_type, operator, rule_value } }
-//
-// Error responses:
-//   400 Bad Request  — missing fields, invalid operator, non-object rule_value
-//   404 Not Found    — campaign_id does not exist
-//   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
 router.post('/:id/rules', ...adminOnly, async (req, res, next) => {
   try {
     const campaignId = parseInt(req.params.id, 10);
     if (isNaN(campaignId)) {
-      return res.status(400).json({
-        error: 'Campaign ID must be a number.',
-        code:  'INVALID_CAMPAIGN_ID',
-      });
+      return res.status(400).json({ error: 'Campaign ID must be a number.', code: 'INVALID_CAMPAIGN_ID' });
     }
 
     const { rule_type, operator, rule_value } = req.body;
 
-    // ── Input Validation ─────────────────────────────────────────────────────
     if (!rule_type) {
-      return res.status(400).json({
-        error: 'Missing required field: rule_type.',
-        code:  'MISSING_FIELDS',
-      });
+      return res.status(400).json({ error: 'Missing required field: rule_type.', code: 'MISSING_FIELDS' });
     }
-
     if (!VALID_RULE_TYPES.includes(rule_type)) {
       return res.status(400).json({
         error: `Invalid rule_type "${rule_type}". Valid values: ${VALID_RULE_TYPES.join(', ')}.`,
         code:  'INVALID_RULE_TYPE',
       });
     }
-
-    // operator is required in V6
     if (!operator) {
-      return res.status(400).json({
-        error: 'Missing required field: operator.',
-        code:  'MISSING_FIELDS',
-      });
+      return res.status(400).json({ error: 'Missing required field: operator.', code: 'MISSING_FIELDS' });
     }
-
     if (!VALID_OPERATORS.includes(operator)) {
       return res.status(400).json({
         error: `Invalid operator "${operator}". Valid values: ${VALID_OPERATORS.join(', ')}.`,
         code:  'INVALID_OPERATOR',
       });
     }
-
     if (rule_value === undefined || rule_value === null) {
-      return res.status(400).json({
-        error: 'Missing required field: rule_value.',
-        code:  'MISSING_FIELDS',
-      });
+      return res.status(400).json({ error: 'Missing required field: rule_value.', code: 'MISSING_FIELDS' });
     }
     if (typeof rule_value !== 'object' || Array.isArray(rule_value)) {
-      return res.status(400).json({
-        error: 'rule_value must be a JSON object (e.g., { "amount": 5000 }).',
-        code:  'INVALID_RULE_VALUE',
-      });
+      return res.status(400).json({ error: 'rule_value must be a JSON object.', code: 'INVALID_RULE_VALUE' });
     }
 
-    // ── Verify campaign exists ────────────────────────────────────────────────
-    const campaignCheck = await pool.query(
-      'SELECT id, name, status FROM campaigns WHERE id = $1',
-      [campaignId]
-    );
-    if (campaignCheck.rows.length === 0) {
-      return res.status(404).json({
-        error: `Campaign with id ${campaignId} not found.`,
-        code:  'CAMPAIGN_NOT_FOUND',
-      });
+    // Verify campaign exists
+    const campaign = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { id: true } });
+    if (!campaign) {
+      return res.status(404).json({ error: `Campaign with id ${campaignId} not found.`, code: 'CAMPAIGN_NOT_FOUND' });
     }
 
-    // ── Database Insert ───────────────────────────────────────────────────────
-    const result = await pool.query(
-      `INSERT INTO campaign_rules (campaign_id, rule_type, operator, rule_value)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, campaign_id, rule_type, operator, rule_value`,
-      [campaignId, rule_type, operator, rule_value]
-    );
+    const rule = await prisma.campaignRule.create({
+      data: {
+        campaign_id: campaignId,
+        rule_type,
+        operator,
+        rule_value,
+      },
+    });
 
-    return res.status(201).json({ rule: result.rows[0] });
+    return res.status(201).json({ rule });
 
   } catch (err) {
     next(err);
@@ -270,17 +183,6 @@ router.post('/:id/rules', ...adminOnly, async (req, res, next) => {
 // ---------------------------------------------------------------------------
 // DELETE /api/campaigns/:id/rules/:ruleId
 // Remove a single rule from a campaign.
-//
-// Allows the Admin to correct a mistakenly added rule in the Rules Builder UI
-// without having to recreate the entire campaign.
-//
-// Success response — 200 OK:
-//   { message: "Rule deleted." }
-//
-// Error responses:
-//   400 Bad Request — invalid campaign or rule id
-//   404 Not Found   — rule does not exist for this campaign
-//   500 Server Error
 // ---------------------------------------------------------------------------
 router.delete('/:id/rules/:ruleId', ...adminOnly, async (req, res, next) => {
   try {
@@ -288,24 +190,16 @@ router.delete('/:id/rules/:ruleId', ...adminOnly, async (req, res, next) => {
     const ruleId     = parseInt(req.params.ruleId, 10);
 
     if (isNaN(campaignId) || isNaN(ruleId)) {
-      return res.status(400).json({
-        error: 'Campaign ID and Rule ID must be valid integers.',
-        code:  'INVALID_ID',
-      });
+      return res.status(400).json({ error: 'Campaign ID and Rule ID must be valid integers.', code: 'INVALID_ID' });
     }
 
-    const result = await pool.query(
-      `DELETE FROM campaign_rules
-       WHERE id = $1 AND campaign_id = $2
-       RETURNING id`,
-      [ruleId, campaignId]
-    );
+    // deleteMany with compound where — returns count; 0 means not found.
+    const { count } = await prisma.campaignRule.deleteMany({
+      where: { id: ruleId, campaign_id: campaignId },
+    });
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        error: `Rule ${ruleId} not found for campaign ${campaignId}.`,
-        code:  'RULE_NOT_FOUND',
-      });
+    if (count === 0) {
+      return res.status(404).json({ error: `Rule ${ruleId} not found for campaign ${campaignId}.`, code: 'RULE_NOT_FOUND' });
     }
 
     return res.status(200).json({ message: 'Rule deleted.' });
@@ -318,56 +212,36 @@ router.delete('/:id/rules/:ruleId', ...adminOnly, async (req, res, next) => {
 
 // ---------------------------------------------------------------------------
 // PATCH /api/campaigns/:id/activate
-// Transition a campaign from 'DRAFT' → 'ACTIVE'.
-//
-// Success response — 200 OK:
-//   { campaign: { id, name, status: 'ACTIVE', ... } }
-//
-// Error responses:
-//   400 Bad Request — campaign is not in 'DRAFT' status
-//   404 Not Found   — campaign_id does not exist
-//   500 Server Error
+// Transition a campaign from 'DRAFT' -> 'ACTIVE'.
 // ---------------------------------------------------------------------------
 router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
   try {
     const campaignId = parseInt(req.params.id, 10);
     if (isNaN(campaignId)) {
-      return res.status(400).json({
-        error: 'Campaign ID must be a number.',
-        code:  'INVALID_CAMPAIGN_ID',
-      });
+      return res.status(400).json({ error: 'Campaign ID must be a number.', code: 'INVALID_CAMPAIGN_ID' });
     }
 
-    const campaignCheck = await pool.query(
-      'SELECT id, name, status FROM campaigns WHERE id = $1',
-      [campaignId]
-    );
-    if (campaignCheck.rows.length === 0) {
-      return res.status(404).json({
-        error: `Campaign with id ${campaignId} not found.`,
-        code:  'CAMPAIGN_NOT_FOUND',
-      });
+    const existing = await prisma.campaign.findUnique({
+      where:  { id: campaignId },
+      select: { id: true, name: true, status: true },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: `Campaign with id ${campaignId} not found.`, code: 'CAMPAIGN_NOT_FOUND' });
     }
-
-    const campaign = campaignCheck.rows[0];
-
-    if (campaign.status !== 'DRAFT') {
+    if (existing.status !== 'DRAFT') {
       return res.status(400).json({
-        error: `Campaign "${campaign.name}" is already '${campaign.status}'. Only 'DRAFT' campaigns can be activated.`,
+        error: `Campaign "${existing.name}" is already '${existing.status}'. Only 'DRAFT' campaigns can be activated.`,
         code:  'INVALID_STATUS_TRANSITION',
       });
     }
 
-    const result = await pool.query(
-      `UPDATE campaigns
-       SET status = 'ACTIVE'
-       WHERE id = $1
-       RETURNING id, name, description, start_date, end_date, reward_type, reward_value,
-                 reward_threshold, is_active, status, created_at`,
-      [campaignId]
-    );
+    const campaign = await prisma.campaign.update({
+      where: { id: campaignId },
+      data:  { status: 'ACTIVE' },
+    });
 
-    return res.status(200).json({ campaign: result.rows[0] });
+    return res.status(200).json({ campaign });
 
   } catch (err) {
     next(err);
@@ -376,55 +250,25 @@ router.patch('/:id/activate', ...adminOnly, async (req, res, next) => {
 
 
 // ---------------------------------------------------------------------------
-// PUT /api/campaigns/:id   (V7)
-// Update editable fields on an existing campaign.
-//
-// Accepts a partial body — only provided fields are updated. Fields not
-// included in the body are left unchanged (COALESCE pattern).
-//
-// Editable fields:
-//   name, start_date, end_date, reward_value, description, reward_threshold
-//
-// NOT editable via this endpoint:
-//   reward_type — changing reward type on an existing campaign could break
-//                 referral calculations; requires a new campaign.
-//   status      — use PATCH /:id/activate for status transitions.
-//   is_active   — reserved for future deactivation endpoint.
-//
-// Success response — 200 OK:
-//   { campaign: { id, name, description, start_date, end_date, reward_type,
-//                 reward_value, reward_threshold, is_active, status, created_at } }
-//
-// Error responses:
-//   400 Bad Request — invalid id or date validation fails
-//   404 Not Found   — campaign not found
-//   500 Server Error
+// PUT /api/campaigns/:id
+// Partial update of editable campaign fields.
 // ---------------------------------------------------------------------------
 router.put('/:id', ...adminOnly, async (req, res, next) => {
   try {
     const campaignId = parseInt(req.params.id, 10);
     if (isNaN(campaignId)) {
-      return res.status(400).json({
-        error: 'Campaign ID must be a number.',
-        code:  'INVALID_CAMPAIGN_ID',
-      });
+      return res.status(400).json({ error: 'Campaign ID must be a number.', code: 'INVALID_CAMPAIGN_ID' });
     }
 
-    // Verify campaign exists first
-    const existing = await pool.query(
-      'SELECT id, name, start_date, end_date, reward_value, description, reward_threshold FROM campaigns WHERE id = $1',
-      [campaignId]
-    );
-    if (existing.rows.length === 0) {
-      return res.status(404).json({
-        error: `Campaign with id ${campaignId} not found.`,
-        code:  'CAMPAIGN_NOT_FOUND',
-      });
+    const curr = await prisma.campaign.findUnique({
+      where:  { id: campaignId },
+      select: { name: true, start_date: true, end_date: true, reward_value: true, description: true, reward_threshold: true },
+    });
+
+    if (!curr) {
+      return res.status(404).json({ error: `Campaign with id ${campaignId} not found.`, code: 'CAMPAIGN_NOT_FOUND' });
     }
 
-    const curr = existing.rows[0];
-
-    // Merge incoming values with current values (partial update)
     const {
       name          = curr.name,
       start_date    = curr.start_date,
@@ -434,151 +278,91 @@ router.put('/:id', ...adminOnly, async (req, res, next) => {
       reward_threshold,
     } = req.body;
 
-    // Date validation (only if dates were provided)
     const start = new Date(start_date);
     const end   = new Date(end_date);
 
-    if (isNaN(start.getTime())) {
-      return res.status(400).json({
-        error: 'Invalid start_date. Use ISO 8601 format.',
-        code:  'INVALID_START_DATE',
-      });
-    }
-    if (isNaN(end.getTime())) {
-      return res.status(400).json({
-        error: 'Invalid end_date. Use ISO 8601 format.',
-        code:  'INVALID_END_DATE',
-      });
-    }
-    if (end <= start) {
-      return res.status(400).json({
-        error: 'end_date must be after start_date.',
-        code:  'INVALID_DATE_RANGE',
-      });
-    }
+    if (isNaN(start.getTime())) return res.status(400).json({ error: 'Invalid start_date.', code: 'INVALID_START_DATE' });
+    if (isNaN(end.getTime()))   return res.status(400).json({ error: 'Invalid end_date.',   code: 'INVALID_END_DATE' });
+    if (end <= start)           return res.status(400).json({ error: 'end_date must be after start_date.', code: 'INVALID_DATE_RANGE' });
+    if (!String(name).trim())   return res.status(400).json({ error: 'name cannot be empty.', code: 'MISSING_FIELDS' });
+    if (!String(reward_value).trim()) return res.status(400).json({ error: 'reward_value cannot be empty.', code: 'MISSING_FIELDS' });
 
-    if (!name || !String(name).trim()) {
-      return res.status(400).json({
-        error: 'name cannot be empty.',
-        code:  'MISSING_FIELDS',
-      });
-    }
-    if (!reward_value || !String(reward_value).trim()) {
-      return res.status(400).json({
-        error: 'reward_value cannot be empty.',
-        code:  'MISSING_FIELDS',
-      });
-    }
-
-    // reward_threshold: use provided value, or fall back to existing
     const threshold = reward_threshold !== undefined
       ? (reward_threshold != null ? parseInt(reward_threshold, 10) : null)
       : curr.reward_threshold;
 
     if (threshold !== null && (isNaN(threshold) || threshold < 0)) {
-      return res.status(400).json({
-        error: 'reward_threshold must be a non-negative integer or null.',
-        code:  'INVALID_REWARD_THRESHOLD',
-      });
+      return res.status(400).json({ error: 'reward_threshold must be a non-negative integer or null.', code: 'INVALID_REWARD_THRESHOLD' });
     }
 
-    const result = await pool.query(
-      `UPDATE campaigns
-       SET name             = $1,
-           start_date       = $2,
-           end_date         = $3,
-           reward_value     = $4,
-           description      = $5,
-           reward_threshold = $6
-       WHERE id = $7
-       RETURNING id, name, description, start_date, end_date, reward_type, reward_value,
-                 reward_threshold, is_active, status, created_at`,
-      [String(name).trim(), start, end, String(reward_value).trim(), description ?? null, threshold, campaignId]
-    );
+    const campaign = await prisma.campaign.update({
+      where: { id: campaignId },
+      data: {
+        name:             String(name).trim(),
+        start_date:       start,
+        end_date:         end,
+        reward_value:     String(reward_value).trim(),
+        description:      description ?? null,
+        reward_threshold: threshold,
+      },
+    });
 
-    return res.status(200).json({ campaign: result.rows[0] });
+    return res.status(200).json({ campaign });
 
   } catch (err) {
+    if (err.code === 'P2025') {
+      return res.status(404).json({ error: `Campaign not found.`, code: 'CAMPAIGN_NOT_FOUND' });
+    }
     next(err);
   }
 });
 
 
 // ---------------------------------------------------------------------------
-// DELETE /api/campaigns/:id   (V7)
+// DELETE /api/campaigns/:id
 // Hard-delete a campaign and all its rules.
-//
-// Safety guard: If the campaign already has referrals linked to it, deletion
-// is blocked (409 Conflict). This preserves data integrity — you cannot delete
-// a campaign that is part of the audit trail for real referral events.
-//
-// Success response — 200 OK:
-//   { message: "Campaign deleted." }
-//
-// Error responses:
-//   400 Bad Request — invalid id
-//   404 Not Found   — campaign not found
-//   409 Conflict    — campaign has referrals; cannot delete
-//   500 Server Error
+// Blocked if the campaign has any referrals linked to it.
 // ---------------------------------------------------------------------------
 router.delete('/:id', ...adminOnly, async (req, res, next) => {
   try {
     const campaignId = parseInt(req.params.id, 10);
     if (isNaN(campaignId)) {
-      return res.status(400).json({
-        error: 'Campaign ID must be a number.',
-        code:  'INVALID_CAMPAIGN_ID',
-      });
+      return res.status(400).json({ error: 'Campaign ID must be a number.', code: 'INVALID_CAMPAIGN_ID' });
     }
 
-    // Verify campaign exists
-    const campaignCheck = await pool.query(
-      'SELECT id, name FROM campaigns WHERE id = $1',
-      [campaignId]
-    );
-    if (campaignCheck.rows.length === 0) {
-      return res.status(404).json({
-        error: `Campaign with id ${campaignId} not found.`,
-        code:  'CAMPAIGN_NOT_FOUND',
-      });
+    const campaign = await prisma.campaign.findUnique({
+      where:  { id: campaignId },
+      select: { id: true, name: true },
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ error: `Campaign with id ${campaignId} not found.`, code: 'CAMPAIGN_NOT_FOUND' });
     }
 
-    const campaignName = campaignCheck.rows[0].name;
-
-    // Safety guard: block deletion if referrals exist for this campaign
-    const referralCheck = await pool.query(
-      'SELECT COUNT(*) AS total FROM referrals WHERE campaign_id = $1',
-      [campaignId]
-    );
-    const referralCount = parseInt(referralCheck.rows[0].total, 10);
-
+    // Safety guard: block deletion if referrals are linked to this campaign.
+    const referralCount = await prisma.referral.count({ where: { campaign_id: campaignId } });
     if (referralCount > 0) {
       return res.status(409).json({
-        error: `Cannot delete campaign "${campaignName}" — it has ${referralCount} referral(s) linked to it. ` +
-               `Deleting it would corrupt the referral audit trail.`,
+        error: `Cannot delete campaign "${campaign.name}" — it has ${referralCount} referral(s) linked to it.`,
         code:  'CAMPAIGN_HAS_REFERRALS',
       });
     }
 
-    // Delete rules first (foreign key constraint), then the campaign itself.
-    // Both happen in a transaction so we never leave orphaned rules.
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('DELETE FROM campaign_rules WHERE campaign_id = $1', [campaignId]);
-      await client.query('DELETE FROM campaigns WHERE id = $1', [campaignId]);
-      await client.query('COMMIT');
-    } catch (txErr) {
-      await client.query('ROLLBACK');
-      throw txErr;
-    } finally {
-      client.release();
-    }
+    // Delete rules first (FK cascade), then the campaign — both in one transaction.
+    // campaign_rules has ON DELETE CASCADE in the DB schema, but we are explicit here
+    // for clarity and to guarantee atomicity at the application layer.
+    await prisma.$transaction([
+      prisma.campaignRule.deleteMany({ where: { campaign_id: campaignId } }),
+      prisma.campaign.delete({ where: { id: campaignId } }),
+    ]);
 
-    console.log(`[campaigns] Campaign "${campaignName}" (id=${campaignId}) deleted by admin.`);
-    return res.status(200).json({ message: `Campaign "${campaignName}" deleted.` });
+    console.log(`[campaigns] Campaign "${campaign.name}" (id=${campaignId}) deleted by admin.`);
+    return res.status(200).json({ message: `Campaign "${campaign.name}" deleted.` });
 
   } catch (err) {
+    if (err.code === 'P2025') {
+      return res.status(404).json({ error: 'Campaign not found.', code: 'CAMPAIGN_NOT_FOUND' });
+    }
     next(err);
   }
 });
@@ -586,57 +370,26 @@ router.delete('/:id', ...adminOnly, async (req, res, next) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/campaigns
-// List all campaigns with their rules aggregated as a JSON array.
-//
-// V6 update: includes description, reward_threshold, is_active in campaign rows
-// and operator inside each rule object.
-//
-// Supports pagination per RULES.md §7:
-//   ?page=1&limit=20   (defaults: page=1, limit=20)
-//
-// Success response — 200 OK:
-//   {
-//     "total": 5,
-//     "page": 1,
-//     "limit": 20,
-//     "campaigns": [
-//       {
-//         "id": 1, "name": "Q4 Savings Drive", "status": "ACTIVE",
-//         "description": "...", "reward_threshold": 5, "is_active": true,
-//         "rules": [
-//           { "id": 1, "rule_type": "MIN_DEPOSIT", "operator": "GREATER_THAN_OR_EQUAL",
-//             "rule_value": { "amount": 5000 } }
-//         ]
-//       }
-//     ]
-//   }
+// List all campaigns with their rules aggregated (paginated).
+// Uses Prisma with include: { rules: true }.
+// Response shape: { total, page, limit, campaigns: [...] }
 // ---------------------------------------------------------------------------
 router.get('/', ...adminOnly, async (req, res, next) => {
   try {
-    // ── Pagination ────────────────────────────────────────────────────────────
     const page  = Math.max(1, parseInt(req.query.page,  10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const skip  = (page - 1) * limit;
 
-    // ── Count + data fetched in a single Prisma interactive transaction ───────
-    // prisma.$transaction([]) batches both queries into one DB round-trip.
     const [total, rows] = await prisma.$transaction([
       prisma.campaign.count(),
       prisma.campaign.findMany({
         skip,
         take:    limit,
         orderBy: { created_at: 'desc' },
-        // Nest campaign_rules under the `rules` key — matches the old raw-SQL
-        // `json_agg` shape that the frontend already expects.
         include: { rules: true },
       }),
     ]);
 
-    // ── Shape response to match the existing raw-SQL format ──────────────────
-    // Prisma returns DateTime fields as JS Date objects; JSON.stringify converts
-    // them to ISO strings automatically — same format as pg driver rows.
-    // `rules` is already nested correctly by `include: { rules: true }`.
-    // `Number(total)` coerces BigInt (returned by count() in some builds).
     return res.status(200).json({
       total:     Number(total),
       page,
@@ -653,40 +406,29 @@ router.get('/', ...adminOnly, async (req, res, next) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/campaigns/:id/stats
-// Return aggregate statistics for a single campaign.
-//
-// Success response — 200 OK:
-//   { "campaign_id": 1, "total_referrals": 42 }
+// Referral count for a single campaign.
 // ---------------------------------------------------------------------------
 router.get('/:id/stats', ...adminOnly, async (req, res, next) => {
   try {
     const campaignId = parseInt(req.params.id, 10);
     if (isNaN(campaignId)) {
-      return res.status(400).json({
-        error: 'Campaign ID must be a number.',
-        code:  'INVALID_CAMPAIGN_ID',
-      });
+      return res.status(400).json({ error: 'Campaign ID must be a number.', code: 'INVALID_CAMPAIGN_ID' });
     }
 
-    const campaignCheck = await pool.query(
-      'SELECT id FROM campaigns WHERE id = $1',
-      [campaignId]
-    );
-    if (campaignCheck.rows.length === 0) {
-      return res.status(404).json({
-        error: `Campaign with id ${campaignId} not found.`,
-        code:  'CAMPAIGN_NOT_FOUND',
-      });
+    const campaign = await prisma.campaign.findUnique({
+      where:  { id: campaignId },
+      select: { id: true },
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ error: `Campaign with id ${campaignId} not found.`, code: 'CAMPAIGN_NOT_FOUND' });
     }
 
-    const statsResult = await pool.query(
-      'SELECT COUNT(*) AS total_referrals FROM referrals WHERE campaign_id = $1',
-      [campaignId]
-    );
+    const totalReferrals = await prisma.referral.count({ where: { campaign_id: campaignId } });
 
     return res.status(200).json({
       campaign_id:     campaignId,
-      total_referrals: parseInt(statsResult.rows[0].total_referrals, 10),
+      total_referrals: totalReferrals,
     });
 
   } catch (err) {

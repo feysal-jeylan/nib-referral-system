@@ -29,7 +29,7 @@ const crypto  = require('crypto');
 const express = require('express');
 const bcrypt  = require('bcrypt');
 const jwt     = require('jsonwebtoken');
-const pool    = require('../db');
+const prisma  = require('../db-prisma');
 const { authenticateToken } = require('../middleware/authMiddleware');
 
 const router = express.Router();
@@ -104,22 +104,27 @@ router.post('/login', async (req, res, next) => {
   try {
     // ── Step 2: Look up the user by username ─────────────────────────────────
     // Now also fetches must_change_password so we can include it in the JWT.
-    const result = await pool.query(
-      'SELECT id, username, password_hash, role, agent_id, must_change_password FROM users WHERE username = $1',
-      [username]
-    );
+    const user = await prisma.user.findUnique({
+      where:  { username },
+      select: {
+        id:                   true,
+        username:             true,
+        password_hash:        true,
+        role:                 true,
+        agent_id:             true,
+        must_change_password: true,
+      },
+    });
 
     // ── Step 3: Guard — user not found ──────────────────────────────────────
     // Same generic error for both "not found" and "wrong password" — prevents
     // username enumeration attacks.
-    if (result.rows.length === 0) {
+    if (!user) {
       return res.status(401).json({
         error: 'Invalid username or password.',
         code:  'INVALID_CREDENTIALS',
       });
     }
-
-    const user = result.rows[0];
 
     // ── Step 4: Compare password against bcrypt hash ─────────────────────────
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
@@ -205,19 +210,22 @@ router.get('/me', async (req, res, next) => {
     // Fetch fresh user info from the DB — including must_change_password.
     // This ensures: (a) the user account still exists, and (b) if an admin
     // forcibly reset the flag in the DB, it is reflected here immediately.
-    const result = await pool.query(
-      'SELECT id, username, role, must_change_password FROM users WHERE id = $1',
-      [decoded.id]
-    );
+    const user = await prisma.user.findUnique({
+      where:  { id: decoded.id },
+      select: {
+        id:                   true,
+        username:             true,
+        role:                 true,
+        must_change_password: true,
+      },
+    });
 
-    if (result.rows.length === 0) {
+    if (!user) {
       return res.status(401).json({
         error: 'User account no longer exists.',
         code:  'USER_NOT_FOUND',
       });
     }
-
-    const user = result.rows[0];
 
     return res.status(200).json({
       id:                   user.id,
@@ -296,25 +304,29 @@ router.post('/change-password', authenticateToken, async (req, res, next) => {
   }
 
   try {
-    // ── Step 2: Re-read must_change_password from DB ───────────────────────
+    // ── Step 2: Re-read user from DB ──────────────────────────────────────
     //
     // We NEVER rely solely on the JWT claim for security decisions.
     // Reading the DB ensures that:
     //   (a) A crafted JWT with must_change_password=false cannot skip this step.
     //   (b) The account still exists.
-    const check = await pool.query(
-      'SELECT id, username, role, agent_id, must_change_password FROM users WHERE id = $1',
-      [req.user.id]
-    );
+    const user = await prisma.user.findUnique({
+      where:  { id: req.user.id },
+      select: {
+        id:                   true,
+        username:             true,
+        role:                 true,
+        agent_id:             true,
+        must_change_password: true,
+      },
+    });
 
-    if (check.rows.length === 0) {
+    if (!user) {
       return res.status(404).json({
         error: 'User account not found.',
         code:  'USER_NOT_FOUND',
       });
     }
-
-    const user = check.rows[0];
 
     // ── Step 3: Hash the new password ────────────────────────────────────
     // saltRounds=12: each +1 doubles the work factor. 12 is appropriate for
@@ -325,10 +337,10 @@ router.post('/change-password', authenticateToken, async (req, res, next) => {
     // ── Step 4: Update the DB atomically ─────────────────────────────────
     // Overwrite the old hash AND flip the flag in a single UPDATE so there is
     // no window where the new hash is saved but the flag is still TRUE.
-    await pool.query(
-      'UPDATE users SET password_hash = $1, must_change_password = FALSE WHERE id = $2',
-      [newHash, user.id]
-    );
+    await prisma.user.update({
+      where: { id: user.id },
+      data:  { password_hash: newHash, must_change_password: false },
+    });
 
     // ── Step 5: Issue a fresh JWT with must_change_password = false ────────
     //

@@ -3,24 +3,28 @@
  * ------------------------------
  * Router for all /api/agents endpoints.
  *
- * Current endpoints (V5):
- *   POST /api/agents/apply       — PUBLIC: submit a self-registration application.
- *   GET  /api/agents             — List agents (ADMIN: all, AGENT: own row only).
- *   POST /api/agents             — Create a new approved agent + user account (ADMIN only, transactional).
- *   PATCH /api/agents/:id/approve — Approve a PENDING agent; generate referral code + user account (ADMIN only).
+ * V8 (Prisma migration):
+ *   All raw pool.query() / pool.connect() calls replaced with Prisma Client
+ *   methods. Transactional multi-table writes use prisma.$transaction().
+ *   The reward_rules table is not in the Prisma schema (legacy table from
+ *   schema.sql); it is accessed via prisma.$queryRaw where needed.
+ *
+ * Endpoints:
+ *   POST /api/agents/apply        — PUBLIC: submit a self-registration application.
+ *   GET  /api/agents              — List agents (ADMIN: all, AGENT: own row only).
+ *   POST /api/agents              — Create a new approved agent + user (ADMIN only).
+ *   PATCH /api/agents/:id/approve — Approve a PENDING agent (ADMIN only).
  *   PATCH /api/agents/:id/reject  — Reject a PENDING agent (ADMIN only).
- *   GET  /api/agents/:id/stats   — Get a single agent's referral count and reward tier.
+ *   GET  /api/agents/:id/stats   — Agent referral count and reward tier.
  *
  * ROUTE ORDER MATTERS:
- *   Express matches routes in declaration order.  Literal-path routes like
- *   POST /apply must be declared BEFORE parameterised routes like PATCH /:id/*
- *   so Express does not try to parse "apply" as an integer ID.
+ *   Literal-path routes like POST /apply must be declared BEFORE parameterised
+ *   routes like PATCH /:id/* so Express parses "apply" correctly.
  *
  * Per RULES.md:
- *   - All inputs are validated server-side before touching the database.
- *   - All queries use parameterized form ($1, $2, ...) — never string concatenation.
- *   - Raw DB errors are never sent to the client.
- *   - Multi-table writes are wrapped in a transaction (BEGIN / COMMIT / ROLLBACK).
+ *   - Prisma handles parameterisation — no string concatenation ever.
+ *   - Raw DB/Prisma errors are never sent to the client.
+ *   - Multi-table writes are wrapped in prisma.$transaction().
  */
 
 'use strict';
@@ -28,7 +32,6 @@
 const crypto  = require('crypto');
 const express = require('express');
 const bcrypt  = require('bcrypt');
-const pool    = require('../db');
 const prisma  = require('../db-prisma');
 const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
 
@@ -36,12 +39,6 @@ const router = express.Router();
 
 // ---------------------------------------------------------------------------
 // Helper: generate a unique referral code in the format NIB-XXXXXX
-//
-// Math.random().toString(36) converts a random float to base-36 (0-9, a-z).
-// .substring(2, 8) takes 6 characters after the "0." prefix.
-// .toUpperCase() makes it look professional (NIB-A1B2C3).
-//
-// Collision probability with 6 base-36 chars = 1 in ~2.1 billion — fine for MVP.
 // ---------------------------------------------------------------------------
 function generateReferralCode() {
   const random = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -51,15 +48,8 @@ function generateReferralCode() {
 // ---------------------------------------------------------------------------
 // POST /api/agents/apply  — PUBLIC (no auth required)
 //
-// Allows anyone on the internet to submit an application to become a Nib
-// referral agent.  The application lands in the agents table with
-// status = 'PENDING' and referral_code = NULL.  An Admin must explicitly
-// approve (PATCH /:id/approve) before the applicant can log in.
-//
-// Why no auth here?
-//   This is the entry point for strangers — they have no account yet, so they
-//   cannot have a JWT.  The endpoint is intentionally public.  No sensitive
-//   data is returned, and the DB uniqueness constraints prevent abuse.
+// Allows anyone to submit an application to become a Nib referral agent.
+// Status = 'PENDING'; referral_code = null. Admin must approve before login.
 //
 // Request body (JSON):
 //   { "name": "Sara Tesfaye", "phone": "0912345678", "email": "sara@example.com" }
@@ -68,17 +58,15 @@ function generateReferralCode() {
 //   { "message": "Application submitted. Awaiting Admin approval." }
 //
 // Error responses:
-//   400 Bad Request  — missing or invalid fields
-//   409 Conflict     — phone or email already registered
-//   500 Server Error — unexpected DB failure
+//   400 Bad Request — missing or invalid fields
+//   409 Conflict   — phone or email already registered
+//   500 Server Error
 // ---------------------------------------------------------------------------
 router.post('/apply', async (req, res, next) => {
-  // ── Step 1: Extract and sanitise inputs ──────────────────────────────────
   const name  = req.body.name?.trim();
   const phone = req.body.phone?.trim();
   const email = req.body.email?.trim()?.toLowerCase();
 
-  // ── Step 2: Validate ─────────────────────────────────────────────────────
   if (!name || !phone || !email) {
     return res.status(400).json({
       error: 'All fields are required: name, phone, email.',
@@ -93,43 +81,40 @@ router.post('/apply', async (req, res, next) => {
     });
   }
 
-  // ── Step 3: Insert the application ───────────────────────────────────────
-  //
-  // status defaults to 'PENDING' via the column DEFAULT set in the V5 migration.
-  // referral_code is NULL — generated only on approval.
-  // No users row is created yet; the applicant cannot log in until approved.
   try {
-    await pool.query(
-      `INSERT INTO agents (name, phone, email, referral_code, status)
-       VALUES ($1, $2, $3, NULL, 'PENDING')`,
-      [name, phone, email]
-    );
+    await prisma.agent.create({
+      data: {
+        name,
+        phone,
+        email,
+        status:       'PENDING',
+        referral_code: null,
+      },
+    });
 
     return res.status(201).json({
       message: 'Application submitted. Awaiting Admin approval.',
     });
 
   } catch (err) {
-    // 23505 = unique_violation (phone or email already exists)
-    if (err.code === '23505') {
+    // P2002 = unique constraint violation (phone or email already exists)
+    if (err.code === 'P2002') {
       return res.status(409).json({
         error: 'An agent with this phone number or email already exists.',
         code:  'DUPLICATE_ENTRY',
       });
     }
-    console.error('[POST /api/agents/apply] Unexpected DB error:', err.message);
+    console.error('[POST /api/agents/apply] Prisma error:', err.message);
     next(err);
   }
 });
 
 // ---------------------------------------------------------------------------
-// GET /api/agents
-// Return every agent together with their SUCCESSFUL referral count,
-// the highest reward tier they currently qualify for, and their status.
+// GET /api/agents  — authenticated (any role)
 //
 // RBAC filtering:
 //   ADMIN  → returns ALL agents (all statuses).
-//   AGENT  → returns ONLY the row for their own agent_id (req.user.agent_id).
+//   AGENT  → returns ONLY the row for their own agent_id.
 //
 // Success response — 200 OK (array, newest agent first):
 //   [
@@ -145,50 +130,45 @@ router.post('/apply', async (req, res, next) => {
 //     },
 //     ...
 //   ]
-//
-// Error responses:
-//   500 Server Error — unexpected DB failure
 // ---------------------------------------------------------------------------
 router.get('/', authenticateToken, async (req, res, next) => {
   try {
-    // ── RBAC: build Prisma `where` clause based on caller's role ─────────────
-    // ADMIN → no filter (see all agents of every status)
-    // AGENT → filter to their own row only (req.user.agent_id)
+    // ── RBAC: Prisma `where` clause ───────────────────────────────────────────
     const where = req.user.role === 'AGENT'
       ? { id: req.user.agent_id }
       : {};
 
-    // ── Fetch agents + their referrals using Prisma ───────────────────────────
-    // We include referrals so we can count SUCCESSFUL ones in JS — this avoids
-    // a raw SQL subquery and keeps the RBAC filter clean in Prisma's `where`.
+    // ── Fetch agents + referral status counts via Prisma ─────────────────────
     const agents = await prisma.agent.findMany({
       where,
       orderBy: { created_at: 'desc' },
       include: {
         referrals: {
-          select: { status: true }, // only need status for counting
+          select: { status: true }, // only status needed for counting
         },
       },
     });
 
-    // ── Compute successful_referrals count and look up reward tier ────────────
-    // reward_rules table is NOT in the Prisma schema (it's a legacy table from
-    // schema.sql).  We fetch all tiers once and apply them in JS to avoid N+1.
-    const tiersResult = await pool.query(
-      'SELECT reward_name, min_referrals FROM reward_rules ORDER BY min_referrals ASC'
-    );
-    const tiers = tiersResult.rows; // [{ reward_name, min_referrals }, ...]
+    // ── Fetch reward tiers once — reward_rules is not in Prisma schema ────────
+    // We use $queryRaw with a tagged-template literal (Prisma.sql`...`)
+    // which is fully parameterised (no injection risk even with $queryRaw).
+    const tiers = await prisma.$queryRaw`
+      SELECT reward_name, min_referrals
+      FROM   reward_rules
+      ORDER  BY min_referrals ASC
+    `;
 
-    // Helper: find the highest qualifying reward tier for a referral count.
+    // Helper: find the highest qualifying reward tier for a count.
     const getRewardTier = (count) => {
       let tier = null;
       for (const t of tiers) {
-        if (count >= t.min_referrals) tier = t.reward_name;
+        // $queryRaw returns BigInt for integer columns in some Prisma versions
+        if (count >= Number(t.min_referrals)) tier = t.reward_name;
       }
       return tier;
     };
 
-    // ── Shape the response to match the existing raw-SQL format ───────────────
+    // ── Shape response to match existing format ───────────────────────────────
     const shaped = agents.map(agent => {
       const successfulCount = agent.referrals.filter(r => r.status === 'SUCCESSFUL').length;
       return {
@@ -215,36 +195,24 @@ router.get('/', authenticateToken, async (req, res, next) => {
 // POST /api/agents  — ADMIN only
 //
 // Create a new APPROVED agent with a linked user account in a single
-// transaction.  The Admin hands the temp_password to the new agent
-// out-of-band (it is shown in the success response and logged to the server
-// terminal — in production it would be emailed via SendGrid / SES).
+// transaction. Admin hands the temp_password to the new agent out-of-band.
 //
 // Request body (JSON):
 //   { "name": "Abebe Kebede", "phone": "0911234567", "email": "abebe@nib.com" }
 //
 // Success response — 201 Created:
-//   {
-//     "id":            1,
-//     "name":          "Abebe Kebede",
-//     "referral_code": "NIB-X7KP2A",
-//     "status":        "APPROVED",
-//     "created_at":    "2026-10-27T...",
-//     "message":       "Agent created. Temporary credentials ...",
-//     "temp_password": "a3f8..."
-//   }
+//   { id, name, referral_code, status, created_at, message, temp_password }
 //
 // Error responses:
 //   400 Bad Request  — missing or invalid fields
 //   409 Conflict     — phone or email already exists
-//   500 Server Error — unexpected DB failure
+//   500 Server Error
 // ---------------------------------------------------------------------------
 router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
-  // ── Step 1: Extract and trim inputs ────────────────────────────────────────
   const name  = req.body.name?.trim();
   const phone = req.body.phone?.trim();
   const email = req.body.email?.trim();
 
-  // ── Step 2: Validate ─────────────────────────────────────────────────────
   if (!name || !phone || !email) {
     return res.status(400).json({
       error: 'All fields are required: name, phone, email.',
@@ -259,38 +227,39 @@ router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, n
     });
   }
 
-  // ── Step 3: Generate referral code and temp password ──────────────────────
-  const referralCode  = generateReferralCode();
-  const tempPassword  = crypto.randomBytes(16).toString('hex');
-  const passwordHash  = await bcrypt.hash(tempPassword, 12);
+  const referralCode = generateReferralCode();
+  const tempPassword = crypto.randomBytes(16).toString('hex');
+  const passwordHash = await bcrypt.hash(tempPassword, 12);
 
   console.log(`[AGENT ONBOARDING] Temp password for ${email}: ${tempPassword}`);
-  console.log(`[AGENT ONBOARDING] ⚠️  This should be delivered via secure email, not stored anywhere.`);
-
-  // ── Step 4: Transaction — agents + users must succeed together ────────────
-  const client = await pool.connect();
+  console.log(`[AGENT ONBOARDING] ⚠️  This should be delivered via secure email.`);
 
   try {
-    await client.query('BEGIN');
+    // prisma.$transaction() — both inserts succeed or both roll back.
+    const newAgent = await prisma.$transaction(async (tx) => {
+      const agent = await tx.agent.create({
+        data: {
+          name,
+          phone,
+          email,
+          referral_code: referralCode,
+          status:        'APPROVED',
+        },
+        select: { id: true, name: true, referral_code: true, status: true, created_at: true },
+      });
 
-    // INSERT into agents with status = 'APPROVED' (admin-created agents are
-    // immediately active — they do not go through the PENDING approval flow).
-    const agentResult = await client.query(
-      `INSERT INTO agents (name, phone, email, referral_code, status)
-       VALUES ($1, $2, $3, $4, 'APPROVED')
-       RETURNING id, name, referral_code, status, created_at`,
-      [name, phone, email, referralCode]
-    );
-    const newAgent = agentResult.rows[0];
+      await tx.user.create({
+        data: {
+          username:             email,
+          password_hash:        passwordHash,
+          role:                 'AGENT',
+          agent_id:             agent.id,
+          must_change_password: true,
+        },
+      });
 
-    // CREATE the login account linked to the new agent.
-    await client.query(
-      `INSERT INTO users (username, password_hash, role, agent_id)
-       VALUES ($1, $2, 'AGENT', $3)`,
-      [email, passwordHash, newAgent.id]
-    );
-
-    await client.query('COMMIT');
+      return agent;
+    });
 
     return res.status(201).json({
       id:            newAgent.id,
@@ -303,14 +272,13 @@ router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, n
     });
 
   } catch (err) {
-    await client.query('ROLLBACK');
-
-    if (err.code === '23505') {
+    if (err.code === 'P2002') {
       let field = 'phone or email';
-      if (err.constraint && err.constraint.includes('phone'))         field = 'phone number';
-      if (err.constraint && err.constraint.includes('email'))         field = 'email address';
-      if (err.constraint && err.constraint.includes('referral_code')) field = 'referral code';
-      if (err.constraint && err.constraint.includes('username'))      field = 'email (user account)';
+      const target = err.meta?.target ?? '';
+      if (String(target).includes('phone'))         field = 'phone number';
+      if (String(target).includes('email'))         field = 'email address';
+      if (String(target).includes('referral_code')) field = 'referral code';
+      if (String(target).includes('username'))      field = 'email (user account)';
 
       return res.status(409).json({
         error: `An agent with this ${field} already exists.`,
@@ -318,43 +286,19 @@ router.post('/', authenticateToken, authorizeRole(['ADMIN']), async (req, res, n
       });
     }
 
-    console.error('[POST /api/agents] Unexpected DB error:', err.message);
+    console.error('[POST /api/agents] Prisma error:', err.message);
     next(err);
-
-  } finally {
-    client.release();
   }
 });
 
 // ---------------------------------------------------------------------------
 // PATCH /api/agents/:id/approve  — ADMIN only
 //
-// Approves a PENDING agent application.
-//
-// What this endpoint does:
-//   1. Validates the ID.
-//   2. Fetches the agent row (needs email for the users INSERT).
-//   3. Generates a referral code if the agent doesn't already have one.
-//   4. In a single transaction:
-//        a. Sets status = 'APPROVED' and writes referral_code.
-//        b. Creates a users row (username = email, role = 'AGENT').
-//   5. Returns the updated agent data + temp_password for the Admin to hand
-//      to the newly approved agent.
+// Approves a PENDING agent: sets status='APPROVED', assigns a referral code,
+// and creates a user login account. Both updates are in one transaction.
 //
 // Success response — 200 OK:
-//   {
-//     "id":            3,
-//     "name":          "Sara Tesfaye",
-//     "referral_code": "NIB-K9MX2P",
-//     "status":        "APPROVED",
-//     "temp_password": "b4a9..."
-//   }
-//
-// Error responses:
-//   400 Bad Request  — ID not an integer
-//   404 Not Found    — no agent with that ID
-//   409 Conflict     — email already has a user account (was approved before?)
-//   500 Server Error — unexpected DB failure
+//   { id, name, referral_code, status, temp_password, message }
 // ---------------------------------------------------------------------------
 router.patch('/:id/approve', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
   const agentId = parseInt(req.params.id, 10);
@@ -363,57 +307,49 @@ router.patch('/:id/approve', authenticateToken, authorizeRole(['ADMIN']), async 
     return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
   }
 
-  // ── Fetch the agent so we have their email for the users INSERT ───────────
+  // ── Fetch the agent to verify it exists and get email ─────────────────────
   let agent;
   try {
-    const check = await pool.query(
-      'SELECT id, name, email, referral_code, status FROM agents WHERE id = $1',
-      [agentId]
-    );
-    if (check.rows.length === 0) {
-      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
-    }
-    agent = check.rows[0];
+    agent = await prisma.agent.findUnique({
+      where:  { id: agentId },
+      select: { id: true, name: true, email: true, referral_code: true, status: true },
+    });
   } catch (err) {
     console.error('[PATCH /api/agents/:id/approve] DB lookup error:', err.message);
     return next(err);
   }
 
-  // ── Generate a referral code if the agent doesn't have one yet ───────────
-  const referralCode = agent.referral_code ?? generateReferralCode();
+  if (!agent) {
+    return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
+  }
 
-  // ── Generate a temporary password for the new user account ───────────────
+  const referralCode = agent.referral_code ?? generateReferralCode();
   const tempPassword = crypto.randomBytes(16).toString('hex');
   const passwordHash = await bcrypt.hash(tempPassword, 12);
 
   console.log(`[AGENT APPROVAL] Temp password for ${agent.email}: ${tempPassword}`);
   console.log(`[AGENT APPROVAL] ⚠️  Deliver this via secure email in production.`);
 
-  const client = await pool.connect();
-
   try {
-    await client.query('BEGIN');
+    const updated = await prisma.$transaction(async (tx) => {
+      const updatedAgent = await tx.agent.update({
+        where: { id: agentId },
+        data:  { status: 'APPROVED', referral_code: referralCode },
+        select: { id: true, name: true, referral_code: true, status: true },
+      });
 
-    // Update the agent: set APPROVED status and assign the referral code.
-    const updateResult = await client.query(
-      `UPDATE agents
-       SET status = 'APPROVED', referral_code = $1
-       WHERE id = $2
-       RETURNING id, name, referral_code, status`,
-      [referralCode, agentId]
-    );
-    const updated = updateResult.rows[0];
+      await tx.user.create({
+        data: {
+          username:             agent.email,
+          password_hash:        passwordHash,
+          role:                 'AGENT',
+          agent_id:             agentId,
+          must_change_password: true,
+        },
+      });
 
-    // Create the login account.  username = agent's email.
-    // If a users row already exists for this email, the UNIQUE constraint
-    // triggers a 23505 error which we catch below (409 Conflict).
-    await client.query(
-      `INSERT INTO users (username, password_hash, role, agent_id)
-       VALUES ($1, $2, 'AGENT', $3)`,
-      [agent.email, passwordHash, agentId]
-    );
-
-    await client.query('COMMIT');
+      return updatedAgent;
+    });
 
     return res.status(200).json({
       id:            updated.id,
@@ -425,37 +361,25 @@ router.patch('/:id/approve', authenticateToken, authorizeRole(['ADMIN']), async 
     });
 
   } catch (err) {
-    await client.query('ROLLBACK');
-
-    if (err.code === '23505') {
+    if (err.code === 'P2002') {
       return res.status(409).json({
         error: 'A user account for this agent already exists.',
         code:  'DUPLICATE_ENTRY',
       });
     }
-
-    console.error('[PATCH /api/agents/:id/approve] Unexpected DB error:', err.message);
+    console.error('[PATCH /api/agents/:id/approve] Prisma error:', err.message);
     next(err);
-
-  } finally {
-    client.release();
   }
 });
 
 // ---------------------------------------------------------------------------
 // PATCH /api/agents/:id/reject  — ADMIN only
 //
-// Rejects a PENDING agent application.  Sets status = 'REJECTED'.
-// No users row is created.  The applicant is simply marked as rejected in the
-// agents table.  No data is deleted — the record is retained for audit purposes.
+// Rejects a PENDING agent application. Sets status = 'REJECTED'.
+// No users row is created. Record retained for audit.
 //
 // Success response — 200 OK:
 //   { "id": 3, "name": "Sara Tesfaye", "status": "REJECTED" }
-//
-// Error responses:
-//   400 Bad Request — ID not an integer
-//   404 Not Found   — no agent with that ID
-//   500 Server Error
 // ---------------------------------------------------------------------------
 router.patch('/:id/reject', authenticateToken, authorizeRole(['ADMIN']), async (req, res, next) => {
   const agentId = parseInt(req.params.id, 10);
@@ -465,19 +389,12 @@ router.patch('/:id/reject', authenticateToken, authorizeRole(['ADMIN']), async (
   }
 
   try {
-    const result = await pool.query(
-      `UPDATE agents
-       SET status = 'REJECTED'
-       WHERE id = $1
-       RETURNING id, name, status`,
-      [agentId]
-    );
+    const updated = await prisma.agent.update({
+      where:  { id: agentId },
+      data:   { status: 'REJECTED' },
+      select: { id: true, name: true, status: true },
+    });
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
-    }
-
-    const updated = result.rows[0];
     return res.status(200).json({
       id:     updated.id,
       name:   updated.name,
@@ -485,44 +402,30 @@ router.patch('/:id/reject', authenticateToken, authorizeRole(['ADMIN']), async (
     });
 
   } catch (err) {
-    console.error('[PATCH /api/agents/:id/reject] Unexpected DB error:', err.message);
+    if (err.code === 'P2025') {
+      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
+    }
+    console.error('[PATCH /api/agents/:id/reject] Prisma error:', err.message);
     next(err);
   }
 });
 
 // ---------------------------------------------------------------------------
-// GET /api/agents/:id/stats
-// Return an agent's SUCCESSFUL referral count and current reward tier.
+// GET /api/agents/:id/stats  — authenticated (AGENT restricted to own stats)
 //
-// URL parameter:
-//   :id  — the integer primary key of the agent.
+// Returns an agent's SUCCESSFUL referral count and current reward tier.
 //
 // Success response — 200 OK:
-//   {
-//     "agent_id":             1,
-//     "successful_referrals": 4,
-//     "current_reward":       "Bronze"   // null when 0 qualifying referrals
-//   }
-//
-// Error responses:
-//   400 Bad Request  — :id is not a valid integer
-//   404 Not Found    — no agent exists with that id
-//   500 Server Error — unexpected DB failure
+//   { "agent_id": 1, "successful_referrals": 4, "current_reward": "Bronze" }
 // ---------------------------------------------------------------------------
-// GET /api/agents/:id/stats — any authenticated user, but AGENT role is
-// restricted to their OWN stats only (req.user.agent_id must match :id).
 router.get('/:id/stats', authenticateToken, async (req, res, next) => {
-  // ── Step 1: Parse and validate the URL parameter ──────────────────────────
   const agentId = parseInt(req.params.id, 10);
 
   if (isNaN(agentId)) {
-    return res.status(400).json({
-      error: 'Agent ID must be a valid integer.',
-      code:  'INVALID_ID',
-    });
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
   }
 
-  // ── Step 1b: RBAC — agents can only view their own stats ─────────────────
+  // RBAC — agents can only view their own stats
   if (req.user.role === 'AGENT' && req.user.agent_id !== agentId) {
     return res.status(403).json({
       error: 'Access denied. Agents can only view their own stats.',
@@ -531,48 +434,43 @@ router.get('/:id/stats', authenticateToken, async (req, res, next) => {
   }
 
   try {
-    // ── Step 2: Verify the agent exists ──────────────────────────────────────
-    const agentCheck = await pool.query(
-      'SELECT id, name FROM agents WHERE id = $1',
-      [agentId]
-    );
+    // ── Verify agent exists ──────────────────────────────────────────────────
+    const agent = await prisma.agent.findUnique({
+      where:  { id: agentId },
+      select: { id: true, name: true },
+    });
 
-    if (agentCheck.rows.length === 0) {
-      return res.status(404).json({
-        error: `Agent with id ${agentId} not found.`,
-        code:  'AGENT_NOT_FOUND',
-      });
+    if (!agent) {
+      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
     }
 
-    // ── Step 3: Count SUCCESSFUL referrals and find the top reward tier ────
-    const statsResult = await pool.query(
-      `SELECT
-         sub.successful_count,
-         rr.reward_name        AS current_reward
-       FROM (
-         SELECT COUNT(r.id) FILTER (WHERE r.status = 'SUCCESSFUL') AS successful_count
-         FROM   referrals r
-         WHERE  r.agent_id = $1
-       ) sub
-       LEFT JOIN reward_rules rr
-         ON  rr.min_referrals = (
-           SELECT MAX(min_referrals)
-           FROM   reward_rules
-           WHERE  min_referrals <= sub.successful_count
-         )`,
-      [agentId]
-    );
+    // ── Count SUCCESSFUL referrals ────────────────────────────────────────────
+    const successfulCount = await prisma.referral.count({
+      where: { agent_id: agentId, status: 'SUCCESSFUL' },
+    });
 
-    const row = statsResult.rows[0];
+    // ── Look up reward tier via $queryRaw (reward_rules not in schema) ────────
+    const tierRows = await prisma.$queryRaw`
+      SELECT reward_name
+      FROM   reward_rules
+      WHERE  min_referrals = (
+        SELECT MAX(min_referrals)
+        FROM   reward_rules
+        WHERE  min_referrals <= ${successfulCount}
+      )
+      LIMIT 1
+    `;
+
+    const currentReward = tierRows.length > 0 ? tierRows[0].reward_name : null;
 
     return res.status(200).json({
       agent_id:             agentId,
-      successful_referrals: parseInt(row.successful_count, 10),
-      current_reward:       row.current_reward ?? null,
+      successful_referrals: successfulCount,
+      current_reward:       currentReward,
     });
 
   } catch (err) {
-    console.error('[GET /api/agents/:id/stats] Unexpected DB error:', err.message);
+    console.error('[GET /api/agents/:id/stats] Prisma error:', err.message);
     next(err);
   }
 });
