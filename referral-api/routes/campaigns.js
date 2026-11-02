@@ -40,6 +40,7 @@
 
 const express = require('express');
 const pool    = require('../db');
+const prisma  = require('../db-prisma');
 const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
 
 const router = express.Router();
@@ -615,54 +616,36 @@ router.get('/', ...adminOnly, async (req, res, next) => {
     // ── Pagination ────────────────────────────────────────────────────────────
     const page  = Math.max(1, parseInt(req.query.page,  10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
-    const offset = (page - 1) * limit;
+    const skip  = (page - 1) * limit;
 
-    const countResult = await pool.query('SELECT COUNT(*) AS total FROM campaigns');
-    const total = parseInt(countResult.rows[0].total, 10);
+    // ── Count + data fetched in a single Prisma interactive transaction ───────
+    // prisma.$transaction([]) batches both queries into one DB round-trip.
+    const [total, rows] = await prisma.$transaction([
+      prisma.campaign.count(),
+      prisma.campaign.findMany({
+        skip,
+        take:    limit,
+        orderBy: { created_at: 'desc' },
+        // Nest campaign_rules under the `rules` key — matches the old raw-SQL
+        // `json_agg` shape that the frontend already expects.
+        include: { rules: true },
+      }),
+    ]);
 
-    // ── Main query: campaigns + aggregated rules ───────────────────────────────
-    // json_agg FILTER (WHERE cr.id IS NOT NULL) prevents [null] when no rules exist.
-    // operator is now included in the rule JSON object.
-    const result = await pool.query(
-      `SELECT
-         c.id,
-         c.name,
-         c.description,
-         c.start_date,
-         c.end_date,
-         c.reward_type,
-         c.reward_value,
-         c.reward_threshold,
-         c.is_active,
-         c.status,
-         c.created_at,
-         COALESCE(
-           json_agg(
-             json_build_object(
-               'id',         cr.id,
-               'rule_type',  cr.rule_type,
-               'operator',   cr.operator,
-               'rule_value', cr.rule_value
-             ) ORDER BY cr.id
-           ) FILTER (WHERE cr.id IS NOT NULL),
-           '[]'
-         ) AS rules
-       FROM campaigns c
-       LEFT JOIN campaign_rules cr ON cr.campaign_id = c.id
-       GROUP BY c.id
-       ORDER BY c.created_at DESC
-       LIMIT $1 OFFSET $2`,
-      [limit, offset]
-    );
-
+    // ── Shape response to match the existing raw-SQL format ──────────────────
+    // Prisma returns DateTime fields as JS Date objects; JSON.stringify converts
+    // them to ISO strings automatically — same format as pg driver rows.
+    // `rules` is already nested correctly by `include: { rules: true }`.
+    // `Number(total)` coerces BigInt (returned by count() in some builds).
     return res.status(200).json({
-      total,
+      total:     Number(total),
       page,
       limit,
-      campaigns: result.rows,
+      campaigns: rows,
     });
 
   } catch (err) {
+    console.error('[GET /api/campaigns] Prisma error:', err.message);
     next(err);
   }
 });

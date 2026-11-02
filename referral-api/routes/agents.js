@@ -29,6 +29,7 @@ const crypto  = require('crypto');
 const express = require('express');
 const bcrypt  = require('bcrypt');
 const pool    = require('../db');
+const prisma  = require('../db-prisma');
 const { authenticateToken, authorizeRole } = require('../middleware/authMiddleware');
 
 const router = express.Router();
@@ -150,65 +151,62 @@ router.post('/apply', async (req, res, next) => {
 // ---------------------------------------------------------------------------
 router.get('/', authenticateToken, async (req, res, next) => {
   try {
-    // ── RBAC: build the WHERE clause based on the caller's role ────────────
-    let agentFilter = '';
-    const queryParams = [];
+    // ── RBAC: build Prisma `where` clause based on caller's role ─────────────
+    // ADMIN → no filter (see all agents of every status)
+    // AGENT → filter to their own row only (req.user.agent_id)
+    const where = req.user.role === 'AGENT'
+      ? { id: req.user.agent_id }
+      : {};
 
-    if (req.user.role === 'AGENT') {
-      queryParams.push(req.user.agent_id);
-      agentFilter = 'WHERE a.id = $1';
-    }
+    // ── Fetch agents + their referrals using Prisma ───────────────────────────
+    // We include referrals so we can count SUCCESSFUL ones in JS — this avoids
+    // a raw SQL subquery and keeps the RBAC filter clean in Prisma's `where`.
+    const agents = await prisma.agent.findMany({
+      where,
+      orderBy: { created_at: 'desc' },
+      include: {
+        referrals: {
+          select: { status: true }, // only need status for counting
+        },
+      },
+    });
 
-    const result = await pool.query(`
-      SELECT
-        sub.id,
-        sub.name,
-        sub.phone,
-        sub.email,
-        sub.referral_code,
-        sub.status,
-        sub.successful_count,
-        rr.reward_name AS current_reward
-      FROM (
-        SELECT
-          a.id,
-          a.name,
-          a.phone,
-          a.email,
-          a.referral_code,
-          a.status,
-          a.created_at,
-          COUNT(r.id) FILTER (WHERE r.status = 'SUCCESSFUL') AS successful_count
-        FROM agents a
-        LEFT JOIN referrals r ON r.agent_id = a.id
-        ${agentFilter}
-        GROUP BY a.id, a.name, a.phone, a.email, a.referral_code, a.status, a.created_at
-      ) sub
-      LEFT JOIN reward_rules rr
-        ON rr.min_referrals = (
-          SELECT MAX(min_referrals)
-          FROM   reward_rules
-          WHERE  min_referrals <= sub.successful_count
-        )
-      ORDER BY sub.created_at DESC
-    `, queryParams);
+    // ── Compute successful_referrals count and look up reward tier ────────────
+    // reward_rules table is NOT in the Prisma schema (it's a legacy table from
+    // schema.sql).  We fetch all tiers once and apply them in JS to avoid N+1.
+    const tiersResult = await pool.query(
+      'SELECT reward_name, min_referrals FROM reward_rules ORDER BY min_referrals ASC'
+    );
+    const tiers = tiersResult.rows; // [{ reward_name, min_referrals }, ...]
 
-    const agents = result.rows.map(row => ({
-      id:                   row.id,
-      name:                 row.name,
-      phone:                row.phone,
-      email:                row.email,
-      referral_code:        row.referral_code,
-      status:               row.status,
-      // COUNT returns a PG bigint which arrives as a string — coerce to number.
-      successful_referrals: parseInt(row.successful_count, 10),
-      current_reward:       row.current_reward ?? null,
-    }));
+    // Helper: find the highest qualifying reward tier for a referral count.
+    const getRewardTier = (count) => {
+      let tier = null;
+      for (const t of tiers) {
+        if (count >= t.min_referrals) tier = t.reward_name;
+      }
+      return tier;
+    };
 
-    return res.status(200).json(agents);
+    // ── Shape the response to match the existing raw-SQL format ───────────────
+    const shaped = agents.map(agent => {
+      const successfulCount = agent.referrals.filter(r => r.status === 'SUCCESSFUL').length;
+      return {
+        id:                   agent.id,
+        name:                 agent.name,
+        phone:                agent.phone,
+        email:                agent.email,
+        referral_code:        agent.referral_code,
+        status:               agent.status,
+        successful_referrals: successfulCount,
+        current_reward:       getRewardTier(successfulCount),
+      };
+    });
+
+    return res.status(200).json(shaped);
 
   } catch (err) {
-    console.error('[GET /api/agents] Unexpected DB error:', err.message);
+    console.error('[GET /api/agents] Prisma error:', err.message);
     next(err);
   }
 });
