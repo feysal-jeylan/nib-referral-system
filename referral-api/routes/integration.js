@@ -228,10 +228,11 @@ router.post('/account-opened', async (req, res, next) => {
   // throwing across the transaction boundary.
   //
   // Possible outcomes returned from the tx function:
-  //   { outcome: 'SUCCESS',       referral, agent, campaign }
+  //   { outcome: 'SUCCESS',          referral, agent, campaign }
   //   { outcome: 'AGENT_404' }
   //   { outcome: 'NO_CAMPAIGN' }
-  //   { outcome: 'RULE_FAILED',   failedRule }
+  //   { outcome: 'RULE_FAILED',      failedRule }
+  //   { outcome: 'DUPLICATE_CUSTOMER' }
   //   { outcome: 'DUPLICATE_TID' }  ← race condition: unique constraint hit
   let txResult;
 
@@ -317,7 +318,34 @@ router.post('/account-opened', async (req, res, next) => {
         return { outcome: 'RULE_FAILED', failedRule: ruleResult.failedRule };
       }
 
-      // ── Step 3e: Create the referral record ──────────────────────────────
+      // ── Step 3e: Duplicate customer check (application-level) ────────────
+      // Reject if this customer_phone already has a PENDING or SUCCESSFUL
+      // referral for the same campaign. We intentionally avoid a DB UNIQUE
+      // constraint so the check stays flexible (e.g., allowing REJECTED
+      // customers to be re-referred in the future).
+      const duplicateReferral = await tx.referral.findFirst({
+        where: {
+          customer_phone,
+          campaign_id: campaign.id,
+          status: { in: ['PENDING', 'SUCCESSFUL'] },
+        },
+        select: { id: true },
+      });
+
+      if (duplicateReferral) {
+        const dupMsg = 'This customer has already been referred for this campaign.';
+        console.log(
+          `[integration] Duplicate customer blocked: customer_phone=${customer_phone}, ` +
+          `campaign_id=${campaign.id}, transaction_id=${transaction_id}`
+        );
+        await tx.integrationLog.update({
+          where: { id: log.id },
+          data:  { status: 'FAILED', error_message: dupMsg },
+        });
+        return { outcome: 'DUPLICATE_CUSTOMER' };
+      }
+
+      // ── Step 3f: Create the referral record ──────────────────────────────
       // V7: status is 'SUCCESSFUL' directly — no manual admin review needed.
       // evaluateRules() IS the approval gate.
       const referral = await tx.referral.create({
@@ -339,7 +367,7 @@ router.post('/account-opened', async (req, res, next) => {
         },
       });
 
-      // ── Step 3f: Mark integration_log as PROCESSED ────────────────────────
+      // ── Step 3g: Mark integration_log as PROCESSED ────────────────────────
       await tx.integrationLog.update({
         where: { id: log.id },
         data:  { status: 'PROCESSED' },
@@ -392,6 +420,14 @@ router.post('/account-opened', async (req, res, next) => {
         transaction_id,
         disqualified: true,
         reason:       txResult.failedRule,
+      });
+
+    case 'DUPLICATE_CUSTOMER':
+      // 409 Conflict — the customer already has an active/successful referral
+      // for this campaign. The transaction committed the FAILED log update.
+      return res.status(409).json({
+        error: 'This customer has already been referred for this campaign.',
+        code:  'DUPLICATE_CUSTOMER',
       });
 
     case 'SUCCESS':

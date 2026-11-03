@@ -1256,6 +1256,17 @@ function Dashboard({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const refreshReferrals = useCallback(async () => {
+    try {
+      const res  = await fetch(`${API}/referrals`, FETCH_OPTS);
+      const data = await res.json();
+      setReferrals(Array.isArray(data) ? data : (data.referrals ?? []));
+    } catch {
+      // silent — polling should not spam the user with error toasts
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const refreshIntegLogs = useCallback(async () => {
     try {
       const res  = await fetch(`${API}/integration/logs`, FETCH_OPTS);
@@ -1266,6 +1277,20 @@ function Dashboard({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Live polling — auto-refresh every 5 s ────────────────────────────────
+  useEffect(() => {
+    const id = setInterval(() => {
+      refreshAgents();
+      refreshReferrals();
+      if (isAdmin) {
+        refreshCampaigns();
+        refreshIntegLogs();
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  // Stable useCallback refs — safe to list as deps (won't cause re-runs)
+  }, [isAdmin, refreshAgents, refreshReferrals, refreshCampaigns, refreshIntegLogs]);
 
   // ── Toast ────────────────────────────────────────────────────────────────
   function showToast(t) {
@@ -1368,14 +1393,22 @@ function Dashboard({
               </p>
             </div>
           </div>
-          <div className="header-user">
-            <div className="header-user__info">
-              <p className="header-user__name">{user.username}</p>
-              <p className="header-user__role">{isAdmin ? '🛡️ Admin' : '👤 Agent'}</p>
+          <div className="header-right">
+            {/* Live polling indicator */}
+            <div className="live-indicator" aria-label="Live updates active" title="Dashboard refreshes every 5 seconds">
+              <span className="live-indicator__dot" aria-hidden="true" />
+              <span className="live-indicator__text">Live Updates: Active</span>
             </div>
-            <button id="logout-btn" className="btn--logout" onClick={handleLogout} aria-label="Sign out">
-              ↩ Sign Out
-            </button>
+
+            <div className="header-user">
+              <div className="header-user__info">
+                <p className="header-user__name">{user.username}</p>
+                <p className="header-user__role">{isAdmin ? '🛡️ Admin' : '👤 Agent'}</p>
+              </div>
+              <button id="logout-btn" className="btn--logout" onClick={handleLogout} aria-label="Sign out">
+                ↩ Sign Out
+              </button>
+            </div>
           </div>
         </div>
       </header>
