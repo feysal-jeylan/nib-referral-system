@@ -1,0 +1,77 @@
+/*
+ * client/src/index.css
+ * ─────────────────────
+ * Global CSS entry point.
+ *
+ * This file is imported once in main.jsx. It does two jobs:
+ *
+ *   1. Loads Tailwind CSS v4 (utility classes, preflight reset).
+ *   2. Defines the Nib Bank design-token palette as Tailwind theme
+ *      variables so utility classes like `bg-navy`, `text-gold`,
+ *      `border-border-color` are available project-wide.
+ *
+ * The existing App.css and Login.css are still imported inside their
+ * respective JSX files and remain fully functional — Tailwind does NOT
+ * break them. We migrate component styles to Tailwind incrementally
+ * in Phases 2–4.
+ */
+
+@import "tailwindcss";
+
+/*
+ * ── Nib Bank design tokens ─────────────────────────────────────────────────
+ *
+ * @theme registers CSS custom properties as Tailwind utilities.
+ * These match the existing CSS variables in App.css 1:1 so the visual
+ * design is identical whether a component uses the old CSS classes or
+ * new Tailwind utilities.
+ *
+ * Usage examples after this block:
+ *   bg-navy          → background: #002B5B
+ *   text-gold        → color: #96720C
+ *   border-border-color → border-color: #D8DEE6
+ *   bg-surface       → background: #FFFFFF
+ */
+@theme {
+  /* ── Brand palette ───────────────────────────────────────────────────── */
+  --color-navy:         #002B5B;
+  --color-navy-hover:   #003A75;
+  --color-navy-light:   #EBF0F7;
+  --color-gold:         #96720C;
+  --color-gold-light:   #FDF6E3;
+
+  /* ── Neutrals ────────────────────────────────────────────────────────── */
+  --color-bg:           #F2F5F8;
+  --color-surface:      #FFFFFF;
+  --color-border-color: #D8DEE6;
+  --color-border-dark:  #C2CAD5;
+  --color-stripe:       #F7F9FB;
+  --color-text-1:       #111827;
+  --color-text-2:       #374151;
+  --color-text-3:       #6B7280;
+
+  /* ── Status — Pending ────────────────────────────────────────────────── */
+  --color-pending-bg:   #FFFBEB;
+  --color-pending-txt:  #78350F;
+  --color-pending-bdr:  #FCD34D;
+
+  /* ── Status — Success ────────────────────────────────────────────────── */
+  --color-success-bg:   #F0FDF4;
+  --color-success-txt:  #14532D;
+  --color-success-bdr:  #86EFAC;
+
+  /* ── Status — Reject ─────────────────────────────────────────────────── */
+  --color-reject-bg:    #FFF5F5;
+  --color-reject-txt:   #7F1D1D;
+  --color-reject-bdr:   #FCA5A5;
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font-sans: 'Inter', 'Segoe UI', system-ui, sans-serif;
+
+  /* ── Border radius ───────────────────────────────────────────────────── */
+  --radius-card: 6px;
+  --radius-btn:  4px;
+
+  /* ── Shadows ─────────────────────────────────────────────────────────── */
+  --shadow-card: 0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(0,43,91,0.07);
+}
