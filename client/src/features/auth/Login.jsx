@@ -1,46 +1,33 @@
 /**
- * referral-web/src/Login.jsx
- * ───────────────────────────
+ * client/src/features/auth/Login.jsx
+ * ─────────────────────────────────────
  * Premium banking login screen for the Nib Referral System.
  *
- * V5 update — Public agent self-registration:
- *   Added a two-view toggle inside the login card:
- *     'login' → existing Staff Portal Sign In form (unchanged)
- *     'apply' → new AgentApplyForm for self-registration applications
+ * Two views toggled inside a single card:
+ *   'login' → Staff Portal Sign In
+ *   'apply' → Agent self-registration (public — no session required)
  *
- *   The "Want to become an agent? Apply here." link at the bottom of the
- *   login card switches to the apply view.  The apply form has a back link
- *   that returns to the login view.
- *
- *   POST /api/agents/apply is PUBLIC — no credentials needed.
- *   On success, a toast-style success message is shown and the view snaps
- *   back to 'login' so the applicant knows their form was received.
+ * V2 (Axios migration):
+ *   - fetch() replaced with api.js Axios instance throughout.
+ *   - Error messages read from err.response?.data?.error (Axios pattern).
+ *   - withCredentials is handled globally by api.js — no per-call option needed.
  *
  * Security:
- *   - POST /api/auth/login with credentials:'include' so the browser
- *     receives the Set-Cookie header and stores the HttpOnly JWT cookie.
+ *   - POST /api/auth/login → browser stores HttpOnly JWT cookie automatically.
  *   - The token is NEVER read from the response body or stored in JS.
- *   - On success, we only store the user identity { id, username, role }
- *     in React context — the token itself remains invisible to JavaScript.
+ *   - Only the decoded user identity { id, username, role } enters React state.
  */
 
 import { useState } from 'react';
 import { useAuth } from './AuthContext';
-import './Login.css';
+import api from '@/services/api';
+import '@/Login.css';
 
 // ─── AgentApplyForm ───────────────────────────────────────────────────────────
-//
-// Defined inside Login.jsx because it is only ever rendered inside the login
-// card and shares no state with the rest of the application (it is pre-auth).
-//
-// Props:
-//   onBack    — () => void  called when user clicks "← Back to Sign In"
-//   onSuccess — () => void  called after a successful submission; parent
-//                           switches view back to 'login' and shows success msg
 function AgentApplyForm({ onBack, onSuccess }) {
-  const [form, setForm]           = useState({ name: '', phone: '', email: '' });
+  const [form, setForm]             = useState({ name: '', phone: '', email: '' });
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError]         = useState('');
+  const [error, setError]           = useState('');
 
   function handleChange(e) {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -54,7 +41,6 @@ function AgentApplyForm({ onBack, onSuccess }) {
     const phone = form.phone.trim();
     const email = form.email.trim();
 
-    // ── Client-side validation ──────────────────────────────────────────────
     if (!name || !phone || !email) {
       setError('Please fill in all three fields.');
       return;
@@ -68,31 +54,16 @@ function AgentApplyForm({ onBack, onSuccess }) {
     setError('');
 
     try {
-      // ── POST to the public apply endpoint ─────────────────────────────────
-      //
-      // No credentials:'include' here — this is a public route, there is no
-      // cookie to attach and no cookie is returned.
-      const res  = await fetch('/api/agents/apply', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ name, phone, email }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (res.status === 409) {
-          setError('An agent with this phone number or email already exists.');
-        } else {
-          setError(data.error ?? 'Something went wrong. Please try again.');
-        }
-        return;
-      }
-
-      // ── Success: bubble up so Login can show success message ──────────────
+      // Public endpoint — no session required. api.js still sends cookies
+      // if they exist (harmless), and withCredentials doesn't block this.
+      await api.post('/agents/apply', { name, phone, email });
       onSuccess();
-
-    } catch {
-      setError('Cannot reach the server. Please check your connection.');
+    } catch (err) {
+      if (err.response?.status === 409) {
+        setError('An agent with this phone number or email already exists.');
+      } else {
+        setError(err.response?.data?.error ?? 'Something went wrong. Please try again.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -101,7 +72,6 @@ function AgentApplyForm({ onBack, onSuccess }) {
   return (
     <div className="login-apply-view">
 
-      {/* ── Back link ──────────────────────────────────────────────────── */}
       <button
         type="button"
         className="login-back-link"
@@ -111,7 +81,6 @@ function AgentApplyForm({ onBack, onSuccess }) {
         ← Back to Sign In
       </button>
 
-      {/* ── Heading ────────────────────────────────────────────────────── */}
       <p className="login-card__title">Agent Application</p>
       <p className="login-card__subtitle">
         Submit your details to apply as a Nib referral agent.
@@ -124,11 +93,9 @@ function AgentApplyForm({ onBack, onSuccess }) {
         noValidate
         aria-label="Agent application form"
       >
-        {/* ── Full Name ──────────────────────────────────────────────── */}
+        {/* Full Name */}
         <div className="login-field">
-          <label className="login-field__label" htmlFor="apply-name">
-            Full Name
-          </label>
+          <label className="login-field__label" htmlFor="apply-name">Full Name</label>
           <div className="login-field__input-wrap">
             <span className="login-field__icon" aria-hidden="true">👤</span>
             <input
@@ -146,11 +113,9 @@ function AgentApplyForm({ onBack, onSuccess }) {
           </div>
         </div>
 
-        {/* ── Phone ──────────────────────────────────────────────────── */}
+        {/* Phone */}
         <div className="login-field">
-          <label className="login-field__label" htmlFor="apply-phone">
-            Phone Number
-          </label>
+          <label className="login-field__label" htmlFor="apply-phone">Phone Number</label>
           <div className="login-field__input-wrap">
             <span className="login-field__icon" aria-hidden="true">📱</span>
             <input
@@ -167,11 +132,9 @@ function AgentApplyForm({ onBack, onSuccess }) {
           </div>
         </div>
 
-        {/* ── Email ──────────────────────────────────────────────────── */}
+        {/* Email */}
         <div className="login-field">
-          <label className="login-field__label" htmlFor="apply-email">
-            Email Address
-          </label>
+          <label className="login-field__label" htmlFor="apply-email">Email Address</label>
           <div className="login-field__input-wrap">
             <span className="login-field__icon" aria-hidden="true">✉️</span>
             <input
@@ -188,7 +151,6 @@ function AgentApplyForm({ onBack, onSuccess }) {
           </div>
         </div>
 
-        {/* ── Error ──────────────────────────────────────────────────── */}
         {error && (
           <div className="login-error" role="alert" aria-live="assertive">
             <span className="login-error__icon" aria-hidden="true">⚠️</span>
@@ -196,7 +158,6 @@ function AgentApplyForm({ onBack, onSuccess }) {
           </div>
         )}
 
-        {/* ── Submit ─────────────────────────────────────────────────── */}
         <button
           type="submit"
           className="login-btn"
@@ -221,15 +182,10 @@ function AgentApplyForm({ onBack, onSuccess }) {
 export default function Login() {
   const { login } = useAuth();
 
-  // ── Login form state ─────────────────────────────────────────────────────
   const [form, setForm]             = useState({ username: '', password: '' });
   const [error, setError]           = useState('');
   const [submitting, setSubmitting] = useState(false);
-
-  // ── View toggle: 'login' | 'apply' ──────────────────────────────────────
   const [view, setView]             = useState('login');
-
-  // ── Apply success message (shown briefly on the login view after apply) ──
   const [applySuccess, setApplySuccess] = useState('');
 
   function handleChange(e) {
@@ -248,44 +204,25 @@ export default function Login() {
     setError('');
 
     try {
-      // ── POST credentials to the backend ─────────────────────────────────
-      //
-      // credentials: 'include' is CRITICAL here. Without it, the browser
-      // ignores the 'Set-Cookie' header in the response, the HttpOnly JWT
-      // cookie is never stored, and every subsequent /api call returns 401.
-      const res  = await fetch('/api/auth/login', {
-        method:      'POST',
-        headers:     { 'Content-Type': 'application/json' },
-        body:        JSON.stringify({
-          username: form.username.trim(),
-          password: form.password,
-        }),
-        credentials: 'include',
+      // credentials: 'include' is handled globally by api.js (withCredentials: true).
+      // The browser stores the HttpOnly cookie from the Set-Cookie response header.
+      const { data } = await api.post('/auth/login', {
+        username: form.username.trim(),
+        password: form.password,
       });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error ?? 'Invalid username or password. Please try again.');
-        return;
-      }
-
       login(data.user);
-
-    } catch {
-      setError('Cannot reach the server. Please check your connection.');
+    } catch (err) {
+      setError(err.response?.data?.error ?? 'Invalid username or password. Please try again.');
     } finally {
       setSubmitting(false);
     }
   }
 
-  // ── Callback from AgentApplyForm on successful submission ────────────────
   function handleApplySuccess() {
     setView('login');
     setApplySuccess(
       '✅ Application submitted! An Admin will review and contact you with your login credentials.'
     );
-    // Auto-dismiss the success banner after 8 seconds
     setTimeout(() => setApplySuccess(''), 8000);
   }
 
@@ -293,31 +230,27 @@ export default function Login() {
     <div className="login-page">
       <div className="login-card" role="main">
 
-        {/* ── Card header (always visible) ─────────────────────────────── */}
+        {/* Card header */}
         <div className="login-card__header">
           <span className="login-card__logo" aria-hidden="true">🏦</span>
           <h1 className="login-card__bank-name">Nib International Bank</h1>
           <p className="login-card__tagline">Internal Referral Management</p>
         </div>
 
-        {/* ── Card body — toggles between login and apply views ─────────── */}
+        {/* Card body — toggles between login and apply views */}
         <div className="login-card__body">
-
           {view === 'apply' ? (
-            /* ── Apply view ────────────────────────────────────────────── */
             <AgentApplyForm
               onBack={() => setView('login')}
               onSuccess={handleApplySuccess}
             />
           ) : (
-            /* ── Login view ────────────────────────────────────────────── */
             <>
               <p className="login-card__title">Staff Portal Sign In</p>
               <p className="login-card__subtitle">
                 Enter your credentials to access the referral dashboard.
               </p>
 
-              {/* ── Apply success banner ──────────────────────────────── */}
               {applySuccess && (
                 <div className="login-apply-success" role="status" aria-live="polite">
                   {applySuccess}
@@ -331,7 +264,7 @@ export default function Login() {
                 noValidate
                 aria-label="Login form"
               >
-                {/* ── Username ───────────────────────────────────────── */}
+                {/* Username */}
                 <div className="login-field">
                   <label className="login-field__label" htmlFor="login-username">
                     Username
@@ -353,7 +286,7 @@ export default function Login() {
                   </div>
                 </div>
 
-                {/* ── Password ───────────────────────────────────────── */}
+                {/* Password */}
                 <div className="login-field">
                   <label className="login-field__label" htmlFor="login-password">
                     Password
@@ -374,7 +307,6 @@ export default function Login() {
                   </div>
                 </div>
 
-                {/* ── Error ─────────────────────────────────────────── */}
                 {error && (
                   <div className="login-error" role="alert" aria-live="assertive">
                     <span className="login-error__icon" aria-hidden="true">⚠️</span>
@@ -382,7 +314,6 @@ export default function Login() {
                   </div>
                 )}
 
-                {/* ── Submit ────────────────────────────────────────── */}
                 <button
                   id="login-submit-btn"
                   type="submit"
@@ -396,14 +327,12 @@ export default function Login() {
                       Signing in…
                     </>
                   ) : (
-                    <>
-                       Sign In to Dashboard
-                    </>
+                    ' Sign In to Dashboard'
                   )}
                 </button>
               </form>
 
-              {/* ── "Become an agent" link ──────────────────────────── */}
+              {/* Become an agent */}
               <div className="login-apply-row">
                 <span className="login-apply-row__text">Not a staff member?</span>
                 <button
@@ -418,7 +347,7 @@ export default function Login() {
           )}
         </div>
 
-        {/* ── Card footer (always visible) ─────────────────────────────── */}
+        {/* Card footer */}
         <div className="login-card__footer">
           Secured with <strong>HttpOnly JWT</strong> · Internal use only
         </div>

@@ -58,9 +58,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import './Login.css';
-import { useAuth } from './AuthContext';
-import Login from './Login';
-import ChangePassword from './ChangePassword';
+import { useAuth } from '@/features/auth/AuthContext';
+import Login from '@/features/auth/Login';
+import ChangePassword from '@/features/auth/ChangePassword';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const API = '/api';
