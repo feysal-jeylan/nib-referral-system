@@ -1,25 +1,31 @@
 /**
- * referral-api/index.js
- * ---------------------
+ * server/index.js
+ * ───────────────────────────────────────────────────────────────────────────
  * Entry point for the Nib Bank Referral System Express server.
  *
- * What each middleware does:
- *  - helmet        : Sets secure HTTP headers (hides "X-Powered-By: Express", etc.).
- *  - cors          : Allows only the React dev server to call this API (with credentials).
- *                    'credentials: true' is required for the browser to send/receive cookies
- *                    on cross-origin requests (Vite :5173 -> API :3000).
- *  - cookieParser  : Parses the Cookie header so req.cookies.token is available to middleware.
- *  - express.json(): Parses incoming JSON request bodies (req.body).
+ * IMPORTANT: 'module-alias/register' MUST be the first require() so that
+ * the '@/' path alias is registered before any module that uses it is loaded.
  *
- * Database:
- *  - All database access goes through db-prisma.js (Prisma v7 + @prisma/adapter-pg).
- *  - db.js (raw pg Pool) has been removed — Prisma is the sole DB layer.
+ * Architecture (Phase 3 MVC refactor):
+ *   Campaigns module  → src/modules/campaigns/campaigns.routes.js  ✅ migrated
+ *   Auth module       → routes/auth.js                             (pending)
+ *   Agents module     → routes/agents.js                           (pending)
+ *   Referrals module  → routes/referrals.js                        (pending)
+ *   Integration module→ routes/integration.js                      (pending)
  *
- * Authentication: JWT stored in an HttpOnly, SameSite=Lax cookie.
- * See routes/auth.js and middleware/authMiddleware.js for full details.
+ * Middleware:
+ *   helmet       — secure HTTP headers
+ *   cors         — restrict origin to Vite dev server (credentials: true)
+ *   cookieParser — populate req.cookies for HttpOnly JWT auth
+ *   express.json — parse JSON request bodies
+ *
+ * Security: JWT in HttpOnly, SameSite=Lax cookie — no token in JS memory.
  */
 
 'use strict';
+
+// ── MUST be first — registers '@/' alias for all subsequent requires ──────────
+require('module-alias/register');
 
 const express      = require('express');
 const helmet       = require('helmet');
@@ -27,29 +33,27 @@ const cors         = require('cors');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
-// Prisma singleton — imported here so the connection pool warms up on startup.
-// All routes import from the same singleton; Node's require cache ensures only
-// one PrismaClient instance is ever created across the whole process.
+// Prisma singleton — warms up the connection pool on startup.
+// Legacy path kept for the remaining unmigrated routes.
 const prisma = require('./db-prisma');
 
 // ── Route Imports ─────────────────────────────────────────────────────────────
+
+// ✅ MVC module (Phase 3)
+const campaignsRouter   = require('@/modules/campaigns/campaigns.routes');
+
+// ⏳ Legacy flat routes (to be migrated in subsequent phases)
 const agentsRouter      = require('./routes/agents');
 const referralsRouter   = require('./routes/referrals');
 const authRouter        = require('./routes/auth');
-const campaignsRouter   = require('./routes/campaigns');    // Campaign Management
-const integrationRouter = require('./routes/integration');  // Core Banking Webhook
+const integrationRouter = require('./routes/integration');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Security Middleware ───────────────────────────────────────────────────────
-
 app.use(helmet());
 
-// cors() restricts which origins can call this API.
-// credentials: true — REQUIRED for the browser to send cookies on cross-origin
-// requests (Vite :5173 -> API :3000). Origin must be an explicit URL (not '*')
-// when credentials: true is set.
 app.use(cors({
   origin:         'http://localhost:5173',
   credentials:    true,
@@ -57,18 +61,14 @@ app.use(cors({
   allowedHeaders: ['Content-Type'],
 }));
 
-// cookieParser populates req.cookies — must come BEFORE auth middleware.
 app.use(cookieParser());
-
-// Parse JSON bodies — required for POST/PUT endpoints.
 app.use(express.json());
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 /**
  * GET /api/health
- * Simple health-check endpoint — no auth required.
- * Returns 200 OK with a JSON status message.
+ * No auth required — used by healthchecks and smoke tests.
  */
 app.get('/api/health', (req, res) => {
   res.status(200).json({
@@ -81,12 +81,12 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth',        authRouter);
 app.use('/api/agents',      agentsRouter);
 app.use('/api/referrals',   referralsRouter);
-app.use('/api/campaigns',   campaignsRouter);
+app.use('/api/campaigns',   campaignsRouter);   // ✅ MVC module
 app.use('/api/integration', integrationRouter);
 
 // ── Error Handling ────────────────────────────────────────────────────────────
 
-// 404 handler — must come AFTER all valid routes.
+// 404 — must come AFTER all valid routes
 app.use((req, res) => {
   res.status(404).json({
     error: 'The requested resource was not found.',
@@ -94,9 +94,8 @@ app.use((req, res) => {
   });
 });
 
-// Global error handler — catches errors forwarded via next(err).
-// Per RULES.md §3: NEVER expose raw DB errors or stack traces to the client.
-// 4-parameter signature tells Express this is an error handler.
+// Global error handler (4-param signature required by Express)
+// RULES.md §3: NEVER expose raw DB errors or stack traces to the client.
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error('[Server Error]', err.message, err.stack);
@@ -111,9 +110,6 @@ app.listen(PORT, async () => {
   console.log(`[referral-api] Server running  -> http://localhost:${PORT}`);
   console.log(`[referral-api] Health check    -> http://localhost:${PORT}/api/health`);
 
-  // Verify Prisma can reach the database on startup.
-  // A failed ping means DATABASE_URL is wrong or Postgres is down —
-  // clearer than a cryptic failure on the first API call.
   try {
     await prisma.$queryRaw`SELECT 1`;
     console.log('[referral-api] Prisma connected to PostgreSQL successfully.');
