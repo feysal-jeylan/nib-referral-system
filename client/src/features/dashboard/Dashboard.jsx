@@ -207,18 +207,19 @@ export default function Dashboard({ user, logout }) {
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="app">
+    <div className="min-h-screen bg-[#F2F5F8]">
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <header className="app-header">
-        <div className="app-header__inner">
-          <div className="app-header__brand">
-            <span className="app-header__logo" aria-hidden="true">🏦</span>
+      <header className="bg-[#002B5B] border-b-4 border-[#C5A059] shadow-md">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          {/* Brand */}
+          <div className="flex items-center gap-3">
+            <span className="text-3xl" aria-hidden="true">🏦</span>
             <div>
-              <h1 className="app-header__title">
+              <h1 className="text-white font-bold text-xl tracking-tight">
                 {isAdmin ? 'Nib International Bank' : 'Agent Portal'}
               </h1>
-              <p className="app-header__subtitle">
+              <p className="text-[#C5A059] text-xs tracking-wide">
                 {isAdmin
                   ? 'Internal Referral Management System'
                   : 'Nib International Bank — Your Referral Dashboard'}
@@ -226,25 +227,26 @@ export default function Dashboard({ user, logout }) {
             </div>
           </div>
 
-          <div className="header-right">
+          {/* Right side */}
+          <div className="flex items-center gap-5">
             {/* Live polling indicator */}
             <div
-              className="live-indicator"
+              className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full"
               aria-label="Live updates active"
               title="Dashboard refreshes every 5 seconds"
             >
-              <span className="live-indicator__dot" aria-hidden="true" />
-              <span className="live-indicator__text">Live Updates: Active</span>
+              <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" aria-hidden="true" />
+              <span className="text-white/80 text-xs font-medium">Live Updates: Active</span>
             </div>
 
-            <div className="header-user">
-              <div className="header-user__info">
-                <p className="header-user__name">{user.username}</p>
-                <p className="header-user__role">{isAdmin ? '🛡️ Admin' : '👤 Agent'}</p>
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <p className="text-white font-semibold text-sm">{user.username}</p>
+                <p className="text-white/60 text-xs">{isAdmin ? '🛡️ Admin' : '👤 Agent'}</p>
               </div>
               <button
                 id="logout-btn"
-                className="btn--logout"
+                className="bg-transparent border border-white/25 text-white/80 hover:border-white/50 hover:text-white px-4 py-1.5 rounded text-xs font-semibold transition-colors cursor-pointer"
                 onClick={handleLogout}
                 aria-label="Sign out"
               >
@@ -255,7 +257,7 @@ export default function Dashboard({ user, logout }) {
         </div>
       </header>
 
-      <main className="app-main">
+      <main className="max-w-7xl mx-auto p-6 space-y-6">
 
         {/* ── ADMIN: Register Agent form ──────────────────────────────── */}
         {isAdmin && (

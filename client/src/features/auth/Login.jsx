@@ -7,10 +7,10 @@
  *   'login' → Staff Portal Sign In
  *   'apply' → Agent self-registration (public — no session required)
  *
- * V2 (Axios migration):
- *   - fetch() replaced with api.js Axios instance throughout.
- *   - Error messages read from err.response?.data?.error (Axios pattern).
- *   - withCredentials is handled globally by api.js — no per-call option needed.
+ * V3 (Tailwind migration):
+ *   - All CSS class names replaced with Tailwind utility classes.
+ *   - `import '@/Login.css'` removed — no external CSS dependency.
+ *   - Logic, Axios usage, and component structure are unchanged.
  *
  * Security:
  *   - POST /api/auth/login → browser stores HttpOnly JWT cookie automatically.
@@ -21,7 +21,12 @@
 import { useState } from 'react';
 import { useAuth } from './AuthContext';
 import api from '@/services/api';
-import '@/Login.css';
+
+// ─── Shared Tailwind class strings ───────────────────────────────────────────
+const inputBase =
+  'w-full bg-[#F2F5F8] border border-[#D8DEE6] rounded-lg pl-9 pr-3 py-2.5 text-sm text-gray-900 outline-none focus:border-[#002B5B] focus:ring-2 focus:ring-[#002B5B]/20 transition';
+const inputError =
+  'w-full bg-[#F2F5F8] border border-red-400 rounded-lg pl-9 pr-3 py-2.5 text-sm text-gray-900 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-400/20 transition';
 
 // ─── AgentApplyForm ───────────────────────────────────────────────────────────
 function AgentApplyForm({ onBack, onSuccess }) {
@@ -54,8 +59,6 @@ function AgentApplyForm({ onBack, onSuccess }) {
     setError('');
 
     try {
-      // Public endpoint — no session required. api.js still sends cookies
-      // if they exist (harmless), and withCredentials doesn't block this.
       await api.post('/agents/apply', { name, phone, email });
       onSuccess();
     } catch (err) {
@@ -70,39 +73,41 @@ function AgentApplyForm({ onBack, onSuccess }) {
   }
 
   return (
-    <div className="login-apply-view">
-
+    <div>
+      {/* Back link */}
       <button
         type="button"
-        className="login-back-link"
+        className="text-[#002B5B] text-sm font-semibold hover:text-[#C5A059] flex items-center gap-1 mb-5 transition-colors"
         onClick={onBack}
         aria-label="Return to sign in"
       >
         ← Back to Sign In
       </button>
 
-      <p className="login-card__title">Agent Application</p>
-      <p className="login-card__subtitle">
+      <p className="text-[#002B5B] font-bold text-lg mb-1">Agent Application</p>
+      <p className="text-gray-500 text-sm mb-5">
         Submit your details to apply as a Nib referral agent.
         An Admin will review and approve your application.
       </p>
 
       <form
-        className="login-form"
+        className="space-y-4"
         onSubmit={handleSubmit}
         noValidate
         aria-label="Agent application form"
       >
         {/* Full Name */}
-        <div className="login-field">
-          <label className="login-field__label" htmlFor="apply-name">Full Name</label>
-          <div className="login-field__input-wrap">
-            <span className="login-field__icon" aria-hidden="true">👤</span>
+        <div>
+          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="apply-name">
+            Full Name
+          </label>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">👤</span>
             <input
               id="apply-name"
               name="name"
               type="text"
-              className={`login-field__input${error ? ' login-field__input--error' : ''}`}
+              className={error ? inputError : inputBase}
               placeholder="e.g. Sara Tesfaye"
               value={form.name}
               onChange={handleChange}
@@ -114,15 +119,17 @@ function AgentApplyForm({ onBack, onSuccess }) {
         </div>
 
         {/* Phone */}
-        <div className="login-field">
-          <label className="login-field__label" htmlFor="apply-phone">Phone Number</label>
-          <div className="login-field__input-wrap">
-            <span className="login-field__icon" aria-hidden="true">📱</span>
+        <div>
+          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="apply-phone">
+            Phone Number
+          </label>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">📱</span>
             <input
               id="apply-phone"
               name="phone"
               type="tel"
-              className={`login-field__input${error ? ' login-field__input--error' : ''}`}
+              className={error ? inputError : inputBase}
               placeholder="e.g. 0912345678"
               value={form.phone}
               onChange={handleChange}
@@ -133,15 +140,17 @@ function AgentApplyForm({ onBack, onSuccess }) {
         </div>
 
         {/* Email */}
-        <div className="login-field">
-          <label className="login-field__label" htmlFor="apply-email">Email Address</label>
-          <div className="login-field__input-wrap">
-            <span className="login-field__icon" aria-hidden="true">✉️</span>
+        <div>
+          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="apply-email">
+            Email Address
+          </label>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">✉️</span>
             <input
               id="apply-email"
               name="email"
               type="email"
-              className={`login-field__input${error ? ' login-field__input--error' : ''}`}
+              className={error ? inputError : inputBase}
               placeholder="e.g. sara@example.com"
               value={form.email}
               onChange={handleChange}
@@ -152,21 +161,28 @@ function AgentApplyForm({ onBack, onSuccess }) {
         </div>
 
         {error && (
-          <div className="login-error" role="alert" aria-live="assertive">
-            <span className="login-error__icon" aria-hidden="true">⚠️</span>
+          <div
+            className="flex items-center gap-2 bg-red-50 border border-red-200 border-l-4 border-l-red-500 rounded-lg p-3 text-red-800 text-sm"
+            role="alert"
+            aria-live="assertive"
+          >
+            <span aria-hidden="true">⚠️</span>
             <span>{error}</span>
           </div>
         )}
 
         <button
           type="submit"
-          className="login-btn"
+          className="w-full bg-[#002B5B] hover:bg-[#001e42] text-white font-semibold py-3 rounded-lg text-sm tracking-wide transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-2"
           disabled={submitting}
           aria-busy={submitting}
         >
           {submitting ? (
             <>
-              <span className="login-spinner" aria-hidden="true" />
+              <span
+                className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
+                aria-hidden="true"
+              />
               Submitting…
             </>
           ) : (
@@ -182,10 +198,10 @@ function AgentApplyForm({ onBack, onSuccess }) {
 export default function Login() {
   const { login } = useAuth();
 
-  const [form, setForm]             = useState({ username: '', password: '' });
-  const [error, setError]           = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [view, setView]             = useState('login');
+  const [form, setForm]                 = useState({ username: '', password: '' });
+  const [error, setError]               = useState('');
+  const [submitting, setSubmitting]     = useState(false);
+  const [view, setView]                 = useState('login');
   const [applySuccess, setApplySuccess] = useState('');
 
   function handleChange(e) {
@@ -204,8 +220,6 @@ export default function Login() {
     setError('');
 
     try {
-      // credentials: 'include' is handled globally by api.js (withCredentials: true).
-      // The browser stores the HttpOnly cookie from the Set-Cookie response header.
       const { data } = await api.post('/auth/login', {
         username: form.username.trim(),
         password: form.password,
@@ -227,18 +241,21 @@ export default function Login() {
   }
 
   return (
-    <div className="login-page">
-      <div className="login-card" role="main">
+    /* Page background */
+    <div className="min-h-screen bg-gradient-to-br from-[#001e42] to-[#002B5B] flex items-center justify-center p-4">
 
-        {/* Card header */}
-        <div className="login-card__header">
-          <span className="login-card__logo" aria-hidden="true">🏦</span>
-          <h1 className="login-card__bank-name">Nib International Bank</h1>
-          <p className="login-card__tagline">Internal Referral Management</p>
+      {/* Card */}
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" role="main">
+
+        {/* Card header — navy bar with logo */}
+        <div className="bg-[#002B5B] px-8 py-6 text-center border-b-4 border-[#C5A059]">
+          <span className="text-4xl" aria-hidden="true">🏦</span>
+          <h1 className="text-white font-bold text-xl tracking-tight mt-2">Nib International Bank</h1>
+          <p className="text-[#C5A059] text-sm mt-1 tracking-wide">Internal Referral Management</p>
         </div>
 
         {/* Card body — toggles between login and apply views */}
-        <div className="login-card__body">
+        <div className="px-8 py-6">
           {view === 'apply' ? (
             <AgentApplyForm
               onBack={() => setView('login')}
@@ -246,36 +263,40 @@ export default function Login() {
             />
           ) : (
             <>
-              <p className="login-card__title">Staff Portal Sign In</p>
-              <p className="login-card__subtitle">
+              <p className="text-[#002B5B] font-bold text-lg mb-1">Staff Portal Sign In</p>
+              <p className="text-gray-500 text-sm mb-5">
                 Enter your credentials to access the referral dashboard.
               </p>
 
               {applySuccess && (
-                <div className="login-apply-success" role="status" aria-live="polite">
+                <div
+                  className="bg-green-50 border border-green-200 border-l-4 border-l-green-500 rounded-lg p-3 text-green-800 text-sm mb-4"
+                  role="status"
+                  aria-live="polite"
+                >
                   {applySuccess}
                 </div>
               )}
 
               <form
                 id="login-form"
-                className="login-form"
+                className="space-y-4"
                 onSubmit={handleSubmit}
                 noValidate
                 aria-label="Login form"
               >
                 {/* Username */}
-                <div className="login-field">
-                  <label className="login-field__label" htmlFor="login-username">
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="login-username">
                     Username
                   </label>
-                  <div className="login-field__input-wrap">
-                    <span className="login-field__icon" aria-hidden="true">👤</span>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">👤</span>
                     <input
                       id="login-username"
                       name="username"
                       type="text"
-                      className={`login-field__input${error ? ' login-field__input--error' : ''}`}
+                      className={error ? inputError : inputBase}
                       placeholder="Enter your username"
                       value={form.username}
                       onChange={handleChange}
@@ -287,17 +308,17 @@ export default function Login() {
                 </div>
 
                 {/* Password */}
-                <div className="login-field">
-                  <label className="login-field__label" htmlFor="login-password">
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="login-password">
                     Password
                   </label>
-                  <div className="login-field__input-wrap">
-                    <span className="login-field__icon" aria-hidden="true">🔒</span>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">🔒</span>
                     <input
                       id="login-password"
                       name="password"
                       type="password"
-                      className={`login-field__input${error ? ' login-field__input--error' : ''}`}
+                      className={error ? inputError : inputBase}
                       placeholder="Enter your password"
                       value={form.password}
                       onChange={handleChange}
@@ -308,8 +329,12 @@ export default function Login() {
                 </div>
 
                 {error && (
-                  <div className="login-error" role="alert" aria-live="assertive">
-                    <span className="login-error__icon" aria-hidden="true">⚠️</span>
+                  <div
+                    className="flex items-center gap-2 bg-red-50 border border-red-200 border-l-4 border-l-red-500 rounded-lg p-3 text-red-800 text-sm"
+                    role="alert"
+                    aria-live="assertive"
+                  >
+                    <span aria-hidden="true">⚠️</span>
                     <span>{error}</span>
                   </div>
                 )}
@@ -317,27 +342,30 @@ export default function Login() {
                 <button
                   id="login-submit-btn"
                   type="submit"
-                  className="login-btn"
+                  className="w-full bg-[#002B5B] hover:bg-[#001e42] text-white font-semibold py-3 rounded-lg text-sm tracking-wide transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-2"
                   disabled={submitting}
                   aria-busy={submitting}
                 >
                   {submitting ? (
                     <>
-                      <span className="login-spinner" aria-hidden="true" />
+                      <span
+                        className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
+                        aria-hidden="true"
+                      />
                       Signing in…
                     </>
                   ) : (
-                    ' Sign In to Dashboard'
+                    '🔐 Sign In to Dashboard'
                   )}
                 </button>
               </form>
 
               {/* Become an agent */}
-              <div className="login-apply-row">
-                <span className="login-apply-row__text">Not a staff member?</span>
+              <div className="mt-5 pt-4 border-t border-gray-100 flex items-center justify-center gap-2 text-sm">
+                <span className="text-gray-500">Not a staff member?</span>
                 <button
                   type="button"
-                  className="login-apply-link"
+                  className="text-[#002B5B] font-semibold hover:text-[#C5A059] hover:underline transition-colors"
                   onClick={() => { setError(''); setView('apply'); }}
                 >
                   Want to become an agent? Apply here.
@@ -348,7 +376,7 @@ export default function Login() {
         </div>
 
         {/* Card footer */}
-        <div className="login-card__footer">
+        <div className="px-8 py-3 bg-[#F2F5F8] border-t border-gray-200 text-center text-xs text-gray-400">
           Secured with <strong>HttpOnly JWT</strong> · Internal use only
         </div>
 

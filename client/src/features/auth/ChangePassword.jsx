@@ -5,10 +5,11 @@
  *
  * Blocks access to the full dashboard until the agent sets a permanent password.
  *
- * V2 (Axios migration):
- *   - fetch() replaced with api.js Axios instance.
- *   - Error messages read from err.response?.data?.error (Axios pattern).
- *   - withCredentials handled globally — no per-call option needed.
+ * V3 (Tailwind migration):
+ *   - `const styles = { ... }` object removed entirely.
+ *   - All `style={styles.X}` replaced with Tailwind className equivalents.
+ *   - Dynamic values (strength color, mismatch border) kept as inline style.
+ *   - Logic, Axios usage, and component structure are unchanged.
  */
 
 import { useRef, useState } from 'react';
@@ -80,29 +81,48 @@ export default function ChangePassword() {
 
   const strength = getStrength(form.newPassword);
 
+  // Confirm password border — dynamic red when mismatch
+  const confirmMismatch =
+    form.confirmPassword && form.confirmPassword !== form.newPassword;
+
   return (
-    <div style={styles.page}>
+    <div className="min-h-screen bg-[#F2F5F8] flex flex-col antialiased">
+
       {/* Header */}
-      <header style={styles.header}>
-        <div style={styles.headerInner}>
-          <div style={styles.brand}>
-            <div style={styles.monogram}>NIB</div>
+      <header className="bg-[#002B5B] border-b-[3px] border-[#96720C] shadow-md">
+        <div className="max-w-lg mx-auto px-6 py-3.5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {/* NIB monogram */}
+            <div className="w-9 h-9 bg-[#96720C] text-white text-[11px] font-extrabold tracking-wide flex items-center justify-center rounded flex-shrink-0 select-none">
+              NIB
+            </div>
             <div>
-              <div style={styles.headerTitle}>Nib International Bank</div>
-              <div style={styles.headerSub}>AGENT PORTAL — ACCOUNT SETUP</div>
+              <div className="text-white font-bold text-base tracking-tight leading-tight">
+                Nib International Bank
+              </div>
+              <div className="text-white/50 text-[9.5px] tracking-widest uppercase mt-0.5">
+                AGENT PORTAL — ACCOUNT SETUP
+              </div>
             </div>
           </div>
-          <button style={styles.logoutBtn} onClick={handleLogout}>
+          <button
+            className="bg-transparent border border-white/25 text-white/80 rounded px-3.5 py-1.5 text-xs font-semibold cursor-pointer hover:border-white/50 hover:text-white transition-colors"
+            onClick={handleLogout}
+          >
             ↩ Sign Out
           </button>
         </div>
       </header>
 
-      {/* Card */}
-      <main style={styles.main}>
-        <div style={styles.card}>
+      {/* Main — card centered */}
+      <main className="flex-1 flex flex-col items-center justify-center px-6 py-10">
+        <div className="bg-white border border-[#D8DEE6] rounded-lg shadow-lg p-10 w-full max-w-[440px] flex flex-col gap-5">
 
-          <div style={styles.iconWrap} aria-hidden="true">
+          {/* Lock icon */}
+          <div
+            className="w-13 h-13 bg-[#EBF0F7] rounded-full flex items-center justify-center self-start"
+            aria-hidden="true"
+          >
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
               stroke="#002B5B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
@@ -110,20 +130,26 @@ export default function ChangePassword() {
             </svg>
           </div>
 
-          <h1 style={styles.title}>Set Your Password</h1>
-          <p style={styles.subtitle}>
+          <h1 className="text-[#002B5B] text-xl font-bold tracking-tight leading-tight">
+            Set Your Password
+          </h1>
+          <p className="text-gray-700 text-[13.5px] leading-relaxed -mt-2">
             Welcome, <strong>{user?.username}</strong>. You are using a temporary
             password. You must set a permanent password before accessing the portal.
           </p>
 
-          <div style={styles.infoBanner}>
+          {/* Info banner */}
+          <div className="bg-[#EBF0F7] border border-[#002B5B]/15 border-l-[3px] border-l-[#96720C] rounded p-3.5 text-[12px] text-[#1E3A5F] leading-relaxed">
             <strong>Why am I seeing this?</strong> For your security, temporary
             passwords are single-use. Once you set a permanent password, the
             temporary one is cryptographically invalidated and can never be used again.
           </div>
 
           {success ? (
-            <div style={styles.successBox} role="status">
+            <div
+              className="flex items-center gap-2.5 bg-green-50 border border-green-300 border-l-[3px] border-l-green-500 rounded p-4 text-[13px] font-medium text-green-900"
+              role="status"
+            >
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
                 stroke="#14532D" strokeWidth="2.5" strokeLinecap="round">
                 <polyline points="20 6 9 17 4 12"/>
@@ -131,12 +157,18 @@ export default function ChangePassword() {
               <span>Password set successfully. Loading your dashboard…</span>
             </div>
           ) : (
-            <form onSubmit={handleSubmit} noValidate style={styles.form}
-              aria-label="Set permanent password">
-
+            <form
+              onSubmit={handleSubmit}
+              noValidate
+              className="flex flex-col gap-4"
+              aria-label="Set permanent password"
+            >
               {/* New password */}
-              <div style={styles.field}>
-                <label style={styles.label} htmlFor="cp-new-password">
+              <div className="flex flex-col gap-1.5">
+                <label
+                  className="text-[11px] font-bold text-gray-500 uppercase tracking-wide"
+                  htmlFor="cp-new-password"
+                >
                   New Password
                 </label>
                 <input
@@ -148,21 +180,29 @@ export default function ChangePassword() {
                   required
                   autoFocus
                   ref={newPwRef}
-                  style={styles.input}
+                  className="bg-[#F2F5F8] border-[1.5px] border-[#D8DEE6] rounded text-gray-900 text-[13.5px] px-3 py-2.5 outline-none w-full transition focus:border-[#002B5B] focus:ring-2 focus:ring-[#002B5B]/20"
                   placeholder="Minimum 8 characters"
                   autoComplete="new-password"
                 />
+                {/* Strength bar */}
                 {form.newPassword && (
-                  <div style={styles.strengthWrap}>
-                    <div style={styles.strengthTrack}>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="flex gap-1 flex-1">
                       {[1, 2, 3].map(n => (
-                        <div key={n} style={{
-                          ...styles.strengthSegment,
-                          background: strength.level >= n ? strength.color : '#E5E7EB',
-                        }} />
+                        <div
+                          key={n}
+                          className="flex-1 h-1 rounded-sm transition-colors"
+                          style={{
+                            background: strength.level >= n ? strength.color : '#E5E7EB',
+                          }}
+                        />
                       ))}
                     </div>
-                    <span style={{ ...styles.strengthLabel, color: strength.color }}>
+                    {/* Dynamic color kept as inline style */}
+                    <span
+                      className="text-[11px] font-semibold flex-shrink-0 w-11 text-right"
+                      style={{ color: strength.color }}
+                    >
                       {strength.label}
                     </span>
                   </div>
@@ -170,8 +210,11 @@ export default function ChangePassword() {
               </div>
 
               {/* Confirm password */}
-              <div style={styles.field}>
-                <label style={styles.label} htmlFor="cp-confirm-password">
+              <div className="flex flex-col gap-1.5">
+                <label
+                  className="text-[11px] font-bold text-gray-500 uppercase tracking-wide"
+                  htmlFor="cp-confirm-password"
+                >
                   Confirm New Password
                 </label>
                 <input
@@ -181,10 +224,10 @@ export default function ChangePassword() {
                   value={form.confirmPassword}
                   onChange={handleChange}
                   required
+                  className="bg-[#F2F5F8] border-[1.5px] rounded text-gray-900 text-[13.5px] px-3 py-2.5 outline-none w-full transition focus:ring-2"
                   style={{
-                    ...styles.input,
-                    borderColor: form.confirmPassword && form.confirmPassword !== form.newPassword
-                      ? '#EF4444' : undefined,
+                    borderColor: confirmMismatch ? '#EF4444' : '#D8DEE6',
+                    // Tailwind focus ring colour also swaps dynamically
                   }}
                   placeholder="Re-enter your new password"
                   autoComplete="new-password"
@@ -192,18 +235,19 @@ export default function ChangePassword() {
               </div>
 
               {error && (
-                <div style={styles.errorBox} role="alert">{error}</div>
+                <div
+                  className="bg-red-50 border border-red-300 border-l-[3px] border-l-red-500 rounded p-3.5 text-xs text-red-900"
+                  role="alert"
+                >
+                  {error}
+                </div>
               )}
 
               <button
                 id="change-password-btn"
                 type="submit"
                 disabled={submitting}
-                style={{
-                  ...styles.submitBtn,
-                  opacity: submitting ? 0.6 : 1,
-                  cursor:  submitting ? 'not-allowed' : 'pointer',
-                }}
+                className="bg-[#002B5B] hover:bg-[#001e42] text-white rounded px-5 py-3 text-[13.5px] font-semibold tracking-wide transition-colors disabled:opacity-60 disabled:cursor-not-allowed w-full"
               >
                 {submitting ? 'Setting Password…' : 'Set Permanent Password'}
               </button>
@@ -211,40 +255,10 @@ export default function ChangePassword() {
           )}
         </div>
 
-        <p style={styles.footer}>
+        <p className="mt-5 text-[11px] text-gray-400 text-center">
           Nib International Bank · Internal Security System · All sessions are monitored.
         </p>
       </main>
     </div>
   );
 }
-
-// ── Inline styles (identical to original — no visual change) ──────────────────
-const styles = {
-  page:          { minHeight: '100vh', display: 'flex', flexDirection: 'column', background: '#F2F5F8', fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif", WebkitFontSmoothing: 'antialiased' },
-  header:        { background: '#002B5B', borderBottom: '3px solid #96720C', boxShadow: '0 2px 6px rgba(0,0,0,0.2)' },
-  headerInner:   { maxWidth: '520px', margin: '0 auto', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  brand:         { display: 'flex', alignItems: 'center', gap: '12px' },
-  monogram:      { width: '36px', height: '36px', background: '#96720C', color: '#fff', fontSize: '11px', fontWeight: '800', letterSpacing: '0.6px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px', flexShrink: 0, userSelect: 'none' },
-  headerTitle:   { fontSize: '16px', fontWeight: '700', color: '#fff', letterSpacing: '-0.2px', lineHeight: '1.2' },
-  headerSub:     { fontSize: '9.5px', color: 'rgba(255,255,255,0.5)', letterSpacing: '0.8px', textTransform: 'uppercase', marginTop: '2px' },
-  logoutBtn:     { background: 'transparent', border: '1px solid rgba(255,255,255,0.25)', color: 'rgba(255,255,255,0.8)', borderRadius: '4px', padding: '6px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit', transition: 'border-color 0.14s, color 0.14s' },
-  main:          { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px 48px' },
-  card:          { background: '#fff', border: '1px solid #D8DEE6', borderRadius: '8px', boxShadow: '0 1px 4px rgba(0,0,0,0.06), 0 4px 20px rgba(0,43,91,0.09)', padding: '40px 40px 36px', width: '100%', maxWidth: '440px', display: 'flex', flexDirection: 'column', gap: '20px' },
-  iconWrap:      { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '52px', height: '52px', background: '#EBF0F7', borderRadius: '50%', alignSelf: 'flex-start' },
-  title:         { fontSize: '20px', fontWeight: '700', color: '#002B5B', letterSpacing: '-0.3px', lineHeight: '1.2' },
-  subtitle:      { fontSize: '13.5px', color: '#374151', lineHeight: '1.6', margin: '-8px 0 0' },
-  infoBanner:    { background: '#EBF0F7', border: '1px solid rgba(0,43,91,0.15)', borderLeft: '3px solid #96720C', borderRadius: '4px', padding: '10px 14px', fontSize: '12px', color: '#1E3A5F', lineHeight: '1.55' },
-  form:          { display: 'flex', flexDirection: 'column', gap: '16px' },
-  field:         { display: 'flex', flexDirection: 'column', gap: '5px' },
-  label:         { fontSize: '11px', fontWeight: '700', color: '#6B7280', letterSpacing: '0.5px', textTransform: 'uppercase' },
-  input:         { background: '#F2F5F8', border: '1.5px solid #D8DEE6', borderRadius: '4px', color: '#111827', fontFamily: 'inherit', fontSize: '13.5px', padding: '9px 12px', outline: 'none', width: '100%', transition: 'border-color 0.14s, box-shadow 0.14s' },
-  strengthWrap:  { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' },
-  strengthTrack: { display: 'flex', gap: '4px', flex: 1 },
-  strengthSegment: { flex: 1, height: '4px', borderRadius: '2px', transition: 'background 0.25s' },
-  strengthLabel: { fontSize: '11px', fontWeight: '600', flexShrink: 0, width: '44px', textAlign: 'right' },
-  errorBox:      { background: '#FFF5F5', border: '1px solid #FCA5A5', borderLeft: '3px solid #EF4444', borderRadius: '4px', padding: '10px 14px', fontSize: '12.5px', color: '#7F1D1D' },
-  successBox:    { display: 'flex', alignItems: 'center', gap: '10px', background: '#F0FDF4', border: '1px solid #86EFAC', borderLeft: '3px solid #22C55E', borderRadius: '4px', padding: '14px 16px', fontSize: '13px', fontWeight: '500', color: '#14532D' },
-  submitBtn:     { background: '#002B5B', color: '#fff', border: 'none', borderRadius: '4px', padding: '11px 20px', fontSize: '13.5px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '0.2px', transition: 'background 0.14s', alignSelf: 'stretch' },
-  footer:        { marginTop: '20px', fontSize: '11px', color: '#9CA3AF', textAlign: 'center' },
-};
