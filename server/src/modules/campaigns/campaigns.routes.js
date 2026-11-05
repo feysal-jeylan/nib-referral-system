@@ -31,3 +31,4 @@ router.delete('/:id/rules/:ruleId',    ...adminOnly, ctrl.deleteRule);
 router.get('/:id/stats',   ...adminOnly, ctrl.getCampaignStats);
 
 module.exports = router;
+

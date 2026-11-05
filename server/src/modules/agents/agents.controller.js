@@ -1,0 +1,177 @@
+/**
+ * src/modules/agents/agents.controller.js
+ * ─────────────────────────────────────────
+ * HTTP layer for agent endpoints.
+ * Handles req/res and input validation.
+ * All DB work delegated to agents.service.js.
+ */
+
+'use strict';
+
+const svc = require('./agents.service');
+
+// ── POST /api/agents/apply  (PUBLIC) ─────────────────────────────────────────
+async function applyAsAgent(req, res, next) {
+  const name  = req.body.name?.trim();
+  const phone = req.body.phone?.trim();
+  const email = req.body.email?.trim()?.toLowerCase();
+
+  if (!name || !phone || !email) {
+    return res.status(400).json({ error: 'All fields are required: name, phone, email.', code: 'MISSING_FIELDS' });
+  }
+  if (!email.includes('@')) {
+    return res.status(400).json({ error: 'A valid email address is required.', code: 'INVALID_EMAIL' });
+  }
+
+  try {
+    await svc.applyAsAgent({ name, phone, email });
+    return res.status(201).json({ message: 'Application submitted. Awaiting Admin approval.' });
+  } catch (err) {
+    if (err.code === 'P2002') {
+      return res.status(409).json({ error: 'An agent with this phone number or email already exists.', code: 'DUPLICATE_ENTRY' });
+    }
+    console.error('[POST /api/agents/apply] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+// ── GET /api/agents ───────────────────────────────────────────────────────────
+async function listAgents(req, res, next) {
+  try {
+    const shaped = await svc.listAgents(req.user.role, req.user.agent_id);
+    return res.status(200).json(shaped);
+  } catch (err) {
+    console.error('[GET /api/agents] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+// ── POST /api/agents  (ADMIN) ─────────────────────────────────────────────────
+async function createAgent(req, res, next) {
+  const name  = req.body.name?.trim();
+  const phone = req.body.phone?.trim();
+  const email = req.body.email?.trim();
+
+  if (!name || !phone || !email) {
+    return res.status(400).json({ error: 'All fields are required: name, phone, email.', code: 'MISSING_FIELDS' });
+  }
+  if (!email.includes('@')) {
+    return res.status(400).json({ error: 'A valid email address is required.', code: 'INVALID_EMAIL' });
+  }
+
+  try {
+    const { agent, tempPassword, email: agentEmail } = await svc.createApprovedAgent({ name, phone, email });
+
+    console.log(`[AGENT ONBOARDING] Temp password for ${agentEmail}: ${tempPassword}`);
+    console.log(`[AGENT ONBOARDING] ⚠️  This should be delivered via secure email.`);
+
+    return res.status(201).json({
+      id:            agent.id,
+      name:          agent.name,
+      referral_code: agent.referral_code,
+      status:        agent.status,
+      created_at:    agent.created_at,
+      message:       `Agent created. Temporary credentials have been dispatched to ${agentEmail}.`,
+      temp_password: tempPassword,
+    });
+  } catch (err) {
+    if (err.code === 'P2002') {
+      let field = 'phone or email';
+      const target = err.meta?.target ?? '';
+      if (String(target).includes('phone'))         field = 'phone number';
+      if (String(target).includes('email'))         field = 'email address';
+      if (String(target).includes('referral_code')) field = 'referral code';
+      if (String(target).includes('username'))      field = 'email (user account)';
+      return res.status(409).json({ error: `An agent with this ${field} already exists.`, code: 'DUPLICATE_ENTRY' });
+    }
+    console.error('[POST /api/agents] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+// ── PATCH /api/agents/:id/approve  (ADMIN) ───────────────────────────────────
+async function approveAgent(req, res, next) {
+  const agentId = parseInt(req.params.id, 10);
+  if (isNaN(agentId)) {
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  let agent;
+  try {
+    agent = await svc.findAgentById(agentId);
+  } catch (err) {
+    console.error('[PATCH /api/agents/:id/approve] DB lookup error:', err.message);
+    return next(err);
+  }
+
+  if (!agent) {
+    return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
+  }
+
+  try {
+    const { agent: updated, tempPassword } = await svc.approveAgent(agentId, agent.email, agent.referral_code);
+
+    console.log(`[AGENT APPROVAL] Temp password for ${agent.email}: ${tempPassword}`);
+    console.log(`[AGENT APPROVAL] ⚠️  Deliver this via secure email in production.`);
+
+    return res.status(200).json({
+      id:            updated.id,
+      name:          updated.name,
+      referral_code: updated.referral_code,
+      status:        updated.status,
+      temp_password: tempPassword,
+      message:       `Agent approved. Temporary credentials dispatched to ${agent.email}.`,
+    });
+  } catch (err) {
+    if (err.code === 'P2002') {
+      return res.status(409).json({ error: 'A user account for this agent already exists.', code: 'DUPLICATE_ENTRY' });
+    }
+    console.error('[PATCH /api/agents/:id/approve] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+// ── PATCH /api/agents/:id/reject  (ADMIN) ────────────────────────────────────
+async function rejectAgent(req, res, next) {
+  const agentId = parseInt(req.params.id, 10);
+  if (isNaN(agentId)) {
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  try {
+    const updated = await svc.rejectAgent(agentId);
+    return res.status(200).json({ id: updated.id, name: updated.name, status: updated.status });
+  } catch (err) {
+    if (err.code === 'P2025') {
+      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
+    }
+    console.error('[PATCH /api/agents/:id/reject] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+// ── GET /api/agents/:id/stats ─────────────────────────────────────────────────
+async function getAgentStats(req, res, next) {
+  const agentId = parseInt(req.params.id, 10);
+  if (isNaN(agentId)) {
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  // RBAC: agents can only view their own stats
+  if (req.user.role === 'AGENT' && req.user.agent_id !== agentId) {
+    return res.status(403).json({ error: 'Access denied. Agents can only view their own stats.', code: 'FORBIDDEN' });
+  }
+
+  try {
+    const stats = await svc.getAgentStats(agentId);
+    if (!stats) {
+      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
+    }
+    return res.status(200).json(stats);
+  } catch (err) {
+    console.error('[GET /api/agents/:id/stats] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+module.exports = { applyAsAgent, listAgents, createAgent, approveAgent, rejectAgent, getAgentStats };

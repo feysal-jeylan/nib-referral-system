@@ -3,28 +3,28 @@
  * ───────────────────────────────────────────────────────────────────────────
  * Entry point for the Nib Bank Referral System Express server.
  *
- * IMPORTANT: 'module-alias/register' MUST be the first require() so that
- * the '@/' path alias is registered before any module that uses it is loaded.
+ * IMPORTANT: 'module-alias/register' MUST be the very first require() so the
+ * '@/' alias is registered before any module that uses it is loaded.
  *
- * Architecture (Phase 3 MVC refactor):
- *   Campaigns module  → src/modules/campaigns/campaigns.routes.js  ✅ migrated
- *   Auth module       → routes/auth.js                             (pending)
- *   Agents module     → routes/agents.js                           (pending)
- *   Referrals module  → routes/referrals.js                        (pending)
- *   Integration module→ routes/integration.js                      (pending)
+ * Phase 3b (complete) — all routes now use MVC modules under src/modules/:
+ *   /api/auth        → src/modules/auth/auth.routes.js
+ *   /api/agents      → src/modules/agents/agents.routes.js
+ *   /api/referrals   → src/modules/referrals/referrals.routes.js
+ *   /api/campaigns   → src/modules/campaigns/campaigns.routes.js
+ *   /api/integration → src/modules/integration/integration.routes.js
  *
- * Middleware:
+ * The legacy routes/ folder has been removed. All imports use the '@/' alias.
+ *
+ * Security:
  *   helmet       — secure HTTP headers
  *   cors         — restrict origin to Vite dev server (credentials: true)
  *   cookieParser — populate req.cookies for HttpOnly JWT auth
  *   express.json — parse JSON request bodies
- *
- * Security: JWT in HttpOnly, SameSite=Lax cookie — no token in JS memory.
  */
 
 'use strict';
 
-// ── MUST be first — registers '@/' alias for all subsequent requires ──────────
+// ── MUST be first — registers '@/' → './src' alias ────────────────────────────
 require('module-alias/register');
 
 const express      = require('express');
@@ -34,19 +34,14 @@ const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
 // Prisma singleton — warms up the connection pool on startup.
-// Legacy path kept for the remaining unmigrated routes.
-const prisma = require('./db-prisma');
+const prisma = require('@/config/db');
 
-// ── Route Imports ─────────────────────────────────────────────────────────────
-
-// ✅ MVC module (Phase 3)
+// ── Route Imports (all via @/ alias) ─────────────────────────────────────────
+const authRouter        = require('@/modules/auth/auth.routes');
+const agentsRouter      = require('@/modules/agents/agents.routes');
+const referralsRouter   = require('@/modules/referrals/referrals.routes');
 const campaignsRouter   = require('@/modules/campaigns/campaigns.routes');
-
-// ⏳ Legacy flat routes (to be migrated in subsequent phases)
-const agentsRouter      = require('./routes/agents');
-const referralsRouter   = require('./routes/referrals');
-const authRouter        = require('./routes/auth');
-const integrationRouter = require('./routes/integration');
+const integrationRouter = require('@/modules/integration/integration.routes');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -54,6 +49,8 @@ const PORT = process.env.PORT || 3000;
 // ── Security Middleware ───────────────────────────────────────────────────────
 app.use(helmet());
 
+// credentials:true + explicit origin required for HttpOnly cookie cross-port flow
+// (Vite :5173 → API :3000)
 app.use(cors({
   origin:         'http://localhost:5173',
   credentials:    true,
@@ -81,7 +78,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth',        authRouter);
 app.use('/api/agents',      agentsRouter);
 app.use('/api/referrals',   referralsRouter);
-app.use('/api/campaigns',   campaignsRouter);   // ✅ MVC module
+app.use('/api/campaigns',   campaignsRouter);
 app.use('/api/integration', integrationRouter);
 
 // ── Error Handling ────────────────────────────────────────────────────────────
