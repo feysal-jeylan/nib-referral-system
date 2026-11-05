@@ -45,3 +45,4 @@ router.post('/account-opened', ctrl.accountOpened);
 router.get('/logs', authenticateToken, authorizeRole(['ADMIN']), ctrl.getLogs);
 
 module.exports = router;
+

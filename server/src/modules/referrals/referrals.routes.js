@@ -17,3 +17,4 @@ router.get('/',             authenticateToken,                            ctrl.l
 router.patch('/:id/status', authenticateToken, authorizeRole(['ADMIN']), ctrl.updateStatus);
 
 module.exports = router;
+

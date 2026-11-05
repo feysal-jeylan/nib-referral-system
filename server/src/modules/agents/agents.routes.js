@@ -32,3 +32,4 @@ router.patch('/:id/reject',  ...adminOnly,      ctrl.rejectAgent);
 router.get('/:id/stats',     authenticateToken, ctrl.getAgentStats);
 
 module.exports = router;
+

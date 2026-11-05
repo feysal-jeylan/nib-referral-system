@@ -19,3 +19,4 @@ router.post('/logout',          ctrl.logout);
 router.post('/change-password', authenticateToken, ctrl.changePassword);
 
 module.exports = router;
+

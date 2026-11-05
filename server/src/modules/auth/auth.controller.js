@@ -132,3 +132,4 @@ async function changePassword(req, res, next) {
 }
 
 module.exports = { login, me, logout, changePassword };
+

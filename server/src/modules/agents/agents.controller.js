@@ -175,3 +175,4 @@ async function getAgentStats(req, res, next) {
 }
 
 module.exports = { applyAsAgent, listAgents, createAgent, approveAgent, rejectAgent, getAgentStats };
+

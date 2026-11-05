@@ -57,3 +57,4 @@ async function updateReferralStatus(referralId, status) {
 }
 
 module.exports = { ALLOWED_STATUSES, listReferrals, updateReferralStatus };
+

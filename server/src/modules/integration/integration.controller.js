@@ -119,3 +119,4 @@ async function getLogs(req, res, next) {
 }
 
 module.exports = { accountOpened, getLogs };
+
