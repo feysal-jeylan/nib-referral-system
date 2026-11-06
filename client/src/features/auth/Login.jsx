@@ -1,32 +1,119 @@
 /**
  * client/src/features/auth/Login.jsx
  * ─────────────────────────────────────
- * Premium banking login screen for the Nib Referral System.
+ * Premium enterprise login — Nib International Bank Referral System.
  *
- * Two views toggled inside a single card:
- *   'login' → Staff Portal Sign In
- *   'apply' → Agent self-registration (public — no session required)
+ * Layout: Split-screen
+ *   LEFT  — Rich branding panel: deep navy gradient, geometric SVG shapes,
+ *            glassmorphism feature cards, animated floating orbs.
+ *   RIGHT — Polished login / agent-apply form with focus rings, error
+ *            slide-in animation, and smooth hover micro-interactions.
  *
- * V3 (Tailwind migration):
- *   - All CSS class names replaced with Tailwind utility classes.
- *   - `import '@/Login.css'` removed — no external CSS dependency.
- *   - Logic, Axios usage, and component structure are unchanged.
+ * Brand palette (brief-spec):
+ *   Deep Navy  #002B5B   Gold  #C5A059   Slate  #F4F7F9
  *
- * Security:
- *   - POST /api/auth/login → browser stores HttpOnly JWT cookie automatically.
- *   - The token is NEVER read from the response body or stored in JS.
- *   - Only the decoded user identity { id, username, role } enters React state.
+ * Logic & Axios usage unchanged from V2.
  */
 
 import { useState } from 'react';
 import { useAuth } from './AuthContext';
 import api from '@/services/api';
 
-// ─── Shared Tailwind class strings ───────────────────────────────────────────
-const inputBase =
-  'w-full bg-[#F2F5F8] border border-[#D8DEE6] rounded-lg pl-9 pr-3 py-2.5 text-sm text-gray-900 outline-none focus:border-[#002B5B] focus:ring-2 focus:ring-[#002B5B]/20 transition';
-const inputError =
-  'w-full bg-[#F2F5F8] border border-red-400 rounded-lg pl-9 pr-3 py-2.5 text-sm text-gray-900 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-400/20 transition';
+// ─── Shared input class builder ───────────────────────────────────────────────
+function inputCls(hasError) {
+  const base =
+    'w-full bg-[#F4F7F9] border rounded-xl px-4 py-3 pl-11 text-[#0A1628] text-sm ' +
+    'placeholder-[#94A3B8] outline-none transition-all duration-200 ' +
+    'focus:bg-white focus:shadow-[0_0_0_3px_rgba(197,160,89,0.18)] ';
+  return hasError
+    ? base + 'border-red-400 focus:border-red-400 focus:shadow-[0_0_0_3px_rgba(239,68,68,0.15)]'
+    : base + 'border-[#D8DEE6] focus:border-[#C5A059]';
+}
+
+// ─── Left branding panel ──────────────────────────────────────────────────────
+function BrandPanel() {
+  return (
+    <div className="hidden lg:flex relative flex-col justify-between overflow-hidden
+                    bg-[#002B5B] w-[46%] flex-shrink-0 p-10 xl:p-14">
+
+      {/* ── Deep gradient overlay ── */}
+      <div className="absolute inset-0 bg-gradient-to-br from-[#001830] via-[#002B5B] to-[#003E82] pointer-events-none" />
+
+      {/* ── Subtle dot-grid texture ── */}
+      <svg className="absolute inset-0 w-full h-full opacity-[0.07] pointer-events-none" aria-hidden="true">
+        <defs>
+          <pattern id="dot-grid" x="0" y="0" width="28" height="28" patternUnits="userSpaceOnUse">
+            <circle cx="1.5" cy="1.5" r="1.5" fill="#C5A059" />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#dot-grid)" />
+      </svg>
+
+      {/* ── Floating geometric orbs ── */}
+      <div className="animate-float-slow absolute -top-16 -right-16 w-72 h-72 rounded-full
+                      bg-gradient-to-br from-[#C5A059]/20 to-transparent pointer-events-none" />
+      <div className="animate-float absolute bottom-24 -left-20 w-56 h-56 rounded-full
+                      bg-gradient-to-tr from-[#003E82]/80 to-[#C5A059]/10 pointer-events-none" />
+      <div className="animate-float-slow absolute top-1/2 right-10 w-32 h-32 rounded-full
+                      border border-[#C5A059]/20 pointer-events-none" style={{ animationDelay: '2s' }} />
+
+      {/* ── Decorative ring behind logo ── */}
+      <div className="absolute top-10 left-10 xl:top-14 xl:left-14 w-16 h-16 pointer-events-none">
+        <div className="animate-pulse-ring absolute inset-0 rounded-full border border-[#C5A059]/40" />
+        <div className="animate-pulse-ring absolute inset-0 rounded-full border border-[#C5A059]/20"
+             style={{ animationDelay: '0.9s' }} />
+      </div>
+
+      {/* ── Brand mark ── */}
+      <div className="relative z-10">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#C5A059] to-[#9A7A3C]
+                          flex items-center justify-center shadow-lg">
+            <span className="text-white text-xl font-black tracking-tight select-none">N</span>
+          </div>
+          <div>
+            <p className="text-white font-bold text-base tracking-tight leading-none">NIB</p>
+            <p className="text-[#C5A059] text-[10px] tracking-[0.2em] uppercase font-medium mt-0.5">
+              International Bank
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Hero text ── */}
+      <div className="relative z-10 mt-auto pb-10">
+        <h2 className="text-white font-extrabold text-3xl xl:text-4xl leading-tight tracking-tight mb-4">
+          Referral<br />
+          <span className="text-[#C5A059]">Management</span><br />
+          System
+        </h2>
+        <p className="text-white/55 text-sm leading-relaxed max-w-[22ch]">
+          A secure, real-time platform for managing Nib Bank's internal referral network.
+        </p>
+
+        {/* ── Feature pills ── */}
+        <div className="mt-8 flex flex-col gap-3">
+          {[
+            { icon: '🔒', label: 'HttpOnly JWT Authentication' },
+            { icon: '⚡', label: 'Live data sync every 5 seconds' },
+            { icon: '🏦', label: 'Temenos Core Banking Integration' },
+          ].map(({ icon, label }) => (
+            <div key={label}
+                 className="flex items-center gap-3 bg-white/[0.06] border border-white/[0.10]
+                             rounded-xl px-4 py-2.5 backdrop-blur-sm">
+              <span className="text-base flex-shrink-0">{icon}</span>
+              <span className="text-white/70 text-xs font-medium">{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Bottom divider line ── */}
+      <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r
+                      from-transparent via-[#C5A059]/40 to-transparent" />
+    </div>
+  );
+}
 
 // ─── AgentApplyForm ───────────────────────────────────────────────────────────
 function AgentApplyForm({ onBack, onSuccess }) {
@@ -41,156 +128,135 @@ function AgentApplyForm({ onBack, onSuccess }) {
 
   async function handleSubmit(e) {
     e.preventDefault();
-
     const name  = form.name.trim();
     const phone = form.phone.trim();
     const email = form.email.trim();
 
-    if (!name || !phone || !email) {
-      setError('Please fill in all three fields.');
-      return;
-    }
-    if (!email.includes('@')) {
-      setError('Please enter a valid email address.');
-      return;
-    }
+    if (!name || !phone || !email) { setError('Please fill in all three fields.'); return; }
+    if (!email.includes('@'))      { setError('Please enter a valid email address.'); return; }
 
-    setSubmitting(true);
-    setError('');
-
+    setSubmitting(true); setError('');
     try {
       await api.post('/agents/apply', { name, phone, email });
       onSuccess();
     } catch (err) {
-      if (err.response?.status === 409) {
-        setError('An agent with this phone number or email already exists.');
-      } else {
-        setError(err.response?.data?.error ?? 'Something went wrong. Please try again.');
-      }
-    } finally {
-      setSubmitting(false);
-    }
+      setError(
+        err.response?.status === 409
+          ? 'An agent with this phone or email already exists.'
+          : (err.response?.data?.error ?? 'Something went wrong. Please try again.')
+      );
+    } finally { setSubmitting(false); }
   }
 
+  const fields = [
+    { id: 'apply-name',  name: 'name',  type: 'text',  icon: '👤', label: 'Full Name',       placeholder: 'e.g. Sara Tesfaye',    autoComplete: 'name' },
+    { id: 'apply-phone', name: 'phone', type: 'tel',   icon: '📱', label: 'Phone Number',    placeholder: 'e.g. 0912345678',      autoComplete: 'tel' },
+    { id: 'apply-email', name: 'email', type: 'email', icon: '✉️', label: 'Email Address',   placeholder: 'e.g. sara@example.com', autoComplete: 'email' },
+  ];
+
   return (
-    <div>
-      {/* Back link */}
+    <div className="animate-slide-in-up">
       <button
         type="button"
-        className="text-[#002B5B] text-sm font-semibold hover:text-[#C5A059] flex items-center gap-1 mb-5 transition-colors"
         onClick={onBack}
-        aria-label="Return to sign in"
+        className="inline-flex items-center gap-1.5 text-[#002B5B] text-xs font-semibold
+                   hover:text-[#C5A059] transition-colors duration-150 mb-6 group"
       >
-        ← Back to Sign In
+        <span className="transition-transform duration-150 group-hover:-translate-x-0.5">←</span>
+        Back to Sign In
       </button>
 
-      <p className="text-[#002B5B] font-bold text-lg mb-1">Agent Application</p>
-      <p className="text-gray-500 text-sm mb-5">
-        Submit your details to apply as a Nib referral agent.
-        An Admin will review and approve your application.
-      </p>
+      <div className="mb-6">
+        <h2 className="text-[#0A1628] font-bold text-xl tracking-tight">Agent Application</h2>
+        <p className="text-[#64748B] text-sm mt-1 leading-relaxed">
+          Submit your details to apply as a Nib referral agent. An Admin will review your application.
+        </p>
+      </div>
 
-      <form
-        className="space-y-4"
-        onSubmit={handleSubmit}
-        noValidate
-        aria-label="Agent application form"
-      >
-        {/* Full Name */}
-        <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="apply-name">
-            Full Name
-          </label>
-          <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">👤</span>
-            <input
-              id="apply-name"
-              name="name"
-              type="text"
-              className={error ? inputError : inputBase}
-              placeholder="e.g. Sara Tesfaye"
-              value={form.name}
-              onChange={handleChange}
-              autoComplete="name"
-              autoFocus
-              required
-            />
-          </div>
-        </div>
-
-        {/* Phone */}
-        <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="apply-phone">
-            Phone Number
-          </label>
-          <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">📱</span>
-            <input
-              id="apply-phone"
-              name="phone"
-              type="tel"
-              className={error ? inputError : inputBase}
-              placeholder="e.g. 0912345678"
-              value={form.phone}
-              onChange={handleChange}
-              autoComplete="tel"
-              required
-            />
-          </div>
-        </div>
-
-        {/* Email */}
-        <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="apply-email">
-            Email Address
-          </label>
-          <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">✉️</span>
-            <input
-              id="apply-email"
-              name="email"
-              type="email"
-              className={error ? inputError : inputBase}
-              placeholder="e.g. sara@example.com"
-              value={form.email}
-              onChange={handleChange}
-              autoComplete="email"
-              required
-            />
-          </div>
-        </div>
-
-        {error && (
-          <div
-            className="flex items-center gap-2 bg-red-50 border border-red-200 border-l-4 border-l-red-500 rounded-lg p-3 text-red-800 text-sm"
-            role="alert"
-            aria-live="assertive"
-          >
-            <span aria-hidden="true">⚠️</span>
-            <span>{error}</span>
-          </div>
-        )}
-
-        <button
-          type="submit"
-          className="w-full bg-[#002B5B] hover:bg-[#001e42] text-white font-semibold py-3 rounded-lg text-sm tracking-wide transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-2"
-          disabled={submitting}
-          aria-busy={submitting}
-        >
-          {submitting ? (
-            <>
-              <span
-                className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
-                aria-hidden="true"
+      <form onSubmit={handleSubmit} noValidate className="space-y-4" aria-label="Agent application form">
+        {fields.map(({ id, name, type, icon, label, placeholder, autoComplete }, i) => (
+          <div key={id}>
+            <label className="block text-[11px] font-bold text-[#64748B] uppercase tracking-widest mb-1.5" htmlFor={id}>
+              {label}
+            </label>
+            <div className="relative">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm pointer-events-none" aria-hidden="true">
+                {icon}
+              </span>
+              <input
+                id={id} name={name} type={type}
+                className={inputCls(!!error)}
+                placeholder={placeholder}
+                value={form[name]}
+                onChange={handleChange}
+                autoComplete={autoComplete}
+                autoFocus={i === 0}
+                required
               />
-              Submitting…
-            </>
-          ) : (
-            '📝 Submit Application'
-          )}
-        </button>
+            </div>
+          </div>
+        ))}
+
+        {error && <ErrorBanner message={error} />}
+
+        <SubmitButton loading={submitting} label="Submit Application" loadingLabel="Submitting…" icon="📝" />
       </form>
     </div>
+  );
+}
+
+// ─── Shared micro-components ──────────────────────────────────────────────────
+function ErrorBanner({ message }) {
+  return (
+    <div
+      className="animate-slide-in-down flex items-start gap-2.5 bg-red-50 border border-red-200
+                 rounded-xl p-3.5 text-red-800 text-xs leading-relaxed"
+      role="alert" aria-live="assertive"
+    >
+      <span className="mt-0.5 text-red-500 flex-shrink-0 text-sm">⚠</span>
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function SuccessBanner({ message }) {
+  return (
+    <div
+      className="animate-slide-in-down flex items-start gap-2.5 bg-emerald-50 border border-emerald-200
+                 rounded-xl p-3.5 text-emerald-800 text-xs leading-relaxed"
+      role="status" aria-live="polite"
+    >
+      <span className="mt-0.5 text-emerald-500 flex-shrink-0 text-sm">✓</span>
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function SubmitButton({ loading, label, loadingLabel, icon }) {
+  return (
+    <button
+      type="submit"
+      disabled={loading}
+      className="relative w-full mt-1 overflow-hidden rounded-xl px-5 py-3.5 text-sm font-bold
+                 text-white tracking-wide transition-all duration-200
+                 bg-[#002B5B] hover:bg-[#003E82]
+                 shadow-[0_4px_14px_rgba(0,43,91,0.35)] hover:shadow-[0_6px_20px_rgba(0,43,91,0.45)]
+                 disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none
+                 active:scale-[0.98] flex items-center justify-center gap-2.5"
+      aria-busy={loading}
+    >
+      {/* Gold shimmer line on top of button */}
+      <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r
+                      from-transparent via-[#C5A059]/60 to-transparent pointer-events-none" />
+      {loading ? (
+        <>
+          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin flex-shrink-0" aria-hidden="true" />
+          {loadingLabel}
+        </>
+      ) : (
+        <>{icon && <span aria-hidden="true">{icon}</span>}{label}</>
+      )}
+    </button>
   );
 }
 
@@ -201,7 +267,7 @@ export default function Login() {
   const [form, setForm]                 = useState({ username: '', password: '' });
   const [error, setError]               = useState('');
   const [submitting, setSubmitting]     = useState(false);
-  const [view, setView]                 = useState('login');
+  const [view, setView]                 = useState('login');   // 'login' | 'apply'
   const [applySuccess, setApplySuccess] = useState('');
 
   function handleChange(e) {
@@ -215,10 +281,7 @@ export default function Login() {
       setError('Please enter both your username and password.');
       return;
     }
-
-    setSubmitting(true);
-    setError('');
-
+    setSubmitting(true); setError('');
     try {
       const { data } = await api.post('/auth/login', {
         username: form.username.trim(),
@@ -227,76 +290,76 @@ export default function Login() {
       login(data.user);
     } catch (err) {
       setError(err.response?.data?.error ?? 'Invalid username or password. Please try again.');
-    } finally {
-      setSubmitting(false);
-    }
+    } finally { setSubmitting(false); }
   }
 
   function handleApplySuccess() {
     setView('login');
-    setApplySuccess(
-      '✅ Application submitted! An Admin will review and contact you with your login credentials.'
-    );
-    setTimeout(() => setApplySuccess(''), 8000);
+    setApplySuccess('Application submitted! An Admin will review and send your login credentials.');
+    setTimeout(() => setApplySuccess(''), 9000);
   }
 
   return (
-    /* Page background */
-    <div className="min-h-screen bg-gradient-to-br from-[#001e42] to-[#002B5B] flex items-center justify-center p-4">
+    <div className="min-h-screen flex bg-[#F4F7F9]">
 
-      {/* Card */}
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" role="main">
+      {/* ── Left branding panel ── */}
+      <BrandPanel />
 
-        {/* Card header — navy bar with logo */}
-        <div className="bg-[#002B5B] px-8 py-6 text-center border-b-4 border-[#C5A059]">
-          <span className="text-4xl" aria-hidden="true">🏦</span>
-          <h1 className="text-white font-bold text-xl tracking-tight mt-2">Nib International Bank</h1>
-          <p className="text-[#C5A059] text-sm mt-1 tracking-wide">Internal Referral Management</p>
+      {/* ── Right form panel ── */}
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-10 sm:px-10">
+
+        {/* Mobile brand mark (shown when left panel is hidden) */}
+        <div className="lg:hidden mb-8 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-[#002B5B] flex items-center justify-center">
+            <span className="text-[#C5A059] text-lg font-black">N</span>
+          </div>
+          <div>
+            <p className="text-[#002B5B] font-bold text-sm leading-none">NIB International Bank</p>
+            <p className="text-[#64748B] text-xs mt-0.5">Referral Management System</p>
+          </div>
         </div>
 
-        {/* Card body — toggles between login and apply views */}
-        <div className="px-8 py-6">
-          {view === 'apply' ? (
-            <AgentApplyForm
-              onBack={() => setView('login')}
-              onSuccess={handleApplySuccess}
-            />
-          ) : (
-            <>
-              <p className="text-[#002B5B] font-bold text-lg mb-1">Staff Portal Sign In</p>
-              <p className="text-gray-500 text-sm mb-5">
-                Enter your credentials to access the referral dashboard.
-              </p>
+        {/* ── Form card ── */}
+        <div className="w-full max-w-[420px]">
 
-              {applySuccess && (
-                <div
-                  className="bg-green-50 border border-green-200 border-l-4 border-l-green-500 rounded-lg p-3 text-green-800 text-sm mb-4"
-                  role="status"
-                  aria-live="polite"
-                >
-                  {applySuccess}
-                </div>
-              )}
+          {/* Card header accent bar */}
+          <div className="h-1 w-16 rounded-full bg-gradient-to-r from-[#C5A059] to-[#9A7A3C] mb-8" />
+
+          {view === 'apply' ? (
+            <AgentApplyForm onBack={() => setView('login')} onSuccess={handleApplySuccess} />
+          ) : (
+            <div className="animate-fade-in">
+              <div className="mb-8">
+                <h1 className="text-[#0A1628] font-extrabold text-2xl tracking-tight leading-tight">
+                  Welcome back
+                </h1>
+                <p className="text-[#64748B] text-sm mt-1.5">
+                  Sign in to your secure staff portal.
+                </p>
+              </div>
+
+              {applySuccess && <div className="mb-5"><SuccessBanner message={applySuccess} /></div>}
 
               <form
                 id="login-form"
-                className="space-y-4"
                 onSubmit={handleSubmit}
                 noValidate
+                className="space-y-5"
                 aria-label="Login form"
               >
                 {/* Username */}
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="login-username">
+                  <label className="block text-[11px] font-bold text-[#64748B] uppercase tracking-widest mb-1.5"
+                         htmlFor="login-username">
                     Username
                   </label>
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">👤</span>
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm pointer-events-none" aria-hidden="true">👤</span>
                     <input
                       id="login-username"
                       name="username"
                       type="text"
-                      className={error ? inputError : inputBase}
+                      className={inputCls(!!error)}
                       placeholder="Enter your username"
                       value={form.username}
                       onChange={handleChange}
@@ -309,16 +372,17 @@ export default function Login() {
 
                 {/* Password */}
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="login-password">
+                  <label className="block text-[11px] font-bold text-[#64748B] uppercase tracking-widest mb-1.5"
+                         htmlFor="login-password">
                     Password
                   </label>
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base" aria-hidden="true">🔒</span>
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm pointer-events-none" aria-hidden="true">🔒</span>
                     <input
                       id="login-password"
                       name="password"
                       type="password"
-                      className={error ? inputError : inputBase}
+                      className={inputCls(!!error)}
                       placeholder="Enter your password"
                       value={form.password}
                       onChange={handleChange}
@@ -328,58 +392,34 @@ export default function Login() {
                   </div>
                 </div>
 
-                {error && (
-                  <div
-                    className="flex items-center gap-2 bg-red-50 border border-red-200 border-l-4 border-l-red-500 rounded-lg p-3 text-red-800 text-sm"
-                    role="alert"
-                    aria-live="assertive"
-                  >
-                    <span aria-hidden="true">⚠️</span>
-                    <span>{error}</span>
-                  </div>
-                )}
+                {error && <ErrorBanner message={error} />}
 
-                <button
-                  id="login-submit-btn"
-                  type="submit"
-                  className="w-full bg-[#002B5B] hover:bg-[#001e42] text-white font-semibold py-3 rounded-lg text-sm tracking-wide transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-2"
-                  disabled={submitting}
-                  aria-busy={submitting}
-                >
-                  {submitting ? (
-                    <>
-                      <span
-                        className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
-                        aria-hidden="true"
-                      />
-                      Signing in…
-                    </>
-                  ) : (
-                    '🔐 Sign In to Dashboard'
-                  )}
-                </button>
+                <SubmitButton loading={submitting} label="Sign In to Dashboard" loadingLabel="Signing in…" icon="🔐" />
               </form>
 
-              {/* Become an agent */}
-              <div className="mt-5 pt-4 border-t border-gray-100 flex items-center justify-center gap-2 text-sm">
-                <span className="text-gray-500">Not a staff member?</span>
-                <button
-                  type="button"
-                  className="text-[#002B5B] font-semibold hover:text-[#C5A059] hover:underline transition-colors"
-                  onClick={() => { setError(''); setView('apply'); }}
-                >
-                  Want to become an agent? Apply here.
-                </button>
+              {/* Apply CTA */}
+              <div className="mt-7 pt-6 border-t border-[#E2E8F0] text-center">
+                <p className="text-[#64748B] text-xs">
+                  Not a staff member?{' '}
+                  <button
+                    type="button"
+                    className="text-[#002B5B] font-bold hover:text-[#C5A059] underline-offset-2
+                               hover:underline transition-colors duration-150"
+                    onClick={() => { setError(''); setApplySuccess(''); setView('apply'); }}
+                  >
+                    Apply to become an agent →
+                  </button>
+                </p>
               </div>
-            </>
+            </div>
           )}
-        </div>
 
-        {/* Card footer */}
-        <div className="px-8 py-3 bg-[#F2F5F8] border-t border-gray-200 text-center text-xs text-gray-400">
-          Secured with <strong>HttpOnly JWT</strong> · Internal use only
+          {/* Security badge */}
+          <p className="mt-8 text-center text-[10px] text-[#94A3B8] leading-relaxed">
+            🔐 Secured with HttpOnly JWT · Sessions are monitored
+            <br />Internal use only · Nib International Bank
+          </p>
         </div>
-
       </div>
     </div>
   );
