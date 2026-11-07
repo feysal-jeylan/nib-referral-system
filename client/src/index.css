@@ -1,85 +1,100 @@
 /*
  * client/src/index.css
  * ─────────────────────
- * Global CSS entry point.
+ * Global CSS entry point for Nib International Bank Referral System.
  *
- * This file is imported once in main.jsx. It does two jobs:
+ * Phase 5 — Brand refresh: Warm Brown / Honey Gold palette.
  *
+ * This file does two jobs:
  *   1. Loads Tailwind CSS v4 (utility classes, preflight reset).
- *   2. Defines the Nib Bank design-token palette as Tailwind theme
- *      variables so utility classes like `bg-navy`, `text-gold`,
- *      `border-border-color` are available project-wide.
+ *   2. Defines Nib Bank's new design-token palette in @theme so that
+ *      utility classes like `bg-brand`, `text-gold`, `border-cream`
+ *      are available project-wide without arbitrary value syntax.
  *
- * The existing App.css and Login.css are still imported inside their
- * respective JSX files and remain fully functional — Tailwind does NOT
- * break them. We migrate component styles to Tailwind incrementally
- * in Phases 2–4.
+ * Color design decisions:
+ *   --color-brand       Warm Brown #8A4D1F  — primary CTA, header, strong UI
+ *   --color-brand-hover Deeper Brown #6B3A15 — hover state for brand buttons
+ *   --color-brand-muted Muted Brown #7F483B  — secondary UI, subdued text
+ *   --color-gold        Honey Gold  #D4AF37  — accent, focus rings, dividers
+ *   --color-gold-light  Pale Gold   #FBF5DC  — tinted backgrounds
+ *   --color-bg          Warm Ivory  #FAF8F5  — page background
+ *   --color-surface     Pure White  #FFFFFF  — card surfaces
+ *   --color-text-1      Dark Espresso #1C0F05 — headings
+ *   --color-text-2      Warm Gray   #4A3728  — body copy
+ *   --color-text-3      Muted Taupe #9C8577  — placeholders, labels
+ *   --color-border      Parchment   #E5DED6  — dividers, input borders
+ *   --color-border-dark Warm Stone  #C9B9AE  — hover borders, table lines
  */
 
 @import "tailwindcss";
 
-/*
- * ── Nib Bank design tokens ─────────────────────────────────────────────────
- *
- * @theme registers CSS custom properties as Tailwind utilities.
- * These match the existing CSS variables in App.css 1:1 so the visual
- * design is identical whether a component uses the old CSS classes or
- * new Tailwind utilities.
- *
- * Usage examples after this block:
- *   bg-navy          → background: #002B5B
- *   text-gold        → color: #96720C
- *   border-border-color → border-color: #D8DEE6
- *   bg-surface       → background: #FFFFFF
- */
+/* ─────────────────────────────────────────────────────────────────────────────
+   Nib Bank Design Tokens — Phase 5 Warm Brown / Honey Gold palette
+   ───────────────────────────────────────────────────────────────────────────── */
 @theme {
-  /* ── Brand palette ───────────────────────────────────────────────────── */
-  --color-navy:         #002B5B;
-  --color-navy-hover:   #003A75;
-  --color-navy-light:   #EBF0F7;
-  --color-gold:         #96720C;
-  --color-gold-light:   #FDF6E3;
 
-  /* ── Neutrals ────────────────────────────────────────────────────────── */
-  --color-bg:           #F2F5F8;
-  --color-surface:      #FFFFFF;
-  --color-border-color: #D8DEE6;
-  --color-border-dark:  #C2CAD5;
-  --color-stripe:       #F7F9FB;
-  --color-text-1:       #111827;
-  --color-text-2:       #374151;
-  --color-text-3:       #6B7280;
+  /* ── Primary brand ────────────────────────────────────────────────────── */
+  --color-brand:        #8A4D1F;   /* Warm Brown — primary buttons, header */
+  --color-brand-hover:  #6B3A15;   /* Deeper brown — hover state */
+  --color-brand-muted:  #7F483B;   /* Muted brown — secondary UI */
+  --color-brand-light:  #F5EDE6;   /* Very pale brown — subtle tints */
 
-  /* ── Status — Pending ────────────────────────────────────────────────── */
-  --color-pending-bg:   #FFFBEB;
-  --color-pending-txt:  #78350F;
-  --color-pending-bdr:  #FCD34D;
+  /* ── Accent ───────────────────────────────────────────────────────────── */
+  --color-gold:         #D4AF37;   /* Honey Gold — focus rings, accents */
+  --color-gold-hover:   #B8961E;   /* Deeper gold — gold hover */
+  --color-gold-light:   #FBF5DC;   /* Pale gold — tinted surfaces */
+  --color-gold-muted:   #A8892B;   /* Muted gold — subdued accents */
 
-  /* ── Status — Success ────────────────────────────────────────────────── */
-  --color-success-bg:   #F0FDF4;
-  --color-success-txt:  #14532D;
-  --color-success-bdr:  #86EFAC;
+  /* ── Page surfaces ────────────────────────────────────────────────────── */
+  --color-bg:           #FAF8F5;   /* Warm Ivory — page background */
+  --color-surface:      #FFFFFF;   /* Pure white — card/form background */
+  --color-panel:        #F3EDE6;   /* Warm parchment — left brand panel bg */
+  --color-stripe:       #FBF9F6;   /* Near-white — zebra table rows */
 
-  /* ── Status — Reject ─────────────────────────────────────────────────── */
-  --color-reject-bg:    #FFF5F5;
-  --color-reject-txt:   #7F1D1D;
-  --color-reject-bdr:   #FCA5A5;
+  /* ── Text hierarchy ───────────────────────────────────────────────────── */
+  --color-text-1:       #1C0F05;   /* Dark espresso — headings */
+  --color-text-2:       #4A3728;   /* Warm brown — body text */
+  --color-text-3:       #9C8577;   /* Muted taupe — labels, placeholders */
 
-  /* ── Typography ──────────────────────────────────────────────────────── */
+  /* ── Borders ──────────────────────────────────────────────────────────── */
+  --color-border:       #E5DED6;   /* Parchment — default borders */
+  --color-border-dark:  #C9B9AE;   /* Warm stone — hover, strong dividers */
+
+  /* ── Status — Pending (warm amber) ───────────────────────────────────── */
+  --color-pending-bg:   #FEF9EC;
+  --color-pending-txt:  #7C4A03;
+  --color-pending-bdr:  #F0C854;
+
+  /* ── Status — Success (muted sage green) ─────────────────────────────── */
+  --color-success-bg:   #F2FAF4;
+  --color-success-txt:  #1A5C34;
+  --color-success-bdr:  #7DC898;
+
+  /* ── Status — Reject (muted terracotta) ──────────────────────────────── */
+  --color-reject-bg:    #FDF3F0;
+  --color-reject-txt:   #7A2518;
+  --color-reject-bdr:   #E8A090;
+
+  /* ── Status — Approved (soft teal) ───────────────────────────────────── */
+  --color-approved-bg:  #EEF8F7;
+  --color-approved-txt: #165A56;
+  --color-approved-bdr: #80C5BF;
+
+  /* ── Typography ───────────────────────────────────────────────────────── */
   --font-sans: 'Inter', 'Segoe UI', system-ui, sans-serif;
 
-  /* ── Border radius ───────────────────────────────────────────────────── */
-  --radius-card: 6px;
-  --radius-btn:  4px;
+  /* ── Border radius ────────────────────────────────────────────────────── */
+  --radius-card: 8px;
+  --radius-btn:  6px;
 
-  /* ── Shadows ─────────────────────────────────────────────────────────── */
-  --shadow-card: 0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(0,43,91,0.07);
-
-  /* ── Gold accent (design brief exact value) ───────────────────────────── */
-  --color-gold-accent: #C5A059;
+  /* ── Shadows ──────────────────────────────────────────────────────────── */
+  --shadow-card: 0 1px 3px rgba(28,15,5,0.06), 0 4px 16px rgba(138,77,31,0.07);
+  --shadow-lg:   0 8px 32px rgba(28,15,5,0.12);
 }
 
-/* ── Auth page animations ────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────────
+   Auth page animations
+   ───────────────────────────────────────────────────────────────────────────── */
 @keyframes slideInDown {
   from { opacity: 0; transform: translateY(-8px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -98,21 +113,26 @@
 }
 @keyframes float {
   0%, 100% { transform: translateY(0px) rotate(0deg); }
-  33%       { transform: translateY(-12px) rotate(1deg); }
-  66%       { transform: translateY(-6px) rotate(-1deg); }
+  33%       { transform: translateY(-10px) rotate(0.8deg); }
+  66%       { transform: translateY(-5px) rotate(-0.8deg); }
 }
 @keyframes floatSlow {
-  0%, 100% { transform: translateY(0px) rotate(0deg); }
-  50%       { transform: translateY(-18px) rotate(2deg); }
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-16px); }
 }
 @keyframes pulseRing {
   0%   { transform: scale(1);   opacity: 0.4; }
-  100% { transform: scale(1.6); opacity: 0; }
+  100% { transform: scale(1.65); opacity: 0; }
+}
+@keyframes drawLine {
+  from { stroke-dashoffset: 1; }
+  to   { stroke-dashoffset: 0; }
 }
 
-.animate-slide-in-down  { animation: slideInDown 0.3s ease both; }
-.animate-slide-in-up    { animation: slideInUp  0.4s ease both; }
-.animate-fade-in        { animation: fadeIn     0.5s ease both; }
-.animate-float          { animation: float      6s ease-in-out infinite; }
-.animate-float-slow     { animation: floatSlow  9s ease-in-out infinite; }
-.animate-pulse-ring     { animation: pulseRing  1.8s ease-out infinite; }
+/* ── Animation utility classes ──────────────────────────────────────────── */
+.animate-slide-in-down  { animation: slideInDown 0.28s ease both; }
+.animate-slide-in-up    { animation: slideInUp   0.38s ease both; }
+.animate-fade-in        { animation: fadeIn      0.45s ease both; }
+.animate-float          { animation: float       6s   ease-in-out infinite; }
+.animate-float-slow     { animation: floatSlow   9s   ease-in-out infinite; }
+.animate-pulse-ring     { animation: pulseRing   1.9s ease-out   infinite; }

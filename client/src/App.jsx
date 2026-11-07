@@ -14,11 +14,12 @@
  * Security: HttpOnly JWT cookie — no token in JS memory.
  * Axios instance (services/api.js) sends withCredentials: true automatically.
  */
-import './App.css';
-import { useAuth }       from '@/features/auth/AuthContext';
-import Login             from '@/features/auth/Login';
-import ChangePassword    from '@/features/auth/ChangePassword';
-import Dashboard         from '@/features/dashboard/Dashboard';
+//import './App.css';
+
+import { useAuth } from '@/features/auth/AuthContext';
+import Login from '@/features/auth/Login';
+import ChangePassword from '@/features/auth/ChangePassword';
+import Dashboard from '@/features/dashboard/Dashboard';
 
 export default function App() {
   const { user, loading, logout } = useAuth();
