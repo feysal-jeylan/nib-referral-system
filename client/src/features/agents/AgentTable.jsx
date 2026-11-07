@@ -3,6 +3,7 @@
  * ───────────────────────────────
  * Displays all agents (or just the current agent for non-admin users).
  * Pure display component — no fetch calls.
+ * Pure Tailwind — no App.css dependency.
  *
  * Props:
  *   agents  {object[]}
@@ -16,9 +17,9 @@ import { RewardBadge, AgentStatusPill } from '@/components/ui/Badge';
 export default function AgentTable({ agents, loading, isAdmin }) {
   if (loading) {
     return (
-      <div className="state-box">
+      <div className="flex flex-col items-center justify-center gap-3 py-16">
         <Spinner />
-        <p>Loading agents…</p>
+        <p className="text-text-3 text-sm">Loading agents…</p>
       </div>
     );
   }
@@ -33,34 +34,39 @@ export default function AgentTable({ agents, loading, isAdmin }) {
   }
 
   return (
-    <div className="table-wrap">
-      <table className="data-table" aria-label="Agent list">
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm border-collapse" aria-label="Agent list">
         <thead>
-          <tr>
-            <th scope="col">#</th>
-            <th scope="col">Name</th>
-            <th scope="col">Referral Code</th>
-            <th scope="col">Successful Referrals</th>
-            <th scope="col">Reward Tier</th>
-            {isAdmin && <th scope="col">Status</th>}
+          <tr className="bg-panel border-b border-border">
+            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">#</th>
+            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Name</th>
+            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Referral Code</th>
+            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Successful Referrals</th>
+            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Reward Tier</th>
+            {isAdmin && <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Status</th>}
           </tr>
         </thead>
         <tbody>
           {agents.map((a, i) => (
-            <tr key={a.id} className="data-row">
-              <td className="td--index">{i + 1}</td>
-              <td className="td--name">{a.name}</td>
-              <td>
+            <tr key={a.id} className="border-b border-border last:border-0 hover:bg-bg transition-colors duration-150">
+              <td className="px-6 py-4 text-text-3 text-xs tabular-nums">{i + 1}</td>
+              <td className="px-6 py-4 text-text-1 font-medium">{a.name}</td>
+              <td className="px-6 py-4">
                 {a.referral_code
-                  ? <code className="code-chip">{a.referral_code}</code>
-                  : <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>—</span>
+                  ? <code className="font-mono text-xs bg-brand-light text-brand px-2 py-0.5 rounded">{a.referral_code}</code>
+                  : <span className="text-text-3 text-xs">—</span>
                 }
               </td>
-              <td className="td--count">
-                <span className="count-pill">{a.successful_referrals}</span>
+              <td className="px-6 py-4">
+                <span
+                  className="inline-flex items-center justify-center min-w-[28px] h-7 rounded-full bg-gold-light text-[#7C5900] text-xs font-bold px-2"
+                  title="Successful referrals"
+                >
+                  {a.successful_referrals}
+                </span>
               </td>
-              <td><RewardBadge tier={a.current_reward} /></td>
-              {isAdmin && <td><AgentStatusPill status={a.status} /></td>}
+              <td className="px-6 py-4"><RewardBadge tier={a.current_reward} /></td>
+              {isAdmin && <td className="px-6 py-4"><AgentStatusPill status={a.status} /></td>}
             </tr>
           ))}
         </tbody>
@@ -68,4 +74,3 @@ export default function AgentTable({ agents, loading, isAdmin }) {
     </div>
   );
 }
-

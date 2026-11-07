@@ -13,8 +13,9 @@
  *
  * Security: HttpOnly JWT cookie — no token in JS memory.
  * Axios instance (services/api.js) sends withCredentials: true automatically.
+ *
+ * Phase 5b: App.css import removed — fully migrated to Tailwind.
  */
-//import './App.css';
 
 import { useAuth } from '@/features/auth/AuthContext';
 import Login from '@/features/auth/Login';
@@ -26,9 +27,21 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="auth-loading" role="status" aria-label="Checking authentication…">
-        <div className="auth-loading__spinner" aria-hidden="true" />
-        <p className="auth-loading__text">Verifying session…</p>
+      <div
+        className="min-h-screen bg-bg flex flex-col items-center justify-center gap-4"
+        role="status"
+        aria-label="Checking authentication…"
+      >
+        {/* NIB monogram spinner */}
+        <div className="relative w-14 h-14">
+          <div className="absolute inset-0 rounded-full border-2 border-border border-t-brand animate-spin" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-lg bg-brand flex items-center justify-center">
+              <span className="text-white font-black text-base select-none">N</span>
+            </div>
+          </div>
+        </div>
+        <p className="text-text-3 text-sm font-medium">Verifying session…</p>
       </div>
     );
   }

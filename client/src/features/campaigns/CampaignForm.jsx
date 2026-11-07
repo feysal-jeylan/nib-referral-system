@@ -2,6 +2,7 @@
  * features/campaigns/CampaignForm.jsx
  * ─────────────────────────────────────
  * Admin-only form to create a new campaign with an inline Rules Builder.
+ * Pure Tailwind — no App.css dependency.
  *
  * Submit flow:
  *   1. POST /api/campaigns        → get campaign id
@@ -27,6 +28,14 @@ const EMPTY_RULE = {
   operator: 'GREATER_THAN_OR_EQUAL',
   rule_value_raw: '',
 };
+
+// Shared input / select class
+const INPUT_CLS =
+  'w-full px-4 py-2.5 bg-bg border border-border rounded-md text-sm text-text-1 ' +
+  'placeholder-text-3 outline-none transition-all duration-150 ' +
+  'focus:border-gold focus:ring-1 focus:ring-gold focus:bg-surface';
+
+const LABEL_CLS = 'block text-[11px] font-semibold text-text-3 uppercase tracking-wide mb-1.5';
 
 export default function CampaignForm({ onCreated, onToast }) {
   const [form, setForm]               = useState(EMPTY_CAMPAIGN);
@@ -143,100 +152,113 @@ export default function CampaignForm({ onCreated, onToast }) {
   return (
     <form
       id="campaign-form"
-      className="agent-form"
+      className="p-6"
       onSubmit={handleSubmit}
       noValidate
       aria-label="Create a new campaign"
     >
-      <h2 className="form__title">Create New Campaign</h2>
+      <h2 className="text-text-1 font-bold text-base mb-5 pb-4 border-b border-border">
+        Create New Campaign
+      </h2>
 
       {/* ── Core campaign fields ──────────────────────────────────────────── */}
-      <div className="form__grid form__grid--3col">
-        <div className="form__field">
-          <label htmlFor="camp-name">Campaign Name</label>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+        {/* Campaign Name */}
+        <div>
+          <label htmlFor="camp-name" className={LABEL_CLS}>Campaign Name</label>
           <input
             id="camp-name" name="name" type="text"
             placeholder="e.g. Q4 Savings Drive"
             value={form.name} onChange={handleCampaignChange}
             required ref={nameRef} autoComplete="off"
+            className={INPUT_CLS}
           />
         </div>
-        <div className="form__field">
-          <label htmlFor="camp-start">Start Date</label>
+        {/* Start Date */}
+        <div>
+          <label htmlFor="camp-start" className={LABEL_CLS}>Start Date</label>
           <input
             id="camp-start" name="start_date" type="date"
             value={form.start_date} onChange={handleCampaignChange}
-            required
+            required className={INPUT_CLS}
           />
         </div>
-        <div className="form__field">
-          <label htmlFor="camp-end">End Date</label>
+        {/* End Date */}
+        <div>
+          <label htmlFor="camp-end" className={LABEL_CLS}>End Date</label>
           <input
             id="camp-end" name="end_date" type="date"
             value={form.end_date} onChange={handleCampaignChange}
-            required
+            required className={INPUT_CLS}
           />
         </div>
-        <div className="form__field">
-          <label htmlFor="camp-reward-type">Reward Type</label>
+        {/* Reward Type */}
+        <div>
+          <label htmlFor="camp-reward-type" className={LABEL_CLS}>Reward Type</label>
           <select
             id="camp-reward-type" name="reward_type"
             value={form.reward_type} onChange={handleCampaignChange}
-            required
+            required className={INPUT_CLS}
           >
             <option value="CASH">CASH</option>
             <option value="BADGE">BADGE</option>
           </select>
         </div>
-        <div className="form__field">
-          <label htmlFor="camp-reward-value">Reward Value</label>
+        {/* Reward Value */}
+        <div>
+          <label htmlFor="camp-reward-value" className={LABEL_CLS}>Reward Value</label>
           <input
             id="camp-reward-value" name="reward_value" type="text"
             placeholder="e.g. 500 ETB"
             value={form.reward_value} onChange={handleCampaignChange}
-            required autoComplete="off"
+            required autoComplete="off" className={INPUT_CLS}
           />
         </div>
-        <div className="form__field">
-          <label htmlFor="camp-threshold">
-            Reward Threshold <span className="form__optional">(optional)</span>
+        {/* Reward Threshold */}
+        <div>
+          <label htmlFor="camp-threshold" className={LABEL_CLS}>
+            Reward Threshold{' '}
+            <span className="normal-case font-normal text-text-3">(optional)</span>
           </label>
           <input
             id="camp-threshold" name="reward_threshold" type="number"
             placeholder="e.g. 5 referrals"
             value={form.reward_threshold} onChange={handleCampaignChange}
-            min="0" autoComplete="off"
+            min="0" autoComplete="off" className={INPUT_CLS}
           />
         </div>
-        <div className="form__field form__field--wide">
-          <label htmlFor="camp-desc">
-            Description <span className="form__optional">(optional)</span>
+        {/* Description — full width */}
+        <div className="sm:col-span-2 lg:col-span-3">
+          <label htmlFor="camp-desc" className={LABEL_CLS}>
+            Description{' '}
+            <span className="normal-case font-normal text-text-3">(optional)</span>
           </label>
           <input
             id="camp-desc" name="description" type="text"
             placeholder="e.g. Year-end savings promotion for SAVINGS accounts"
             value={form.description} onChange={handleCampaignChange}
-            autoComplete="off"
+            autoComplete="off" className={INPUT_CLS}
           />
         </div>
       </div>
 
       {/* ── Rules Builder ─────────────────────────────────────────────────── */}
-      <div className="rules-builder">
-        <div className="rules-builder__header">
-          <span className="rules-builder__title">Qualification Rules</span>
-          <span className="rules-builder__hint">
-            All rules must pass for a referral to be accepted (logical AND).
-          </span>
+      <div className="mb-6 bg-panel border border-border rounded-lg p-5">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-text-1 font-semibold text-sm">Qualification Rules</span>
+          <span className="text-text-3 text-xs">All rules must pass (logical AND)</span>
         </div>
 
-        <div className="rules-builder__inputs">
-          <div className="form__field">
-            <label htmlFor="rule-type">Rule Type</label>
+        {/* Rule input row */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <div>
+            <label htmlFor="rule-type" className={LABEL_CLS}>Rule Type</label>
             <select
               id="rule-type" name="rule_type"
               value={currentRule.rule_type}
               onChange={handleRuleChange}
+              className={INPUT_CLS}
             >
               {RULE_TYPES.map(rt => (
                 <option key={rt} value={rt}>{rt.replace('_', ' ')}</option>
@@ -244,12 +266,13 @@ export default function CampaignForm({ onCreated, onToast }) {
             </select>
           </div>
 
-          <div className="form__field">
-            <label htmlFor="rule-operator">Operator</label>
+          <div>
+            <label htmlFor="rule-operator" className={LABEL_CLS}>Operator</label>
             <select
               id="rule-operator" name="operator"
               value={currentRule.operator}
               onChange={handleRuleChange}
+              className={INPUT_CLS}
             >
               {OPERATORS.map(op => (
                 <option key={op.value} value={op.value}>{op.label}</option>
@@ -257,41 +280,42 @@ export default function CampaignForm({ onCreated, onToast }) {
             </select>
           </div>
 
-          <div className="form__field">
-            <label htmlFor="rule-value">Value</label>
+          <div>
+            <label htmlFor="rule-value" className={LABEL_CLS}>Value</label>
             <input
               id="rule-value" name="rule_value_raw" type="text"
               placeholder={rulePlaceholder}
               value={currentRule.rule_value_raw}
               onChange={handleRuleChange}
-              autoComplete="off"
+              autoComplete="off" className={INPUT_CLS}
             />
           </div>
-
-          <button
-            type="button"
-            className="btn btn--add-rule"
-            onClick={handleAddRule}
-            aria-label="Add this rule to the campaign"
-          >
-            + Add Rule
-          </button>
         </div>
 
+        <button
+          type="button"
+          onClick={handleAddRule}
+          aria-label="Add this rule to the campaign"
+          className="inline-flex items-center gap-1.5 border border-brand text-brand text-xs font-semibold px-4 py-2 rounded hover:bg-brand hover:text-white transition-colors"
+        >
+          + Add Rule
+        </button>
+
+        {/* Queued rules preview */}
         {pendingRules.length > 0 && (
-          <div className="rules-builder__preview">
-            <p className="rules-builder__preview-label">
+          <div className="mt-4 pt-4 border-t border-border">
+            <p className="text-[11px] font-semibold text-text-3 uppercase tracking-wide mb-2">
               Rules to be applied ({pendingRules.length}):
             </p>
-            <ul className="rules-builder__list">
+            <ul className="flex flex-col gap-2">
               {pendingRules.map((rule, i) => (
-                <li key={i} className="rules-builder__item">
-                  <span className="rule-preview-chip">{ruleLabel(rule)}</span>
+                <li key={i} className="flex items-center justify-between gap-3 bg-surface border border-border rounded px-3 py-2">
+                  <span className="font-mono text-xs text-brand font-semibold">{ruleLabel(rule)}</span>
                   <button
                     type="button"
-                    className="rule-preview-remove"
                     onClick={() => handleRemoveRule(i)}
                     aria-label={`Remove rule: ${ruleLabel(rule)}`}
+                    className="text-text-3 hover:text-reject-txt text-xs font-bold flex-shrink-0 transition-colors"
                   >
                     ✕
                   </button>
@@ -302,7 +326,7 @@ export default function CampaignForm({ onCreated, onToast }) {
         )}
 
         {pendingRules.length === 0 && (
-          <p className="rules-builder__empty">
+          <p className="mt-3 text-text-3 text-xs italic">
             No rules added yet — this campaign will accept all customers.
           </p>
         )}
@@ -311,8 +335,8 @@ export default function CampaignForm({ onCreated, onToast }) {
       <button
         id="submit-campaign-btn"
         type="submit"
-        className="btn btn--primary"
         disabled={submitting}
+        className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-semibold px-5 py-2.5 rounded-md transition-colors shadow-sm disabled:opacity-55 disabled:cursor-not-allowed"
       >
         {submitting && <Spinner small />}
         {submitting ? 'Creating…' : 'Create Campaign'}
@@ -320,4 +344,3 @@ export default function CampaignForm({ onCreated, onToast }) {
     </form>
   );
 }
-

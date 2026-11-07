@@ -2,6 +2,8 @@
  * features/dashboard/Dashboard.jsx
  * ──────────────────────────────────
  * Main authenticated view for both ADMIN and AGENT roles.
+ * Phase 5b — Full Nib Bank warm brown / honey gold Tailwind redesign.
+ * No App.css dependency.
  *
  * Owns ALL data-fetching state:
  *   agents, referrals, campaigns, integLogs (+ their loading flags)
@@ -30,6 +32,60 @@ import CampaignForm  from '@/features/campaigns/CampaignForm';
 import CampaignTable from '@/features/campaigns/CampaignTable';
 import IntegrationLogsTable from '@/features/integration/IntegrationLogsTable';
 
+// ── NIB monogram — matches Login left panel ───────────────────────────────────
+function NibMonogram() {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="w-9 h-9 rounded-lg bg-gold flex items-center justify-center shadow-sm flex-shrink-0">
+        <span className="text-white text-base font-black tracking-tight select-none">N</span>
+      </div>
+      <div>
+        <p className="text-white font-bold text-sm leading-none tracking-tight">NIB</p>
+        <p className="text-gold text-[10px] tracking-[0.18em] uppercase font-medium mt-0.5">
+          International Bank
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Section card wrapper ──────────────────────────────────────────────────────
+function SectionCard({ children, ...props }) {
+  return (
+    <section
+      className="bg-surface rounded-lg shadow-sm border border-border overflow-hidden"
+      {...props}
+    >
+      {children}
+    </section>
+  );
+}
+
+// ── Section header row ────────────────────────────────────────────────────────
+function SectionHeader({ id, title, badge, badgeAlert = false, action }) {
+  return (
+    <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+      <h2 id={id} className="text-text-1 font-bold text-sm tracking-tight">{title}</h2>
+      <div className="flex items-center gap-2">
+        {badge !== undefined && (
+          <span
+            className={[
+              'text-xs font-semibold px-2.5 py-1 rounded-full',
+              badgeAlert
+                ? 'bg-pending-bg text-pending-txt border border-pending-bdr'
+                : 'bg-panel text-text-3',
+            ].join(' ')}
+          >
+            {badge}
+          </span>
+        )}
+        {action}
+      </div>
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function Dashboard({ user, logout }) {
   const isAdmin = user.role === 'ADMIN';
 
@@ -68,7 +124,6 @@ export default function Dashboard({ user, logout }) {
 
         const results = await Promise.all(fetches);
 
-        // Axios wraps the parsed body in .data
         setAgents(Array.isArray(results[0].data) ? results[0].data : []);
         setReferrals(
           Array.isArray(results[1].data)
@@ -207,42 +262,39 @@ export default function Dashboard({ user, logout }) {
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#F2F5F8]">
+    <div className="min-h-screen bg-bg">
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <header className="bg-[#002B5B] border-b-4 border-[#C5A059] shadow-md">
+      <header className="bg-brand shadow-md" style={{ borderBottom: '3px solid #D4AF37' }}>
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+
           {/* Brand */}
-          <div className="flex items-center gap-3">
-            <span className="text-3xl" aria-hidden="true">🏦</span>
-            <div>
-              <h1 className="text-white font-bold text-xl tracking-tight">
-                {isAdmin ? 'Nib International Bank' : 'Agent Portal'}
-              </h1>
-              <p className="text-[#C5A059] text-xs tracking-wide">
-                {isAdmin
-                  ? 'Internal Referral Management System'
-                  : 'Nib International Bank — Your Referral Dashboard'}
-              </p>
-            </div>
+          <div className="flex items-center gap-4">
+            <NibMonogram />
+            <div className="hidden sm:block h-6 w-px bg-white/20" aria-hidden="true" />
+            <p className="hidden sm:block text-white/70 text-xs tracking-wide">
+              {isAdmin
+                ? 'Internal Referral Management System'
+                : 'Your Referral Dashboard'}
+            </p>
           </div>
 
           {/* Right side */}
-          <div className="flex items-center gap-5">
+          <div className="flex items-center gap-4">
             {/* Live polling indicator */}
             <div
-              className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full"
+              className="hidden sm:flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full"
               aria-label="Live updates active"
               title="Dashboard refreshes every 5 seconds"
             >
               <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" aria-hidden="true" />
-              <span className="text-white/80 text-xs font-medium">Live Updates: Active</span>
+              <span className="text-white/80 text-xs font-medium">Live</span>
             </div>
 
             <div className="flex items-center gap-3">
               <div className="text-right">
-                <p className="text-white font-semibold text-sm">{user.username}</p>
-                <p className="text-white/60 text-xs">{isAdmin ? '🛡️ Admin' : '👤 Agent'}</p>
+                <p className="text-white font-semibold text-sm leading-none">{user.username}</p>
+                <p className="text-white/60 text-[11px] mt-0.5">{isAdmin ? '🛡️ Admin' : '👤 Agent'}</p>
               </div>
               <button
                 id="logout-btn"
@@ -261,39 +313,35 @@ export default function Dashboard({ user, logout }) {
 
         {/* ── ADMIN: Register Agent form ──────────────────────────────── */}
         {isAdmin && (
-          <section className="card" aria-labelledby="agent-form-heading">
+          <SectionCard aria-labelledby="agent-form-heading">
             <AgentForm onCreated={handleAgentCreated} onToast={showToast} />
-          </section>
+          </SectionCard>
         )}
 
         {/* ── Agent Dashboard — ALL roles ─────────────────────────────── */}
-        <section className="card" aria-labelledby="agent-dashboard-heading">
-          <div className="section-header">
-            <h2 id="agent-dashboard-heading" className="section-header__title">
-              {isAdmin ? 'Agent Dashboard' : 'My Profile'}
-            </h2>
-            <span className="section-header__count">
-              {agents.length} agent{agents.length !== 1 ? 's' : ''}
-            </span>
-          </div>
+        <SectionCard aria-labelledby="agent-dashboard-heading">
+          <SectionHeader
+            id="agent-dashboard-heading"
+            title={isAdmin ? 'Agent Dashboard' : 'My Profile'}
+            badge={`${agents.length} agent${agents.length !== 1 ? 's' : ''}`}
+          />
           <AgentTable agents={agents} loading={agentsLoading} isAdmin={isAdmin} />
-        </section>
+        </SectionCard>
 
         {/* ── ADMIN: Pending Agent Applications ──────────────────────── */}
         {isAdmin && (
-          <section className="card" aria-labelledby="pending-agents-heading">
-            <div className="section-header">
-              <h2 id="pending-agents-heading" className="section-header__title">
-                Pending Agent Applications
-              </h2>
-              <span
-                className={`section-header__count${pendingAgents.length > 0 ? ' section-header__count--alert' : ''}`}
-              >
-                {pendingAgents.length} pending
-              </span>
-            </div>
+          <SectionCard aria-labelledby="pending-agents-heading">
+            <SectionHeader
+              id="pending-agents-heading"
+              title="Pending Agent Applications"
+              badge={`${pendingAgents.length} pending`}
+              badgeAlert={pendingAgents.length > 0}
+            />
             {agentsLoading ? (
-              <div className="state-box"><Spinner /><p>Loading applications…</p></div>
+              <div className="flex flex-col items-center justify-center gap-3 py-16">
+                <Spinner />
+                <p className="text-text-3 text-sm">Loading applications…</p>
+              </div>
             ) : pendingAgents.length === 0 ? (
               <EmptyState
                 icon="✅"
@@ -301,43 +349,41 @@ export default function Dashboard({ user, logout }) {
                 sub="All agent applications have been reviewed. New applicants appear here automatically."
               />
             ) : (
-              <div className="table-wrap">
-                <table className="data-table" aria-label="Pending agent applications">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm border-collapse" aria-label="Pending agent applications">
                   <thead>
-                    <tr>
-                      <th scope="col">#</th>
-                      <th scope="col">Name</th>
-                      <th scope="col">Phone</th>
-                      <th scope="col">Email</th>
-                      <th scope="col">Actions</th>
+                    <tr className="bg-panel border-b border-border">
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">#</th>
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Name</th>
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Phone</th>
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Email</th>
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {pendingAgents.map((a, i) => {
                       const busy = actioning.has(a.id);
                       return (
-                        <tr key={a.id} className="data-row">
-                          <td className="td--index">{i + 1}</td>
-                          <td className="td--name">{a.name}</td>
-                          <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-2)' }}>
-                            {a.phone ?? '—'}
-                          </td>
-                          <td style={{ color: 'var(--text-2)' }}>{a.email ?? '—'}</td>
-                          <td>
-                            <div className="action-group">
+                        <tr key={a.id} className="border-b border-border last:border-0 hover:bg-bg transition-colors duration-150">
+                          <td className="px-6 py-4 text-text-3 text-xs tabular-nums">{i + 1}</td>
+                          <td className="px-6 py-4 text-text-1 font-medium">{a.name}</td>
+                          <td className="px-6 py-4 text-text-2 tabular-nums">{a.phone ?? '—'}</td>
+                          <td className="px-6 py-4 text-text-2">{a.email ?? '—'}</td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-2">
                               <button
                                 id={`agent-approve-btn-${a.id}`}
-                                className="btn btn--approve"
                                 disabled={busy}
                                 onClick={() => handleApprove(a.id, a.name)}
+                                className="inline-flex items-center gap-1.5 bg-brand hover:bg-brand-hover text-white text-xs font-semibold px-3 py-1.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 {busy ? <Spinner small /> : '✓ Approve'}
                               </button>
                               <button
                                 id={`agent-reject-btn-${a.id}`}
-                                className="btn btn--reject"
                                 disabled={busy}
                                 onClick={() => handleReject(a.id, a.name)}
+                                className="inline-flex items-center gap-1.5 bg-reject-bg text-reject-txt border border-reject-bdr text-xs font-semibold px-3 py-1.5 rounded transition-colors hover:bg-[#f9e5e1] disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 {busy ? <Spinner small /> : '✕ Reject'}
                               </button>
@@ -350,59 +396,49 @@ export default function Dashboard({ user, logout }) {
                 </table>
               </div>
             )}
-          </section>
+          </SectionCard>
         )}
 
         {/* ── Core Banking Integration notice ─────────────────────────── */}
-        <section className="card" aria-labelledby="temenos-info-heading">
-          <div className="section-header">
-            <h2 id="temenos-info-heading" className="section-header__title">
-              Core Banking Integration
-            </h2>
-          </div>
-          <div style={{ padding: '0 24px 22px' }}>
+        <SectionCard aria-labelledby="temenos-info-heading">
+          <SectionHeader id="temenos-info-heading" title="Core Banking Integration" />
+          <div className="px-6 pb-5 pt-4">
             <InfoBox
               message="Customer referrals are automatically synced from the Core Banking System (Temenos). No manual entry is required."
             />
           </div>
-        </section>
+        </SectionCard>
 
         {/* ── Recent Referrals — ALL roles ────────────────────────────── */}
-        <section className="card" aria-labelledby="referral-table-heading">
-          <div className="section-header">
-            <h2 id="referral-table-heading" className="section-header__title">
-              {isAdmin ? 'Recent Referrals' : 'My Referrals'}
-            </h2>
-            <span className="section-header__count">
-              {referrals.length} referral{referrals.length !== 1 ? 's' : ''}
-            </span>
-          </div>
+        <SectionCard aria-labelledby="referral-table-heading">
+          <SectionHeader
+            id="referral-table-heading"
+            title={isAdmin ? 'Recent Referrals' : 'My Referrals'}
+            badge={`${referrals.length} referral${referrals.length !== 1 ? 's' : ''}`}
+          />
           <ReferralTable
             referrals={referrals}
             loading={referralsLoading}
             onStatusChange={handleStatusChange}
             isAdmin={isAdmin}
           />
-        </section>
+        </SectionCard>
 
         {/* ── ADMIN-ONLY sections ──────────────────────────────────────── */}
         {isAdmin && (
           <>
             {/* Campaign creation form with Rules Builder */}
-            <section className="card" aria-labelledby="campaign-form-heading">
+            <SectionCard aria-labelledby="campaign-form-heading">
               <CampaignForm onCreated={refreshCampaigns} onToast={showToast} />
-            </section>
+            </SectionCard>
 
             {/* Campaign list */}
-            <section className="card" aria-labelledby="campaign-table-heading">
-              <div className="section-header">
-                <h2 id="campaign-table-heading" className="section-header__title">
-                  Campaign Management
-                </h2>
-                <span className="section-header__count">
-                  {campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''}
-                </span>
-              </div>
+            <SectionCard aria-labelledby="campaign-table-heading">
+              <SectionHeader
+                id="campaign-table-heading"
+                title="Campaign Management"
+                badge={`${campaigns.length} campaign${campaigns.length !== 1 ? 's' : ''}`}
+              />
               <CampaignTable
                 campaigns={campaigns}
                 loading={campaignsLoading}
@@ -411,30 +447,27 @@ export default function Dashboard({ user, logout }) {
                 onDeleted={refreshCampaigns}
                 onToast={showToast}
               />
-            </section>
+            </SectionCard>
 
             {/* Temenos Integration Logs */}
-            <section className="card" aria-labelledby="integ-logs-heading">
-              <div className="section-header">
-                <h2 id="integ-logs-heading" className="section-header__title">
-                  Temenos Integration Logs
-                </h2>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="section-header__count">
-                    {integLogs.length} event{integLogs.length !== 1 ? 's' : ''}
-                  </span>
+            <SectionCard aria-labelledby="integ-logs-heading">
+              <SectionHeader
+                id="integ-logs-heading"
+                title="Temenos Integration Logs"
+                badge={`${integLogs.length} event${integLogs.length !== 1 ? 's' : ''}`}
+                action={
                   <button
-                    className="btn btn--ghost"
+                    className="text-xs font-semibold text-text-3 border border-border rounded px-3 py-1 hover:border-border-dark hover:text-text-2 transition-colors"
                     onClick={refreshIntegLogs}
                     aria-label="Refresh integration logs"
                     title="Refresh"
                   >
                     ↺ Refresh
                   </button>
-                </div>
-              </div>
+                }
+              />
               <IntegrationLogsTable logs={integLogs} loading={integLogsLoading} />
-            </section>
+            </SectionCard>
           </>
         )}
 
@@ -444,4 +477,3 @@ export default function Dashboard({ user, logout }) {
     </div>
   );
 }
-
