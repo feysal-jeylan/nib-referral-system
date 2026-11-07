@@ -27,13 +27,14 @@ async function accountOpened(req, res, next) {
   }
 
   // ── Required-field validation ─────────────────────────────────────────────
-  const { transaction_id, customer_name, customer_phone, referral_code, account_type, deposit_amount } = req.body;
+  const { transaction_id, customer_name, customer_phone, referral_code, account_type, deposit_amount, campaign_code } = req.body;
 
   const missing = [];
   if (!transaction_id)  missing.push('transaction_id');
   if (!customer_name)   missing.push('customer_name');
   if (!customer_phone)  missing.push('customer_phone');
   if (!referral_code)   missing.push('referral_code');
+  if (!campaign_code)   missing.push('campaign_code');
   if (!account_type)    missing.push('account_type');
   if (deposit_amount === undefined || deposit_amount === null) missing.push('deposit_amount');
 
@@ -55,7 +56,8 @@ async function accountOpened(req, res, next) {
   let txResult;
   try {
     txResult = await svc.processWebhook({
-      transaction_id, customer_name, customer_phone, referral_code, account_type, deposit_amount,
+      transaction_id, customer_name, customer_phone,
+      referral_code, account_type, deposit_amount, campaign_code,
     });
   } catch (err) {
     console.error(`[integration] Transaction rolled back for txn=${transaction_id}:`, err.message);
@@ -75,7 +77,7 @@ async function accountOpened(req, res, next) {
 
     case 'NO_CAMPAIGN':
       return res.status(400).json({
-        error: 'No active campaign is currently running. Referral cannot be recorded.',
+        error: 'Campaign not found or not active. Ensure the campaign_code in the payload is correct and the campaign status is ACTIVE.',
         code:  'NO_ACTIVE_CAMPAIGN',
       });
 

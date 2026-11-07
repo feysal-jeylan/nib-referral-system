@@ -143,6 +143,7 @@ export default function CampaignTable({
           <tr className="bg-panel border-b border-border">
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">#</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Name / Rules</th>
+            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Campaign Code</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Dates</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Reward</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Threshold</th>
@@ -184,6 +185,21 @@ export default function CampaignTable({
                       })}
                     </div>
                   )}
+                </td>
+
+                {/* Campaign Code — Temenos attribution key */}
+                <td className="px-6 py-4 align-top">
+                  {c.campaign_code
+                    ? (
+                      <code
+                        className="font-mono text-xs bg-brand-light text-brand px-2.5 py-1 rounded select-all cursor-copy tracking-wider"
+                        title="Share this code with the Temenos operations team"
+                      >
+                        {c.campaign_code}
+                      </code>
+                    )
+                    : <span className="text-text-3 text-xs italic">Not set</span>
+                  }
                 </td>
 
                 {/* Date range */}

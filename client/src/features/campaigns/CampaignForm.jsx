@@ -19,7 +19,7 @@ import Spinner from '@/components/ui/Spinner';
 import { RULE_TYPES, OPERATORS, OPERATOR_SYMBOL } from './constants';
 
 const EMPTY_CAMPAIGN = {
-  name: '', start_date: '', end_date: '',
+  name: '', campaign_code: '', start_date: '', end_date: '',
   reward_type: 'CASH', reward_value: '',
   description: '', reward_threshold: '',
 };
@@ -87,6 +87,7 @@ export default function CampaignForm({ onCreated, onToast }) {
       // ── Step 1: Create campaign ───────────────────────────────────────────
       const { data } = await api.post('/campaigns', {
         name:             form.name,
+        campaign_code:    form.campaign_code || undefined,
         description:      form.description || undefined,
         start_date:       form.start_date ? new Date(form.start_date).toISOString() : '',
         end_date:         form.end_date   ? new Date(form.end_date).toISOString()   : '',
@@ -173,6 +174,23 @@ export default function CampaignForm({ onCreated, onToast }) {
             required ref={nameRef} autoComplete="off"
             className={INPUT_CLS}
           />
+        </div>
+        {/* Campaign Code — the Temenos attribution key */}
+        <div>
+          <label htmlFor="camp-code" className={LABEL_CLS}>
+            Campaign Code{' '}
+            <span className="normal-case font-normal text-text-3">(Temenos ID)</span>
+          </label>
+          <input
+            id="camp-code" name="campaign_code" type="text"
+            placeholder="e.g. SAV-2026-OCT"
+            value={form.campaign_code} onChange={handleCampaignChange}
+            autoComplete="off"
+            className={`${INPUT_CLS} font-mono tracking-wider`}
+          />
+          <p className="mt-1 text-[10px] text-text-3 leading-relaxed">
+            Temenos must send this exact code in the webhook <code className="font-mono">campaign_code</code> field.
+          </p>
         </div>
         {/* Start Date */}
         <div>

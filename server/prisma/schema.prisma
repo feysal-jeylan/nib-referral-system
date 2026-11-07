@@ -67,6 +67,7 @@ model Referral {
 model Campaign {
   id               Int      @id @default(autoincrement())
   name             String   @db.VarChar(100)
+  campaign_code    String?  @unique @db.VarChar(50)
   start_date       DateTime @db.Timestamp(6)
   end_date         DateTime @db.Timestamp(6)
   reward_type      String   @db.VarChar(50)

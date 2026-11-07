@@ -14,6 +14,7 @@ const { evaluateRules } = require('@/services/ruleEngine');
 const ALLOWED_FIELDS = new Set([
   'transaction_id', 'referral_code', 'customer_name',
   'customer_phone', 'account_type', 'deposit_amount', 'date_of_transaction',
+  'campaign_code',
 ]);
 
 // ── Idempotency pre-check (fast read, outside transaction) ───────────────────
@@ -63,20 +64,20 @@ async function logWhitelistFailure(transaction_id, unauthorizedFields) {
  * processWebhook — executes the full ACID transaction.
  *
  * Returns a structured result object — NEVER throws for "clean" business
- * failures (agent not found, no campaign, rule fail, duplicate customer).
+ * failures (agent not found, campaign not found/inactive, rule fail, duplicate customer).
  * Only propagates genuine unexpected errors so the controller can call next(err).
  *
  * Possible outcomes:
  *   { outcome: 'SUCCESS',           referral, agent, campaign }
  *   { outcome: 'AGENT_404' }
- *   { outcome: 'NO_CAMPAIGN' }
+ *   { outcome: 'NO_CAMPAIGN' }      ← campaign_code missing, not found, or not ACTIVE
  *   { outcome: 'RULE_FAILED',       failedRule }
  *   { outcome: 'DUPLICATE_CUSTOMER' }
- *   { outcome: 'DUPLICATE_TID' }   ← race condition
+ *   { outcome: 'DUPLICATE_TID' }    ← race condition
  */
 async function processWebhook({
   transaction_id, customer_name, customer_phone,
-  referral_code, account_type, deposit_amount,
+  referral_code, account_type, deposit_amount, campaign_code,
 }) {
   try {
     return await prisma.$transaction(async (tx) => {
@@ -85,7 +86,10 @@ async function processWebhook({
       const log = await tx.integrationLog.create({
         data: {
           transaction_id,
-          payload: { customer_name, customer_phone, referral_code, account_type, deposit_amount },
+          payload: {
+            customer_name, customer_phone, referral_code,
+            account_type, deposit_amount, campaign_code,
+          },
           status: 'RECEIVED',
         },
       });
@@ -104,21 +108,30 @@ async function processWebhook({
         return { outcome: 'AGENT_404' };
       }
 
-      // 3c: Find the currently active campaign
-      const now = new Date();
-      const campaign = await tx.campaign.findFirst({
-        where: {
-          status: 'ACTIVE', is_active: true,
-          start_date: { lte: now }, end_date: { gte: now },
-        },
-        orderBy: { start_date: 'desc' },
-        select:  { id: true, name: true, reward_type: true, reward_value: true },
-      });
-
-      if (!campaign) {
+      // 3c: Look up campaign by campaign_code (explicit attribution)
+      if (!campaign_code) {
+        const msg = 'Missing required field: campaign_code. Temenos must supply the campaign_code in the webhook payload.';
+        console.warn(`[integration] ${msg} txn=${transaction_id}`);
         await tx.integrationLog.update({
           where: { id: log.id },
-          data:  { status: 'FAILED', error_message: 'No active campaign found for the current date.' },
+          data:  { status: 'FAILED', error_message: msg },
+        });
+        return { outcome: 'NO_CAMPAIGN' };
+      }
+
+      const campaign = await tx.campaign.findUnique({
+        where:  { campaign_code },
+        select: { id: true, name: true, status: true, is_active: true, reward_type: true, reward_value: true },
+      });
+
+      if (!campaign || campaign.status !== 'ACTIVE' || !campaign.is_active) {
+        const msg = campaign
+          ? `Campaign '${campaign_code}' exists but is not ACTIVE (current status: ${campaign.status}).`
+          : `No campaign found with campaign_code '${campaign_code}'.`;
+        console.warn(`[integration] Campaign lookup failed: ${msg} txn=${transaction_id}`);
+        await tx.integrationLog.update({
+          where: { id: log.id },
+          data:  { status: 'FAILED', error_message: msg },
         });
         return { outcome: 'NO_CAMPAIGN' };
       }
