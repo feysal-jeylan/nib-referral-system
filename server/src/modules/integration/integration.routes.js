@@ -17,7 +17,7 @@ const ctrl = require('./integration.controller');
 const svc  = require('./integration.service');
 
 const router  = express.Router();
-const API_KEY = 'NIB_SECURE_KEY_2026';
+const API_KEY = process.env.MOCK_TEMENOS_API_KEY;
 
 // ── API-key guard (POST routes only) ─────────────────────────────────────────
 router.use(async (req, res, next) => {
