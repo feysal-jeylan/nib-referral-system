@@ -15,7 +15,7 @@ const svc = require('./campaigns.service');
 // ── POST /api/campaigns ───────────────────────────────────────────────────────
 async function createCampaign(req, res, next) {
   try {
-    const { name, start_date, end_date, reward_type, reward_value, description, reward_threshold } = req.body;
+    const { name, start_date, end_date, reward_type, reward_value, description, reward_threshold, campaign_code } = req.body;
 
     // Required-field validation
     const missing = [];
@@ -41,7 +41,7 @@ async function createCampaign(req, res, next) {
       return res.status(400).json({ error: 'reward_threshold must be a non-negative integer.', code: 'INVALID_REWARD_THRESHOLD' });
     }
 
-    const campaign = await svc.createCampaign({ name, description, start_date, end_date, reward_type, reward_value, reward_threshold: threshold });
+    const campaign = await svc.createCampaign({ name, campaign_code: campaign_code ?? null, description, start_date, end_date, reward_type, reward_value, reward_threshold: threshold });
     return res.status(201).json({ campaign });
   } catch (err) { next(err); }
 }

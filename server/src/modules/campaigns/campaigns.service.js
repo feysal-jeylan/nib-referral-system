@@ -15,10 +15,11 @@ const VALID_OPERATORS  = ['GREATER_THAN','LESS_THAN','EQUALS','GREATER_THAN_OR_E
 const VALID_RULE_TYPES = ['MIN_DEPOSIT', 'ACCOUNT_TYPE'];
 
 // ── Create campaign ───────────────────────────────────────────────────────────
-async function createCampaign({ name, description, start_date, end_date, reward_type, reward_value, reward_threshold }) {
+async function createCampaign({ name, campaign_code, description, start_date, end_date, reward_type, reward_value, reward_threshold }) {
   return prisma.campaign.create({
     data: {
       name,
+      campaign_code:    campaign_code ?? null,
       description:      description ?? null,
       start_date:       new Date(start_date),
       end_date:         new Date(end_date),
