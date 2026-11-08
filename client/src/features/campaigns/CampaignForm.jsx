@@ -45,7 +45,9 @@ export default function CampaignForm({ onCreated, onToast }) {
   const nameRef = useRef(null);
 
   function handleCampaignChange(e) {
-    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    const { name, value } = e.target;
+    // campaign_code is always stored and displayed as uppercase
+    setForm(prev => ({ ...prev, [name]: name === 'campaign_code' ? value.toUpperCase() : value }));
   }
 
   function handleRuleChange(e) {

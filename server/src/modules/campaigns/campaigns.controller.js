@@ -41,7 +41,7 @@ async function createCampaign(req, res, next) {
       return res.status(400).json({ error: 'reward_threshold must be a non-negative integer.', code: 'INVALID_REWARD_THRESHOLD' });
     }
 
-    const campaign = await svc.createCampaign({ name, campaign_code: campaign_code ?? null, description, start_date, end_date, reward_type, reward_value, reward_threshold: threshold });
+    const campaign = await svc.createCampaign({ name, campaign_code: campaign_code ? campaign_code.trim().toUpperCase() : null, description, start_date, end_date, reward_type, reward_value, reward_threshold: threshold });
     return res.status(201).json({ campaign });
   } catch (err) { next(err); }
 }
@@ -129,6 +129,7 @@ async function updateCampaign(req, res, next) {
       reward_value = curr.reward_value,
       description  = curr.description,
       reward_threshold,
+      campaign_code: rawUpdateCode,
     } = req.body;
 
     const start = new Date(start_date);
@@ -153,6 +154,9 @@ async function updateCampaign(req, res, next) {
       reward_value:     String(reward_value).trim(),
       description:      description ?? null,
       reward_threshold: threshold,
+      campaign_code:    rawUpdateCode !== undefined
+        ? (rawUpdateCode ? rawUpdateCode.trim().toUpperCase() : null)
+        : curr.campaign_code,
     });
 
     return res.status(200).json({ campaign });

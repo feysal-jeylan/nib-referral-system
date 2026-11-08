@@ -109,7 +109,10 @@ async function processWebhook({
       }
 
       // 3c: Look up campaign by campaign_code (explicit attribution)
-      if (!campaign_code) {
+      // Normalize to uppercase — Temenos and admin UI may send mixed case
+      const normalizedCode = campaign_code ? campaign_code.trim().toUpperCase() : null;
+
+      if (!normalizedCode) {
         const msg = 'Missing required field: campaign_code. Temenos must supply the campaign_code in the webhook payload.';
         console.warn(`[integration] ${msg} txn=${transaction_id}`);
         await tx.integrationLog.update({
@@ -120,14 +123,14 @@ async function processWebhook({
       }
 
       const campaign = await tx.campaign.findUnique({
-        where:  { campaign_code },
+        where:  { campaign_code: normalizedCode },
         select: { id: true, name: true, status: true, is_active: true, reward_type: true, reward_value: true },
       });
 
       if (!campaign || campaign.status !== 'ACTIVE' || !campaign.is_active) {
         const msg = campaign
-          ? `Campaign '${campaign_code}' exists but is not ACTIVE (current status: ${campaign.status}).`
-          : `No campaign found with campaign_code '${campaign_code}'.`;
+          ? `Campaign '${normalizedCode}' exists but is not ACTIVE (current status: ${campaign.status}).`
+          : `No campaign found with campaign_code '${normalizedCode}'.`;
         console.warn(`[integration] Campaign lookup failed: ${msg} txn=${transaction_id}`);
         await tx.integrationLog.update({
           where: { id: log.id },

@@ -62,7 +62,7 @@ async function activateCampaign(campaignId) {
 async function findCampaignForUpdate(id) {
   return prisma.campaign.findUnique({
     where:  { id },
-    select: { name: true, start_date: true, end_date: true, reward_value: true, description: true, reward_threshold: true },
+    select: { name: true, start_date: true, end_date: true, reward_value: true, description: true, reward_threshold: true, campaign_code: true },
   });
 }
 
