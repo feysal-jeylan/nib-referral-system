@@ -32,20 +32,15 @@ import CampaignForm  from '@/features/campaigns/CampaignForm';
 import CampaignTable from '@/features/campaigns/CampaignTable';
 import IntegrationLogsTable from '@/features/integration/IntegrationLogsTable';
 
-// ── NIB monogram — matches Login left panel ───────────────────────────────────
-function NibMonogram() {
+// ── SVG logout icon ───────────────────────────────────────────────────────────
+function IconLogout() {
   return (
-    <div className="flex items-center gap-3">
-      <div className="w-9 h-9 rounded-lg bg-gold flex items-center justify-center shadow-sm flex-shrink-0">
-        <span className="text-white text-base font-black tracking-tight select-none">N</span>
-      </div>
-      <div>
-        <p className="text-white font-bold text-sm leading-none tracking-tight">NIB</p>
-        <p className="text-gold text-[10px] tracking-[0.18em] uppercase font-medium mt-0.5">
-          International Bank
-        </p>
-      </div>
-    </div>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
   );
 }
 
@@ -53,7 +48,8 @@ function NibMonogram() {
 function SectionCard({ children, ...props }) {
   return (
     <section
-      className="bg-surface rounded-lg shadow-sm border border-border overflow-hidden"
+      className="bg-white rounded-xl shadow-sm overflow-hidden"
+      style={{ border: '1px solid rgba(138,77,31,0.10)' }}
       {...props}
     >
       {children}
@@ -62,11 +58,27 @@ function SectionCard({ children, ...props }) {
 }
 
 // ── Section header row ────────────────────────────────────────────────────────
-function SectionHeader({ id, title, badge, badgeAlert = false, action }) {
+function SectionHeader({ id, title, subtitle, badge, badgeAlert = false, action }) {
   return (
-    <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-      <h2 id={id} className="text-text-1 font-bold text-sm tracking-tight">{title}</h2>
-      <div className="flex items-center gap-2">
+    <div
+      className="flex items-start justify-between px-6 py-5"
+      style={{ borderBottom: '1px solid rgba(138,77,31,0.08)' }}
+    >
+      <div>
+        <h2
+          id={id}
+          className="font-bold text-sm tracking-tight leading-none"
+          style={{ color: '#3E2723' }}
+        >
+          {title}
+        </h2>
+        {subtitle && (
+          <p className="text-xs mt-1 leading-relaxed" style={{ color: '#7F483B' }}>
+            {subtitle}
+          </p>
+        )}
+      </div>
+      <div className="flex items-center gap-2 mt-0.5">
         {badge !== undefined && (
           <span
             className={[
@@ -265,46 +277,78 @@ export default function Dashboard({ user, logout }) {
     <div className="min-h-screen bg-bg">
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <header className="bg-brand shadow-md" style={{ borderBottom: '3px solid #D4AF37' }}>
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <header
+        className="bg-white sticky top-0 z-30"
+        style={{ borderBottom: '1px solid rgba(138,77,31,0.15)' }}
+      >
+        <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center justify-between gap-4">
 
-          {/* Brand */}
-          <div className="flex items-center gap-4">
-            <NibMonogram />
-            <div className="hidden sm:block h-6 w-px bg-white/20" aria-hidden="true" />
-            <p className="hidden sm:block text-white/70 text-xs tracking-wide">
-              {isAdmin
-                ? 'Internal Referral Management System'
-                : 'Your Referral Dashboard'}
-            </p>
+          {/* Left — logo + title */}
+          <div className="flex items-center gap-3">
+            <img
+              src="/nib-logo.png"
+              alt="NIB"
+              className="w-9 h-9 rounded-full object-cover shadow-sm flex-shrink-0"
+            />
+            <div
+              className="hidden sm:block w-px h-7 self-center flex-shrink-0"
+              style={{ background: 'rgba(138,77,31,0.20)' }}
+              aria-hidden="true"
+            />
+            <div className="hidden sm:block">
+              <p className="font-bold text-sm leading-none" style={{ color: '#3E2723' }}>
+                NIB Referral Portal
+              </p>
+              <p className="text-[10px] mt-0.5" style={{ color: '#9C8577' }}>
+                {isAdmin ? 'Internal Referral Management System' : 'Your Referral Dashboard'}
+              </p>
+            </div>
           </div>
 
-          {/* Right side */}
+          {/* Right — user info + sign out */}
           <div className="flex items-center gap-4">
-            {/* Live polling indicator */}
-            <div
-              className="hidden sm:flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full"
-              aria-label="Live updates active"
-              title="Dashboard refreshes every 5 seconds"
-            >
-              <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" aria-hidden="true" />
-              <span className="text-white/80 text-xs font-medium">Live</span>
+            {/* User pill */}
+            <div className="text-right hidden sm:block">
+              <p
+                className="text-sm font-semibold leading-none"
+                style={{ color: '#3E2723' }}
+              >
+                {user.username}
+              </p>
+              <p className="text-[11px] mt-0.5" style={{ color: '#9C8577' }}>
+                {isAdmin ? 'Administrator' : 'Agent'}
+              </p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="text-right">
-                <p className="text-white font-semibold text-sm leading-none">{user.username}</p>
-                <p className="text-white/60 text-[11px] mt-0.5">{isAdmin ? '🛡️ Admin' : '👤 Agent'}</p>
-              </div>
-              <button
-                id="logout-btn"
-                className="bg-transparent border border-white/25 text-white/80 hover:border-white/50 hover:text-white px-4 py-1.5 rounded text-xs font-semibold transition-colors cursor-pointer"
-                onClick={handleLogout}
-                aria-label="Sign out"
-              >
-                ↩ Sign Out
-              </button>
-            </div>
+            {/* Divider */}
+            <div
+              className="hidden sm:block w-px h-7 self-center"
+              style={{ background: 'rgba(138,77,31,0.15)' }}
+              aria-hidden="true"
+            />
+
+            {/* Sign out */}
+            <button
+              id="logout-btn"
+              onClick={handleLogout}
+              aria-label="Sign out"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold
+                         px-3 py-2 rounded-lg transition-all duration-150"
+              style={{ color: '#7F483B', border: '1px solid rgba(138,77,31,0.20)' }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = 'rgba(138,77,31,0.07)';
+                e.currentTarget.style.borderColor = 'rgba(138,77,31,0.40)';
+                e.currentTarget.style.color = '#3E2723';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = '';
+                e.currentTarget.style.borderColor = 'rgba(138,77,31,0.20)';
+                e.currentTarget.style.color = '#7F483B';
+              }}
+            >
+              <IconLogout />
+              <span className="hidden sm:inline">Sign Out</span>
+            </button>
           </div>
         </div>
       </header>
@@ -323,6 +367,7 @@ export default function Dashboard({ user, logout }) {
           <SectionHeader
             id="agent-dashboard-heading"
             title={isAdmin ? 'Agent Dashboard' : 'My Profile'}
+            subtitle={isAdmin ? 'All registered referral agents and their status.' : 'Your agent profile and referral activity.'}
             badge={`${agents.length} agent${agents.length !== 1 ? 's' : ''}`}
           />
           <AgentTable agents={agents} loading={agentsLoading} isAdmin={isAdmin} />
@@ -334,6 +379,7 @@ export default function Dashboard({ user, logout }) {
             <SectionHeader
               id="pending-agents-heading"
               title="Pending Agent Applications"
+              subtitle="Review and approve or reject incoming agent applications."
               badge={`${pendingAgents.length} pending`}
               badgeAlert={pendingAgents.length > 0}
             />
@@ -352,19 +398,22 @@ export default function Dashboard({ user, logout }) {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm border-collapse" aria-label="Pending agent applications">
                   <thead>
-                    <tr className="bg-panel border-b border-border">
-                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">#</th>
-                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Name</th>
-                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Phone</th>
-                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Email</th>
-                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Actions</th>
+                    <tr style={{ background: '#FAF8F5', borderBottom: '1px solid rgba(138,77,31,0.10)' }}>
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#8A4D1F' }}>#</th>
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#8A4D1F' }}>Name</th>
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#8A4D1F' }}>Phone</th>
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#8A4D1F' }}>Email</th>
+                      <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#8A4D1F' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {pendingAgents.map((a, i) => {
                       const busy = actioning.has(a.id);
                       return (
-                        <tr key={a.id} className="border-b border-border last:border-0 hover:bg-bg transition-colors duration-150">
+                        <tr key={a.id} className="border-b border-border last:border-0 transition-colors duration-150" style={{ '--tw-bg-opacity': 1 }}
+                          onMouseEnter={e => { e.currentTarget.style.background = '#FAF8F5'; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = ''; }}
+                        >
                           <td className="px-6 py-4 text-text-3 text-xs tabular-nums">{i + 1}</td>
                           <td className="px-6 py-4 text-text-1 font-medium">{a.name}</td>
                           <td className="px-6 py-4 text-text-2 tabular-nums">{a.phone ?? '—'}</td>
@@ -401,7 +450,7 @@ export default function Dashboard({ user, logout }) {
 
         {/* ── Core Banking Integration notice ─────────────────────────── */}
         <SectionCard aria-labelledby="temenos-info-heading">
-          <SectionHeader id="temenos-info-heading" title="Core Banking Integration" />
+          <SectionHeader id="temenos-info-heading" title="Core Banking Integration" subtitle="Customer referrals are automatically synced from Temenos." />
           <div className="px-6 pb-5 pt-4">
             <InfoBox
               message="Customer referrals are automatically synced from the Core Banking System (Temenos). No manual entry is required."
@@ -414,6 +463,7 @@ export default function Dashboard({ user, logout }) {
           <SectionHeader
             id="referral-table-heading"
             title={isAdmin ? 'Recent Referrals' : 'My Referrals'}
+            subtitle={isAdmin ? 'All referrals submitted through the Core Banking integration.' : 'Customers you have referred through Temenos.'}
             badge={`${referrals.length} referral${referrals.length !== 1 ? 's' : ''}`}
           />
           <ReferralTable
@@ -437,6 +487,7 @@ export default function Dashboard({ user, logout }) {
               <SectionHeader
                 id="campaign-table-heading"
                 title="Campaign Management"
+                subtitle="Create, activate, and manage referral campaigns and their qualification rules."
                 badge={`${campaigns.length} campaign${campaigns.length !== 1 ? 's' : ''}`}
               />
               <CampaignTable
@@ -454,6 +505,7 @@ export default function Dashboard({ user, logout }) {
               <SectionHeader
                 id="integ-logs-heading"
                 title="Temenos Integration Logs"
+                subtitle="Webhook events received from the Core Banking System."
                 badge={`${integLogs.length} event${integLogs.length !== 1 ? 's' : ''}`}
                 action={
                   <button
