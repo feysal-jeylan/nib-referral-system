@@ -16,7 +16,7 @@
 import { useRef, useState } from 'react';
 import api from '@/services/api';
 import Spinner from '@/components/ui/Spinner';
-import { RULE_TYPES, OPERATORS, OPERATOR_SYMBOL } from './constants';
+import { RULE_TYPES, OPERATORS, OPERATOR_SYMBOL, COMPOSITE_FIELDS, NUMERIC_CONDITION_FIELDS } from './constants';
 
 const EMPTY_CAMPAIGN = {
   name: '', campaign_code: '', start_date: '', end_date: '',
@@ -28,6 +28,7 @@ const EMPTY_RULE = {
   operator: 'GREATER_THAN_OR_EQUAL',
   rule_value_raw: '',
 };
+const EMPTY_CONDITION = { field: 'deposit_amount', operator: 'GREATER_THAN', value_raw: '' };
 
 // Shared input / select class
 const INPUT_CLS =
@@ -42,6 +43,11 @@ export default function CampaignForm({ onCreated, onToast }) {
   const [pendingRules, setPendingRules] = useState([]);
   const [currentRule, setCurrentRule] = useState(EMPTY_RULE);
   const [submitting, setSubmitting]   = useState(false);
+
+  // ── COMPOSITE rule state ─────────────────────────────────────────────────
+  const [compositeLogicalOp,  setCompositeLogicalOp]  = useState('AND');
+  const [compositeConditions, setCompositeConditions] = useState([{ ...EMPTY_CONDITION }]);
+
   const nameRef = useRef(null);
 
   function handleCampaignChange(e) {
@@ -54,16 +60,74 @@ export default function CampaignForm({ onCreated, onToast }) {
     setCurrentRule(prev => ({ ...prev, [e.target.name]: e.target.value }));
   }
 
+  // ── COMPOSITE condition helpers ──────────────────────────────────────────
+  function handleConditionChange(index, field, value) {
+    setCompositeConditions(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  }
+
+  function handleAddCondition() {
+    setCompositeConditions(prev => [...prev, { ...EMPTY_CONDITION }]);
+  }
+
+  function handleRemoveCondition(index) {
+    setCompositeConditions(prev => prev.filter((_, i) => i !== index));
+  }
+
+  function resetCompositeState() {
+    setCompositeLogicalOp('AND');
+    setCompositeConditions([{ ...EMPTY_CONDITION }]);
+  }
+
   /** Convert raw text input into the rule_value JSON shape the engine expects. */
   function buildRuleValue(rule) {
     if (rule.rule_type === 'MIN_DEPOSIT')  return { amount: parseFloat(rule.rule_value_raw) || 0 };
     if (rule.rule_type === 'ACCOUNT_TYPE') return { type: rule.rule_value_raw.trim().toUpperCase() };
+    if (rule.rule_type === 'COMPOSITE') {
+      return {
+        logical_operator: rule._compositeLogicalOp,
+        conditions: rule._compositeConditions.map(c => ({
+          field:    c.field,
+          operator: c.operator,
+          value:    NUMERIC_CONDITION_FIELDS.has(c.field)
+            ? parseFloat(c.value_raw) || 0
+            : c.value_raw.trim().toUpperCase(),
+        })),
+      };
+    }
     return { value: rule.rule_value_raw.trim() };
   }
 
   function handleAddRule() {
+    if (currentRule.rule_type === 'COMPOSITE') {
+      // Validate: at least one condition and all values filled
+      if (compositeConditions.length === 0) {
+        onToast({ type: 'error', message: 'Add at least one condition for the COMPOSITE rule.' });
+        return;
+      }
+      const incomplete = compositeConditions.some(c => !c.value_raw.trim());
+      if (incomplete) {
+        onToast({ type: 'error', message: 'All condition values must be filled before adding a COMPOSITE rule.' });
+        return;
+      }
+      setPendingRules(prev => [
+        ...prev,
+        {
+          ...currentRule,
+          _compositeLogicalOp:  compositeLogicalOp,
+          _compositeConditions: compositeConditions.map(c => ({ ...c })),
+        },
+      ]);
+      setCurrentRule(EMPTY_RULE);
+      resetCompositeState();
+      return;
+    }
+
     if (!currentRule.rule_value_raw.trim()) {
-      onToast({ type: 'error', message: '⚠️ Please enter a rule value before adding.' });
+      onToast({ type: 'error', message: 'Please enter a rule value before adding.' });
       return;
     }
     setPendingRules(prev => [...prev, { ...currentRule }]);
@@ -78,6 +142,13 @@ export default function CampaignForm({ onCreated, onToast }) {
     const sym = OPERATOR_SYMBOL[rule.operator] ?? rule.operator;
     if (rule.rule_type === 'MIN_DEPOSIT')  return `MIN_DEPOSIT ${sym} ${rule.rule_value_raw} ETB`;
     if (rule.rule_type === 'ACCOUNT_TYPE') return `ACCOUNT_TYPE ${sym} ${rule.rule_value_raw.toUpperCase()}`;
+    if (rule.rule_type === 'COMPOSITE') {
+      const op  = rule._compositeLogicalOp ?? 'AND';
+      const conds = (rule._compositeConditions ?? [])
+        .map(c => `${c.field} ${c.operator} ${c.value_raw}`)
+        .join(` ${op} `);
+      return `COMPOSITE [${op}]: ${conds}`;
+    }
     return `${rule.rule_type} ${sym} ${rule.rule_value_raw}`;
   }
 
@@ -127,11 +198,12 @@ export default function CampaignForm({ onCreated, onToast }) {
       onCreated();
       onToast({
         type: 'success',
-        message: `✅ Campaign "${data.campaign.name}" created as DRAFT` +
+        message: `Campaign "${data.campaign.name}" created as DRAFT` +
           (ruleCount > 0 ? ` with ${ruleCount} rule${ruleCount !== 1 ? 's' : ''}.` : '.'),
       });
       setForm(EMPTY_CAMPAIGN);
       setPendingRules([]);
+      resetCompositeState();
       nameRef.current?.focus();
 
     } catch (err) {
@@ -146,11 +218,12 @@ export default function CampaignForm({ onCreated, onToast }) {
     }
   }
 
+  // COMPOSITE uses its own condition inputs; placeholder only used for simple types.
   const rulePlaceholder = currentRule.rule_type === 'MIN_DEPOSIT'
     ? 'e.g. 5000'
     : currentRule.rule_type === 'ACCOUNT_TYPE'
       ? 'e.g. SAVINGS'
-      : 'Value…';
+      : '';
 
   return (
     <form
@@ -267,7 +340,7 @@ export default function CampaignForm({ onCreated, onToast }) {
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <span className="text-text-1 font-semibold text-sm">Qualification Rules</span>
-          <span className="text-text-3 text-xs">All rules must pass (logical AND)</span>
+          <span className="text-text-3 text-xs">Rules are evaluated in order — all must pass</span>
         </div>
 
         {/* Rule input row */}
@@ -286,31 +359,131 @@ export default function CampaignForm({ onCreated, onToast }) {
             </select>
           </div>
 
-          <div>
-            <label htmlFor="rule-operator" className={LABEL_CLS}>Operator</label>
-            <select
-              id="rule-operator" name="operator"
-              value={currentRule.operator}
-              onChange={handleRuleChange}
-              className={INPUT_CLS}
-            >
-              {OPERATORS.map(op => (
-                <option key={op.value} value={op.value}>{op.label}</option>
-              ))}
-            </select>
-          </div>
+          {/* MIN_DEPOSIT and ACCOUNT_TYPE — simple operator + value */}
+          {currentRule.rule_type !== 'COMPOSITE' && (
+            <>
+              <div>
+                <label htmlFor="rule-operator" className={LABEL_CLS}>Operator</label>
+                <select
+                  id="rule-operator" name="operator"
+                  value={currentRule.operator}
+                  onChange={handleRuleChange}
+                  className={INPUT_CLS}
+                >
+                  {OPERATORS.map(op => (
+                    <option key={op.value} value={op.value}>{op.label}</option>
+                  ))}
+                </select>
+              </div>
 
-          <div>
-            <label htmlFor="rule-value" className={LABEL_CLS}>Value</label>
-            <input
-              id="rule-value" name="rule_value_raw" type="text"
-              placeholder={rulePlaceholder}
-              value={currentRule.rule_value_raw}
-              onChange={handleRuleChange}
-              autoComplete="off" className={INPUT_CLS}
-            />
-          </div>
+              <div>
+                <label htmlFor="rule-value" className={LABEL_CLS}>Value</label>
+                <input
+                  id="rule-value" name="rule_value_raw" type="text"
+                  placeholder={rulePlaceholder}
+                  value={currentRule.rule_value_raw}
+                  onChange={handleRuleChange}
+                  autoComplete="off" className={INPUT_CLS}
+                />
+              </div>
+            </>
+          )}
         </div>
+
+        {/* COMPOSITE rule builder — rendered below the type row */}
+        {currentRule.rule_type === 'COMPOSITE' && (
+          <div className="mb-4 border border-border rounded-md p-4 bg-bg">
+            {/* Logical operator selector */}
+            <div className="flex items-center gap-4 mb-4">
+              <span className={LABEL_CLS + ' mb-0'}>Logical Operator</span>
+              <div className="flex gap-3">
+                {['AND', 'OR'].map(op => (
+                  <label key={op} className="flex items-center gap-1.5 cursor-pointer text-sm text-text-1">
+                    <input
+                      type="radio"
+                      name="compositeLogicalOp"
+                      value={op}
+                      checked={compositeLogicalOp === op}
+                      onChange={() => setCompositeLogicalOp(op)}
+                      className="accent-brand"
+                    />
+                    {op}
+                  </label>
+                ))}
+              </div>
+              <span className="text-text-3 text-xs ml-auto">
+                {compositeLogicalOp === 'AND'
+                  ? 'All conditions must pass'
+                  : 'At least one condition must pass'}
+              </span>
+            </div>
+
+            {/* Condition rows */}
+            <div className="flex flex-col gap-3">
+              {compositeConditions.map((cond, idx) => (
+                <div key={idx} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end">
+                  <div>
+                    <label className={LABEL_CLS}>Field</label>
+                    <select
+                      value={cond.field}
+                      onChange={e => handleConditionChange(idx, 'field', e.target.value)}
+                      className={INPUT_CLS}
+                      aria-label={`Condition ${idx + 1} field`}
+                    >
+                      {COMPOSITE_FIELDS.map(f => (
+                        <option key={f.value} value={f.value}>{f.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={LABEL_CLS}>Operator</label>
+                    <select
+                      value={cond.operator}
+                      onChange={e => handleConditionChange(idx, 'operator', e.target.value)}
+                      className={INPUT_CLS}
+                      aria-label={`Condition ${idx + 1} operator`}
+                    >
+                      {OPERATORS.map(op => (
+                        <option key={op.value} value={op.value}>{op.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={LABEL_CLS}>Value</label>
+                    <input
+                      type="text"
+                      value={cond.value_raw}
+                      onChange={e => handleConditionChange(idx, 'value_raw', e.target.value)}
+                      placeholder={NUMERIC_CONDITION_FIELDS.has(cond.field) ? 'e.g. 5000' : 'e.g. SAVINGS'}
+                      autoComplete="off"
+                      className={INPUT_CLS}
+                      aria-label={`Condition ${idx + 1} value`}
+                    />
+                  </div>
+                  <div className="pb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveCondition(idx)}
+                      disabled={compositeConditions.length === 1}
+                      aria-label={`Remove condition ${idx + 1}`}
+                      className="text-text-3 hover:text-reject-txt text-sm font-bold px-2 py-2.5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      x
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleAddCondition}
+              className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-brand border border-brand px-3 py-1.5 rounded hover:bg-brand hover:text-white transition-colors"
+            >
+              + Add Condition
+            </button>
+          </div>
+        )}
 
         <button
           type="button"

@@ -1,92 +1,172 @@
 /**
- * referral-api/services/ruleEngine.js
- * -------------------------------------
- * Pure rule-evaluation service for campaign qualification.
+ * server/services/ruleEngine.js
+ * ─────────────────────────────
+ * Pure, synchronous rule-evaluation engine for campaign qualification.
  *
- * This module is intentionally framework-agnostic — it receives a Prisma
- * transaction context and customer data, fetches the campaign's rules,
- * evaluates them, and returns a plain result object. It has no Express
- * dependencies (no req/res).
+ * V9 (Enterprise Rule Engine):
+ *   The function signature changed from:
+ *     evaluateRules(campaign_id, customer_data, tx)   ← async, fetched rules itself
+ *   to:
+ *     evaluateRules(customerData, campaignRules)       ← sync, pure evaluator
  *
- * V8 (Prisma migration):
- *   The `client` parameter previously accepted a raw pg PoolClient and called
- *   client.query(). It now accepts a Prisma transaction object (the `tx`
- *   argument passed inside prisma.$transaction(async (tx) => { ... })).
- *   This keeps rule evaluation inside the same atomic transaction as the
- *   referral insert in integration.js.
+ *   The caller (integration.service.js) is now responsible for fetching the
+ *   pre-scoped rules array for the campaign before calling this function.
+ *   This makes the engine fully testable without a database and ensures rule
+ *   evaluation is strictly scoped to the correct campaign_id at the call site.
  *
  * Exported function:
- *   evaluateRules(campaign_id, customer_data, tx)
- *     → Promise<{ passed: boolean, failedRule: string | null }>
+ *   evaluateRules(customerData, campaignRules)
+ *     → { passed: boolean, failedRule: string | null }
  *
  * How the rule engine works
  * ─────────────────────────
- * A campaign has 0..N rules stored in `campaign_rules`:
- *   { rule_type, operator, rule_value (JSONB) }
- *
- * Example rows:
- *   { rule_type: 'MIN_DEPOSIT',  operator: 'GREATER_THAN_OR_EQUAL', rule_value: { amount: 5000 } }
- *   { rule_type: 'ACCOUNT_TYPE', operator: 'EQUALS',                rule_value: { type: 'SAVINGS' } }
- *
- * ALL rules must pass (logical AND). If any rule fails, passed = false and
- * failedRule is a human-readable description of which rule was violated.
+ * A campaign has 0..N pre-fetched rules (CampaignRule rows):
+ *   { id, rule_type, operator, rule_value (JSONB) }
  *
  * Supported rule_types:
  *   MIN_DEPOSIT   — compares customer deposit_amount to rule_value.amount (numeric)
  *   ACCOUNT_TYPE  — compares customer account_type to rule_value.type (string)
+ *   COMPOSITE     — evaluates a JSONB-defined set of conditions with AND/OR logic
  *
- * Supported operators (per schema_v6_rule_engine.sql CHECK constraint):
- *   GREATER_THAN            >
- *   LESS_THAN               <
- *   EQUALS                  ===
- *   GREATER_THAN_OR_EQUAL   >=
- *   LESS_THAN_OR_EQUAL      <=
- *   NOT_EQUALS              !==
+ * COMPOSITE rule_value shape:
+ *   {
+ *     "logical_operator": "AND" | "OR",
+ *     "conditions": [
+ *       { "field": "deposit_amount", "operator": "GREATER_THAN", "value": 5000 },
+ *       { "field": "account_type",   "operator": "EQUALS",       "value": "SAVINGS" }
+ *     ]
+ *   }
+ *
+ * Supported condition fields: deposit_amount, account_type, customer_name, customer_phone
+ *
+ * Supported operators:
+ *   GREATER_THAN | LESS_THAN | EQUALS | GREATER_THAN_OR_EQUAL | LESS_THAN_OR_EQUAL | NOT_EQUALS
  *
  * Per RULES.md:
- *   - Never string-concatenate SQL. Prisma handles parameterisation natively.
  *   - Never throw unhandled exceptions — always return { passed, failedRule }.
- *   - The tx parameter is a Prisma interactive-transaction handle, so rule
- *     evaluation participates in the same atomic transaction as the referral
- *     insert. No rules can change between evaluation and insert.
+ *   - Fail safe on unknown rule_types, unknown operators, or malformed JSONB.
+ *   - If a campaign has NO rules, every customer passes by default.
  */
 
 'use strict';
 
 // ---------------------------------------------------------------------------
+// NUMERIC_FIELDS
+// Fields whose values must be coerced to Number before comparison.
+// ---------------------------------------------------------------------------
+const NUMERIC_FIELDS = new Set(['deposit_amount']);
+
+// ---------------------------------------------------------------------------
 // applyOperator(actual, operator, expected)
 //
-// Performs a type-safe comparison between two values.
+// Type-safe comparison. Returns false for any unrecognised operator (fail safe).
 // ---------------------------------------------------------------------------
 function applyOperator(actual, operator, expected) {
   switch (operator) {
-    case 'GREATER_THAN':           return actual >  expected;
-    case 'LESS_THAN':              return actual <  expected;
+    case 'GREATER_THAN':           return actual >   expected;
+    case 'LESS_THAN':              return actual <   expected;
     case 'EQUALS':                 return actual === expected;
-    case 'GREATER_THAN_OR_EQUAL':  return actual >= expected;
-    case 'LESS_THAN_OR_EQUAL':     return actual <= expected;
+    case 'GREATER_THAN_OR_EQUAL':  return actual >=  expected;
+    case 'LESS_THAN_OR_EQUAL':     return actual <=  expected;
     case 'NOT_EQUALS':             return actual !== expected;
     default:
-      // Unknown operator — fail safe: treat as a failing rule so bad DB data
-      // does not silently let through every customer.
       console.warn(`[ruleEngine] Unknown operator "${operator}" — rule will FAIL by default.`);
       return false;
   }
 }
 
 // ---------------------------------------------------------------------------
-// evaluateRules(campaign_id, customer_data, tx)
+// resolveField(customerData, field)
 //
-// Fetches all rules for `campaign_id` using the provided Prisma transaction
-// handle, then evaluates each rule against `customer_data` in sequence.
-// ALL rules must pass (logical AND).
+// Extracts and coerces the correct value from customerData for a given field.
+// Numeric fields are cast to Number; all others are uppercased strings.
+// ---------------------------------------------------------------------------
+function resolveField(customerData, field) {
+  const raw = customerData[field];
+  if (NUMERIC_FIELDS.has(field)) {
+    return Number(raw ?? 0);
+  }
+  return String(raw ?? '').toUpperCase();
+}
+
+// ---------------------------------------------------------------------------
+// evaluateComposite(customerData, rule)
+//
+// Evaluates a COMPOSITE rule whose rule_value is:
+//   { logical_operator: 'AND'|'OR', conditions: [{ field, operator, value }] }
+//
+// Returns { passed: boolean, failedRule: string | null }.
+// Never throws — all errors are caught and returned as { passed: false }.
+// ---------------------------------------------------------------------------
+function evaluateComposite(customerData, rule) {
+  try {
+    const rv = rule.rule_value;
+
+    // ── Structure validation ────────────────────────────────────────────────
+    if (!rv || typeof rv !== 'object') {
+      return { passed: false, failedRule: 'Malformed COMPOSITE rule: rule_value is not an object.' };
+    }
+    const logicalOp = rv.logical_operator;
+    if (logicalOp !== 'AND' && logicalOp !== 'OR') {
+      return {
+        passed: false,
+        failedRule: `Malformed COMPOSITE rule: logical_operator must be "AND" or "OR", got "${logicalOp}".`,
+      };
+    }
+    if (!Array.isArray(rv.conditions) || rv.conditions.length === 0) {
+      return { passed: false, failedRule: 'Malformed COMPOSITE rule: conditions must be a non-empty array.' };
+    }
+
+    // ── Evaluate each condition ─────────────────────────────────────────────
+    for (const cond of rv.conditions) {
+      if (!cond || typeof cond.field !== 'string' || typeof cond.operator !== 'string') {
+        return { passed: false, failedRule: 'Malformed COMPOSITE rule: a condition is missing "field" or "operator".' };
+      }
+
+      const actual   = resolveField(customerData, cond.field);
+      // For numeric fields, expected must also be a Number.
+      const expected = NUMERIC_FIELDS.has(cond.field)
+        ? Number(cond.value ?? 0)
+        : String(cond.value ?? '').toUpperCase();
+
+      const condPassed = applyOperator(actual, cond.operator, expected);
+      const condDesc   = `${cond.field} must be ${cond.operator} ${cond.value}`;
+
+      if (logicalOp === 'AND' && !condPassed) {
+        return { passed: false, failedRule: `Failed: ${condDesc}` };
+      }
+      if (logicalOp === 'OR' && condPassed) {
+        return { passed: true, failedRule: null };
+      }
+    }
+
+    // After iterating all conditions:
+    //   AND → all passed (we would have returned early on any failure)
+    //   OR  → none passed (we would have returned early on any success)
+    if (logicalOp === 'AND') return { passed: true,  failedRule: null };
+    // OR — build a summary of all failing conditions
+    const summary = rv.conditions
+      .map(c => `${c.field} ${c.operator} ${c.value}`)
+      .join(' OR ');
+    return { passed: false, failedRule: `Failed: no OR condition passed — [${summary}]` };
+
+  } catch (err) {
+    console.error('[ruleEngine] COMPOSITE evaluation error:', err.message);
+    return { passed: false, failedRule: `Rule evaluation error: ${err.message}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// evaluateRules(customerData, campaignRules)
+//
+// Pure synchronous evaluator. Receives a pre-fetched array of CampaignRule
+// rows scoped to a single campaign and evaluates them against customerData.
 //
 // Parameters:
-//   campaign_id   — integer PK of the campaign
-//   customer_data — object from the Temenos webhook payload:
-//                   { account_type, deposit_amount, customer_name, customer_phone }
-//   tx            — a Prisma interactive-transaction handle
-//                   (the `tx` arg inside prisma.$transaction(async (tx) => {}))
+//   customerData   — object from the Temenos webhook payload:
+//                    { account_type, deposit_amount, customer_name, customer_phone }
+//   campaignRules  — array of CampaignRule rows (already filtered by campaign_id,
+//                    ordered by id asc) — fetched by the caller, NOT this function.
 //
 // Returns:
 //   { passed: true,  failedRule: null }         — all rules passed
@@ -94,59 +174,51 @@ function applyOperator(actual, operator, expected) {
 //
 // Design note: if a campaign has NO rules, every customer passes by default.
 // ---------------------------------------------------------------------------
-async function evaluateRules(campaign_id, customer_data, tx) {
-  // ── Fetch all rules for this campaign inside the transaction ──────────────
-  // Ordered by id for deterministic evaluation order.
-  const rules = await tx.campaignRule.findMany({
-    where:   { campaign_id },
-    orderBy: { id: 'asc' },
-  });
-
+function evaluateRules(customerData, campaignRules) {
   // ── No rules → universal pass ─────────────────────────────────────────────
-  if (rules.length === 0) {
+  if (!campaignRules || campaignRules.length === 0) {
     return { passed: true, failedRule: null };
   }
 
   // ── Evaluate each rule in sequence ────────────────────────────────────────
-  for (const rule of rules) {
+  for (const rule of campaignRules) {
     const { rule_type, operator, rule_value } = rule;
-
-    let actual;
-    let expected;
-    let ruleDescription;
 
     switch (rule_type) {
 
-      // ── MIN_DEPOSIT rule ───────────────────────────────────────────────────
+      // ── MIN_DEPOSIT rule ─────────────────────────────────────────────────
       case 'MIN_DEPOSIT': {
-        actual   = Number(customer_data.deposit_amount);
-        expected = Number(rule_value.amount ?? rule_value.value ?? 0);
-        ruleDescription =
-          `MIN_DEPOSIT: deposit_amount (${actual}) must be ${operator} ${expected}`;
-
+        const actual   = Number(customerData.deposit_amount);
+        const expected = Number(rule_value?.amount ?? rule_value?.value ?? 0);
+        const desc     = `MIN_DEPOSIT: deposit_amount (${actual}) must be ${operator} ${expected}`;
         if (!applyOperator(actual, operator, expected)) {
-          return { passed: false, failedRule: ruleDescription };
+          return { passed: false, failedRule: desc };
         }
         break;
       }
 
-      // ── ACCOUNT_TYPE rule ──────────────────────────────────────────────────
+      // ── ACCOUNT_TYPE rule ────────────────────────────────────────────────
       case 'ACCOUNT_TYPE': {
-        actual   = String(customer_data.account_type ?? '').toUpperCase();
-        expected = String(rule_value.type ?? rule_value.value ?? '').toUpperCase();
-        ruleDescription =
-          `ACCOUNT_TYPE: account_type (${actual}) must be ${operator} ${expected}`;
-
+        const actual   = String(customerData.account_type ?? '').toUpperCase();
+        const expected = String(rule_value?.type ?? rule_value?.value ?? '').toUpperCase();
+        const desc     = `ACCOUNT_TYPE: account_type (${actual}) must be ${operator} ${expected}`;
         if (!applyOperator(actual, operator, expected)) {
-          return { passed: false, failedRule: ruleDescription };
+          return { passed: false, failedRule: desc };
         }
         break;
       }
 
-      // ── Unknown rule_type ──────────────────────────────────────────────────
+      // ── COMPOSITE rule ───────────────────────────────────────────────────
+      case 'COMPOSITE': {
+        const result = evaluateComposite(customerData, rule);
+        if (!result.passed) return result;
+        break;
+      }
+
+      // ── Unknown rule_type ────────────────────────────────────────────────
       default: {
         const unknownDesc = `Unknown rule_type "${rule_type}" — fails by default.`;
-        console.warn(`[ruleEngine] ${unknownDesc} (campaign_id=${campaign_id}, rule_id=${rule.id})`);
+        console.warn(`[ruleEngine] ${unknownDesc} (rule_id=${rule.id})`);
         return { passed: false, failedRule: unknownDesc };
       }
     }

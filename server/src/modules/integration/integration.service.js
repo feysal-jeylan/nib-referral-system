@@ -139,9 +139,15 @@ async function processWebhook({
         return { outcome: 'NO_CAMPAIGN' };
       }
 
-      // 3d: Evaluate campaign qualification rules
+      // 3d: Fetch rules scoped strictly to this campaign, then evaluate.
+      // The rule engine is a pure synchronous evaluator — it receives the
+      // pre-fetched rules array and never touches the database itself.
+      const campaignRules = await tx.campaignRule.findMany({
+        where:   { campaign_id: campaign.id },
+        orderBy: { id: 'asc' },
+      });
       const customer_data = { account_type, deposit_amount, customer_name, customer_phone };
-      const ruleResult = await evaluateRules(campaign.id, customer_data, tx);
+      const ruleResult = evaluateRules(customer_data, campaignRules);
 
       if (!ruleResult.passed) {
         const reason = `Customer did not meet campaign rules: ${ruleResult.failedRule}`;
