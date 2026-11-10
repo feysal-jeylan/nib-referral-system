@@ -3,58 +3,36 @@
  * ─────────────────────────────────────
  * Premium enterprise login — Nib International Bank Referral System.
  *
- * Phase 5 Brand Refresh — Warm Brown / Honey Gold palette.
+ * Phase 6 Brand Refresh — exact replica of reference design:
+ *   - Desktop: 55/45 split-screen with curved SVG divider
+ *   - Mobile:  stacked — compact branding header on top, form below
+ *   - Left panel: ivory + gold honeycomb + layered wave footer
+ *   - Right panel: clean auth form with icon inputs + eye toggle
  *
- * Layout: Split-screen (stacks to single column on mobile)
- *   LEFT  — Warm parchment/ivory brand panel with abstract geometric
- *            network pattern (SVG, no cartoon imagery), animated orbs,
- *            feature cards, and NIB monogram.
- *   RIGHT — Crisp white form panel with clean typography, gold focus
- *            states, slide-in error animation, and smooth micro-interactions.
- *
- * Brand palette:
- *   Warm Brown  #8A4D1F  (primary CTA, brand mark)
- *   Honey Gold  #D4AF37  (focus rings, dividers, accents)
- *   Warm Ivory  #FAF8F5  (page bg)
- *   Parchment   #F3EDE6  (left panel bg)
- *
- * Logic & Axios usage unchanged from V2 — only the visual layer changed.
+ * Logic & API calls: unchanged from previous version.
  */
 
 import { useState } from 'react';
 import { useAuth } from './AuthContext';
 import api from '@/services/api';
 
-// ─── Brand constants ──────────────────────────────────────────────────────────
+// ─── Brand tokens ──────────────────────────────────────────────────────────────
 const C = {
-  brown:       '#8A4D1F',
-  brownHover:  '#6B3A15',
-  brownMuted:  '#7F483B',
-  gold:        '#D4AF37',
-  goldLight:   '#FBF5DC',
-  panel:       '#F3EDE6',   // left panel background
-  pageBg:      '#FAF8F5',   // right side background
-  surface:     '#FFFFFF',
-  border:      '#E5DED6',
-  text1:       '#1C0F05',
-  text2:       '#4A3728',
-  text3:       '#9C8577',
+  brown:      '#8A4D1F',   // deep warm brown — primary CTA
+  brownDark:  '#5C3010',   // hover state
+  brownMuted: '#7F483B',
+  gold:       '#D4AF37',   // honey gold — accents
+  goldDim:    '#C49B2A',
+  panel:      '#F5EFE6',   // left panel ivory
+  pageBg:     '#FBF8F4',   // right panel lighter ivory
+  border:     '#E8DDD2',
+  text1:      '#1C0F05',   // darkest
+  text2:      '#4A3728',
+  text3:      '#9C8577',
 };
 
-// ─── Input class builder ──────────────────────────────────────────────────────
-function inputCls(hasError) {
-  const base =
-    'w-full bg-[#FAF8F5] border rounded-lg px-4 py-3 pl-11 text-[#1C0F05] text-sm ' +
-    'placeholder-[#9C8577] outline-none transition-all duration-200 ' +
-    'focus:bg-white focus:shadow-[0_0_0_3px_rgba(212,175,55,0.22)] ';
-  return hasError
-    ? base + 'border-[#E8A090] focus:border-[#D4701C] focus:shadow-[0_0_0_3px_rgba(216,80,30,0.14)]'
-    : base + `border-[${C.border}] focus:border-[${C.gold}]`;
-}
-
-// ─── Abstract geometric pattern SVG (network/hexagonal motif) ─────────────────
-// Pure SVG — no cartoon imagery. Uses muted gold lines on ivory background.
-function GeometricPattern() {
+// ─── Honeycomb SVG background ──────────────────────────────────────────────────
+function HoneycombBg() {
   return (
     <svg
       className="absolute inset-0 w-full h-full pointer-events-none"
@@ -62,177 +40,200 @@ function GeometricPattern() {
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
-        {/* Hexagonal grid tile */}
-        <pattern id="hex-net" x="0" y="0" width="80" height="92"
-          patternUnits="userSpaceOnUse">
-          {/* Hexagon outline */}
+        {/* Single hexagon tile, offset rows for honeycomb effect */}
+        <pattern id="hc" x="0" y="0" width="70" height="80" patternUnits="userSpaceOnUse">
+          {/* Upright hexagon */}
           <polygon
-            points="40,4 72,22 72,70 40,88 8,70 8,22"
+            points="35,4 62,20 62,52 35,68 8,52 8,20"
             fill="none"
             stroke="#D4AF37"
-            strokeWidth="0.6"
-            opacity="0.28"
+            strokeWidth="0.9"
+            opacity="0.30"
           />
-          {/* Inner cross */}
-          <line x1="40" y1="4"  x2="40" y2="88" stroke="#8A4D1F" strokeWidth="0.4" opacity="0.10" />
-          <line x1="8"  y1="22" x2="72" y2="70" stroke="#8A4D1F" strokeWidth="0.4" opacity="0.10" />
-          <line x1="72" y1="22" x2="8"  y2="70" stroke="#8A4D1F" strokeWidth="0.4" opacity="0.10" />
-          {/* Centre node */}
-          <circle cx="40" cy="46" r="2.5" fill="#D4AF37" opacity="0.20" />
-          {/* Vertex nodes */}
-          <circle cx="40" cy="4"  r="1.5" fill="#8A4D1F" opacity="0.14" />
-          <circle cx="72" cy="22" r="1.5" fill="#8A4D1F" opacity="0.14" />
-          <circle cx="72" cy="70" r="1.5" fill="#8A4D1F" opacity="0.14" />
-          <circle cx="40" cy="88" r="1.5" fill="#8A4D1F" opacity="0.14" />
-          <circle cx="8"  cy="70" r="1.5" fill="#8A4D1F" opacity="0.14" />
-          <circle cx="8"  cy="22" r="1.5" fill="#8A4D1F" opacity="0.14" />
         </pattern>
-
-        {/* Radial vignette to fade the pattern at edges */}
-        <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
-          <stop offset="0%"   stopColor="#F3EDE6" stopOpacity="0" />
-          <stop offset="100%" stopColor="#F3EDE6" stopOpacity="0.75" />
+        <pattern id="hc2" x="35" y="40" width="70" height="80" patternUnits="userSpaceOnUse">
+          <polygon
+            points="35,4 62,20 62,52 35,68 8,52 8,20"
+            fill="none"
+            stroke="#D4AF37"
+            strokeWidth="0.9"
+            opacity="0.18"
+          />
+        </pattern>
+        {/* Edge vignette — fades pattern toward centre */}
+        <radialGradient id="hcFade" cx="50%" cy="50%" r="65%">
+          <stop offset="0%"   stopColor={C.panel} stopOpacity="0.72" />
+          <stop offset="100%" stopColor={C.panel} stopOpacity="0" />
         </radialGradient>
       </defs>
-
-      {/* Pattern fill */}
-      <rect width="100%" height="100%" fill="url(#hex-net)" />
-      {/* Vignette overlay — softens pattern at edges */}
-      <rect width="100%" height="100%" fill="url(#vignette)" />
+      <rect width="100%" height="100%" fill="url(#hc)" />
+      <rect width="100%" height="100%" fill="url(#hc2)" />
+      {/* Centre fade so pattern is prominent at edges only */}
+      <rect width="100%" height="100%" fill="url(#hcFade)" />
     </svg>
   );
 }
 
-// ─── Left branding panel ──────────────────────────────────────────────────────
-function BrandPanel() {
+// ─── Layered wave footer SVG ───────────────────────────────────────────────────
+// 4 overlapping waves: ivory → light-gold → amber → dark-brown
+function WaveFooter() {
   return (
-    <div
-      className="hidden lg:flex relative flex-col justify-between overflow-hidden
-                 w-[46%] flex-shrink-0 p-10 xl:p-14"
-      style={{ background: C.panel }}
-    >
-      {/* Geometric network pattern */}
-      <GeometricPattern />
-
-      {/* Warm gradient overlay — reinforces depth */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            'linear-gradient(160deg, rgba(243,237,230,0) 40%, rgba(138,77,31,0.07) 100%)',
-        }}
-      />
-
-      {/* Floating orbs — warm tones */}
-      <div
-        className="animate-float-slow absolute -top-20 -right-20 w-80 h-80 rounded-full pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(212,175,55,0.14) 0%, transparent 70%)' }}
-      />
-      <div
-        className="animate-float absolute bottom-20 -left-24 w-64 h-64 rounded-full pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(138,77,31,0.10) 0%, transparent 70%)' }}
-      />
-
-      {/* Decorative pulse ring */}
-      <div className="absolute top-10 left-10 xl:top-14 xl:left-14 w-14 h-14 pointer-events-none">
-        <div
-          className="animate-pulse-ring absolute inset-0 rounded-full border"
-          style={{ borderColor: `${C.gold}50` }}
+    <div className="absolute bottom-0 left-0 right-0 pointer-events-none" style={{ height: '38%' }}>
+      <svg
+        viewBox="0 0 500 180"
+        preserveAspectRatio="none"
+        className="w-full h-full"
+        aria-hidden="true"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        {/* Wave 1 — lightest gold */}
+        <path
+          d="M0,120 C80,80 180,155 280,110 C370,70 430,135 500,100 L500,180 L0,180 Z"
+          fill="#E8C96B"
+          opacity="0.55"
         />
-        <div
-          className="animate-pulse-ring absolute inset-0 rounded-full border"
-          style={{ borderColor: `${C.gold}28`, animationDelay: '0.95s' }}
+        {/* Wave 2 — amber */}
+        <path
+          d="M0,138 C60,105 160,165 260,128 C360,92 440,148 500,118 L500,180 L0,180 Z"
+          fill="#C49B2A"
+          opacity="0.72"
         />
+        {/* Wave 3 — rich brown-gold */}
+        <path
+          d="M0,152 C70,125 170,172 270,148 C380,122 450,160 500,138 L500,180 L0,180 Z"
+          fill="#8A4D1F"
+          opacity="0.88"
+        />
+        {/* Wave 4 — dark chocolate (bottom fill) */}
+        <path
+          d="M0,164 C90,148 190,178 290,160 C390,144 460,170 500,155 L500,180 L0,180 Z"
+          fill="#3D1A08"
+        />
+      </svg>
+
+      {/* "Committed to Service Excellence." text riding the wave */}
+      <div className="absolute bottom-3 left-0 right-0 flex items-center justify-center gap-3 px-6">
+        <div className="h-px flex-1 max-w-[60px]" style={{ background: `${C.gold}80` }} />
+        <p className="text-white text-[10px] tracking-widest uppercase font-light select-none">
+          Committed to Service Excellence.
+        </p>
+        <div className="h-px flex-1 max-w-[60px]" style={{ background: `${C.gold}80` }} />
       </div>
-
-      {/* ── NIB brand mark ── */}
-      <div className="relative z-10">
-        <div className="flex items-center gap-3">
-          {/* Monogram badge */}
-          <div
-            className="w-12 h-12 rounded-xl flex items-center justify-center shadow-md flex-shrink-0"
-            style={{ background: `linear-gradient(135deg, ${C.brown} 0%, ${C.brownMuted} 100%)` }}
-          >
-            <span
-              className="text-[13px] font-black tracking-widest select-none"
-              style={{ color: C.gold }}
-            >
-              NIB
-            </span>
-          </div>
-          <div>
-            <p className="font-bold text-sm tracking-tight leading-none" style={{ color: C.text1 }}>
-              Nib International Bank
-            </p>
-            <p
-              className="text-[9.5px] tracking-[0.22em] uppercase font-semibold mt-0.5"
-              style={{ color: C.goldMuted || C.brownMuted }}
-            >
-              Internal Portal
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Hero text + feature cards ── */}
-      <div className="relative z-10 mt-auto">
-        <div className="mb-8">
-          {/* Gold accent bar */}
-          <div
-            className="h-[3px] w-10 rounded-full mb-5"
-            style={{ background: `linear-gradient(90deg, ${C.gold}, ${C.brown})` }}
-          />
-          <h2
-            className="font-extrabold text-3xl xl:text-4xl leading-[1.15] tracking-tight"
-            style={{ color: C.text1 }}
-          >
-            Referral<br />
-            <span style={{ color: C.brown }}>Management</span><br />
-            System
-          </h2>
-          <p className="text-sm leading-relaxed mt-3 max-w-[24ch]" style={{ color: C.brownMuted }}>
-            A secure, real-time platform for managing Nib Bank's internal referral network.
-          </p>
-        </div>
-
-        {/* Feature cards — warm glassmorphism on ivory */}
-        <div className="flex flex-col gap-2.5">
-          {[
-            { label: 'HttpOnly JWT Authentication',      icon: '🔒' },
-            { label: 'Live data sync every 5 seconds',   icon: '⚡' },
-            { label: 'Temenos Core Banking Integration', icon: '🏦' },
-          ].map(({ label, icon }) => (
-            <div
-              key={label}
-              className="flex items-center gap-3 rounded-xl px-4 py-3"
-              style={{
-                background: 'rgba(255,255,255,0.55)',
-                border:     `1px solid rgba(212,175,55,0.22)`,
-                backdropFilter: 'blur(8px)',
-              }}
-            >
-              <span className="text-sm flex-shrink-0" aria-hidden="true">{icon}</span>
-              <span className="text-xs font-medium" style={{ color: C.text2 }}>{label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Bottom gold divider */}
-      <div
-        className="absolute bottom-0 left-0 right-0 h-px"
-        style={{ background: `linear-gradient(90deg, transparent, ${C.gold}55, transparent)` }}
-      />
     </div>
   );
 }
 
-// ─── Shared banner components ─────────────────────────────────────────────────
+// ─── Curved SVG divider between panels (desktop only) ─────────────────────────
+function CurvedDivider() {
+  return (
+    <svg
+      className="hidden lg:block absolute top-0 right-0 h-full z-10 pointer-events-none"
+      style={{ width: '64px', marginRight: '-1px' }}
+      viewBox="0 0 64 800"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      {/* White right-panel fill curves over the left panel */}
+      <path d="M64,0 Q0,400 64,800 L64,0 Z" fill={C.pageBg} />
+      {/* Gold stroke along the curve edge */}
+      <path
+        d="M64,0 Q0,400 64,800"
+        fill="none"
+        stroke={C.gold}
+        strokeWidth="0.8"
+        opacity="0.55"
+      />
+    </svg>
+  );
+}
+
+// ─── NIB geometric logo symbol (SVG, matches reference image) ─────────────────
+// Used in the right-panel footer when no image is available
+function NibSymbol({ size = 28 }) {
+  return (
+    <img
+      src="/nib-logo.png"
+      alt="NIB"
+      width={size}
+      height={size}
+      className="rounded-full object-cover flex-shrink-0"
+      style={{ opacity: 0.75 }}
+    />
+  );
+}
+
+// ─── Left branding panel ───────────────────────────────────────────────────────
+function BrandPanel() {
+  return (
+    <div
+      className="hidden lg:flex relative flex-col overflow-hidden flex-shrink-0"
+      style={{ width: '55%', background: C.panel }}
+    >
+      {/* Honeycomb pattern */}
+      <HoneycombBg />
+
+      {/* Top-left: logo + divider + bank name */}
+      <div className="relative z-10 flex items-center gap-3 p-8 xl:p-10">
+        <img
+          src="/nib-logo.png"
+          alt="NIB Logo"
+          className="w-11 h-11 rounded-full object-cover flex-shrink-0 shadow-sm"
+        />
+        {/* Thin vertical gold divider */}
+        <div className="w-px h-9 self-stretch" style={{ background: `${C.gold}60` }} />
+        <div>
+          <p className="font-bold text-sm leading-tight" style={{ color: C.text1 }}>
+            Nib International
+          </p>
+          <p className="font-bold text-sm leading-tight" style={{ color: C.text1 }}>
+            Bank
+          </p>
+        </div>
+      </div>
+
+      {/* Main headline — centred vertically in remaining space */}
+      <div className="relative z-10 flex-1 flex flex-col justify-center px-10 xl:px-14 pb-32">
+        <p
+          className="font-bold text-3xl xl:text-4xl leading-tight mb-2"
+          style={{ color: C.text1 }}
+        >
+          Welcome to the
+        </p>
+        <p
+          className="font-bold text-3xl xl:text-4xl leading-tight"
+          style={{ color: C.gold, fontFamily: "'Georgia', 'Times New Roman', serif" }}
+        >
+          NIB Referral Portal
+        </p>
+
+        {/* Tagline */}
+        <div className="mt-5">
+          <p className="text-base font-normal" style={{ color: C.text2 }}>
+            Connect. Refer. Grow.
+          </p>
+          {/* Short gold underline */}
+          <div
+            className="mt-2 h-[2px] rounded-full"
+            style={{ width: '56px', background: C.gold }}
+          />
+        </div>
+      </div>
+
+      {/* Layered wave + tagline footer */}
+      <WaveFooter />
+
+      {/* Curved divider — bleeds over the seam between panels */}
+      <CurvedDivider />
+    </div>
+  );
+}
+
+// ─── Error / Success banners ───────────────────────────────────────────────────
 function ErrorBanner({ message }) {
   return (
     <div
-      className="animate-slide-in-down flex items-start gap-2.5 rounded-lg p-3.5
-                 text-xs leading-relaxed"
+      className="flex items-start gap-2.5 rounded-lg p-3.5 text-xs leading-relaxed"
       style={{
         background:  '#FDF3F0',
         border:      '1px solid #E8A090',
@@ -242,7 +243,7 @@ function ErrorBanner({ message }) {
       role="alert"
       aria-live="assertive"
     >
-      <span className="mt-0.5 flex-shrink-0 text-sm" style={{ color: '#C0442A' }} aria-hidden="true">⚠</span>
+      <span className="mt-0.5 flex-shrink-0" style={{ color: '#C0442A' }} aria-hidden="true">⚠</span>
       <span>{message}</span>
     </div>
   );
@@ -251,8 +252,7 @@ function ErrorBanner({ message }) {
 function SuccessBanner({ message }) {
   return (
     <div
-      className="animate-slide-in-down flex items-start gap-2.5 rounded-lg p-3.5
-                 text-xs leading-relaxed"
+      className="flex items-start gap-2.5 rounded-lg p-3.5 text-xs leading-relaxed"
       style={{
         background: '#F2FAF4',
         border:     '1px solid #7DC898',
@@ -262,54 +262,64 @@ function SuccessBanner({ message }) {
       role="status"
       aria-live="polite"
     >
-      <span className="mt-0.5 flex-shrink-0 text-sm" style={{ color: '#2D8A50' }} aria-hidden="true">✓</span>
+      <span className="mt-0.5 flex-shrink-0" style={{ color: '#2D8A50' }} aria-hidden="true">✓</span>
       <span>{message}</span>
     </div>
   );
 }
 
-// ─── Submit button ────────────────────────────────────────────────────────────
-function SubmitButton({ loading, label, loadingLabel, icon }) {
+// ─── Shared input style ────────────────────────────────────────────────────────
+function inputCls(hasError) {
+  const base =
+    'w-full bg-white border rounded-lg px-4 py-3 pl-11 text-sm outline-none transition-all duration-200 ' +
+    'placeholder-[#9C8577] ';
+  const focus = hasError
+    ? 'border-[#E8A090] focus:border-[#C0442A] focus:shadow-[0_0_0_3px_rgba(192,68,42,0.12)]'
+    : `border-[${C.border}] focus:border-[${C.gold}] focus:shadow-[0_0_0_3px_rgba(212,175,55,0.18)]`;
+  return base + focus;
+}
+
+// ─── SVG icon: person (user) ──────────────────────────────────────────────────
+function IconUser() {
   return (
-    <button
-      type="submit"
-      disabled={loading}
-      className="relative w-full mt-1 overflow-hidden rounded-lg px-5 py-3.5 text-sm font-bold
-                 text-white tracking-wide transition-all duration-200
-                 disabled:opacity-55 disabled:cursor-not-allowed
-                 active:scale-[0.98] flex items-center justify-center gap-2.5"
-      style={{
-        background:   `linear-gradient(135deg, ${C.brown} 0%, ${C.brownMuted} 100%)`,
-        boxShadow:    '0 4px 14px rgba(138,77,31,0.32)',
-      }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 6px 20px rgba(138,77,31,0.44)'; }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 4px 14px rgba(138,77,31,0.32)'; }}
-      aria-busy={loading}
-    >
-      {/* Gold shimmer top line */}
-      <div
-        className="absolute top-0 left-0 right-0 h-px pointer-events-none"
-        style={{ background: `linear-gradient(90deg, transparent, ${C.gold}70, transparent)` }}
-      />
-      {loading ? (
-        <>
-          <span
-            className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin flex-shrink-0"
-            aria-hidden="true"
-          />
-          {loadingLabel}
-        </>
-      ) : (
-        <>
-          {icon && <span aria-hidden="true">{icon}</span>}
-          {label}
-        </>
-      )}
-    </button>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
+    </svg>
   );
 }
 
-// ─── Agent apply form ─────────────────────────────────────────────────────────
+// ─── SVG icon: lock ───────────────────────────────────────────────────────────
+function IconLock() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="11" width="18" height="11" rx="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  );
+}
+
+// ─── SVG icon: eye / eye-off ──────────────────────────────────────────────────
+function IconEye({ off = false }) {
+  return off ? (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  ) : (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+// ─── Agent apply form ──────────────────────────────────────────────────────────
 function AgentApplyForm({ onBack, onSuccess }) {
   const [form, setForm]             = useState({ name: '', phone: '', email: '' });
   const [submitting, setSubmitting] = useState(false);
@@ -325,10 +335,8 @@ function AgentApplyForm({ onBack, onSuccess }) {
     const name  = form.name.trim();
     const phone = form.phone.trim();
     const email = form.email.trim();
-
     if (!name || !phone || !email) { setError('Please fill in all three fields.'); return; }
     if (!email.includes('@'))      { setError('Please enter a valid email address.'); return; }
-
     setSubmitting(true); setError('');
     try {
       await api.post('/agents/apply', { name, phone, email });
@@ -342,26 +350,17 @@ function AgentApplyForm({ onBack, onSuccess }) {
     } finally { setSubmitting(false); }
   }
 
-  const fields = [
-    { id: 'apply-name',  name: 'name',  type: 'text',  icon: '👤', label: 'Full Name',     placeholder: 'e.g. Sara Tesfaye',     autoComplete: 'name' },
-    { id: 'apply-phone', name: 'phone', type: 'tel',   icon: '📱', label: 'Phone Number',  placeholder: 'e.g. 0912345678',       autoComplete: 'tel'  },
-    { id: 'apply-email', name: 'email', type: 'email', icon: '✉️', label: 'Email Address', placeholder: 'e.g. sara@example.com', autoComplete: 'email' },
-  ];
-
   return (
-    <div className="animate-slide-in-up">
-      {/* Back link */}
+    <div>
       <button
         type="button"
         onClick={onBack}
-        className="inline-flex items-center gap-1.5 text-xs font-semibold
-                   transition-colors duration-150 mb-6 group"
+        className="inline-flex items-center gap-1.5 text-xs font-semibold mb-6 transition-colors"
         style={{ color: C.brown }}
         onMouseEnter={e => { e.currentTarget.style.color = C.gold; }}
         onMouseLeave={e => { e.currentTarget.style.color = C.brown; }}
       >
-        <span className="transition-transform duration-150 group-hover:-translate-x-0.5">←</span>
-        Back to Sign In
+        ← Back to Sign In
       </button>
 
       <div className="mb-6">
@@ -369,62 +368,63 @@ function AgentApplyForm({ onBack, onSuccess }) {
           Agent Application
         </h2>
         <p className="text-sm mt-1.5 leading-relaxed" style={{ color: C.text3 }}>
-          Submit your details to apply as a Nib referral agent.
-          An Admin will review your application.
+          Submit your details to apply as a Nib referral agent. An Admin will review your application.
         </p>
       </div>
 
       <form onSubmit={handleSubmit} noValidate className="space-y-4" aria-label="Agent application form">
-        {fields.map(({ id, name, type, icon, label, placeholder, autoComplete }, i) => (
+        {[
+          { id: 'apply-name',  name: 'name',  type: 'text',  label: 'Full Name',     ph: 'e.g. Sara Tesfaye',     ac: 'name'  },
+          { id: 'apply-phone', name: 'phone', type: 'tel',   label: 'Phone Number',  ph: 'e.g. 0912345678',       ac: 'tel'   },
+          { id: 'apply-email', name: 'email', type: 'email', label: 'Email Address', ph: 'e.g. sara@example.com', ac: 'email' },
+        ].map(({ id, name, type, label, ph, ac }, i) => (
           <div key={id}>
-            <label
-              className="block text-[11px] font-bold uppercase tracking-widest mb-1.5"
-              style={{ color: C.text3 }}
-              htmlFor={id}
-            >
+            <label className="block text-[11px] font-semibold uppercase tracking-widest mb-1.5"
+              style={{ color: C.text3 }} htmlFor={id}>
               {label}
             </label>
-            <div className="relative">
-              <span
-                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm pointer-events-none"
-                aria-hidden="true"
-              >
-                {icon}
-              </span>
-              <input
-                id={id} name={name} type={type}
-                className={inputCls(!!error)}
-                placeholder={placeholder}
-                value={form[name]}
-                onChange={handleChange}
-                autoComplete={autoComplete}
-                autoFocus={i === 0}
-                required
-              />
-            </div>
+            <input
+              id={id} name={name} type={type}
+              className={inputCls(!!error)}
+              style={{ paddingLeft: '1rem' }}
+              placeholder={ph}
+              value={form[name]}
+              onChange={handleChange}
+              autoComplete={ac}
+              autoFocus={i === 0}
+              required
+            />
           </div>
         ))}
 
         {error && <ErrorBanner message={error} />}
 
-        <SubmitButton
-          loading={submitting}
-          label="Submit Application"
-          loadingLabel="Submitting…"
-          icon="📝"
-        />
+        <button
+          type="submit"
+          disabled={submitting}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold text-white transition-all duration-200 disabled:opacity-55 disabled:cursor-not-allowed"
+          style={{ background: C.brown }}
+          onMouseEnter={e => { if (!submitting) e.currentTarget.style.background = C.brownDark; }}
+          onMouseLeave={e => { e.currentTarget.style.background = C.brown; }}
+        >
+          {submitting
+            ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Submitting…</>
+            : 'Submit Application'
+          }
+        </button>
       </form>
     </div>
   );
 }
 
-// ─── Login (default export) ───────────────────────────────────────────────────
+// ─── Main Login component ──────────────────────────────────────────────────────
 export default function Login() {
   const { login } = useAuth();
 
   const [form, setForm]                 = useState({ username: '', password: '' });
   const [error, setError]               = useState('');
   const [submitting, setSubmitting]     = useState(false);
+  const [showPw, setShowPw]             = useState(false);
   const [view, setView]                 = useState('login');   // 'login' | 'apply'
   const [applySuccess, setApplySuccess] = useState('');
 
@@ -453,188 +453,176 @@ export default function Login() {
 
   function handleApplySuccess() {
     setView('login');
-    setApplySuccess(
-      'Application submitted! An Admin will review and send your login credentials.'
-    );
+    setApplySuccess('Application submitted! An Admin will review and send your login credentials.');
     setTimeout(() => setApplySuccess(''), 9000);
   }
 
   return (
     <div className="min-h-screen flex" style={{ background: C.pageBg }}>
 
-      {/* ── LEFT — Branding panel (desktop only) ── */}
+      {/* ── LEFT panel (desktop only) ── */}
       <BrandPanel />
 
-      {/* ── RIGHT — Form panel ── */}
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-10 sm:px-10">
-
-        {/* Mobile brand mark — shown when left panel is hidden */}
-        <div className="lg:hidden mb-8 flex items-center gap-3 w-full max-w-[420px]">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: `linear-gradient(135deg, ${C.brown} 0%, ${C.brownMuted} 100%)` }}
-          >
-            <span className="text-[10px] font-black tracking-wider" style={{ color: C.gold }}>
-              NIB
-            </span>
-          </div>
-          <div>
-            <p className="font-bold text-sm leading-none" style={{ color: C.text1 }}>
-              Nib International Bank
-            </p>
-            <p className="text-xs mt-0.5" style={{ color: C.text3 }}>
-              Referral Management System
-            </p>
-          </div>
+      {/* ── RIGHT panel — form ── */}
+      <div
+        className="flex-1 flex flex-col items-center justify-center px-6 py-10 sm:px-10 relative overflow-hidden"
+        style={{ background: C.pageBg }}
+      >
+        {/* Faint honeycomb on right panel too (subtle, mobile-visible) */}
+        <div className="lg:hidden absolute inset-0 pointer-events-none opacity-30">
+          <HoneycombBg />
         </div>
 
-        {/* ── Form card ── */}
-        <div className="w-full max-w-[420px]">
-
-          {/* Gold accent bar */}
-          <div
-            className="h-[3px] w-12 rounded-full mb-8"
-            style={{ background: `linear-gradient(90deg, ${C.gold}, ${C.brown})` }}
-          />
-
-          {view === 'apply' ? (
-            <AgentApplyForm
-              onBack={() => setView('login')}
-              onSuccess={handleApplySuccess}
+        {/* ── Mobile compact header (hidden on lg+) ── */}
+        <div className="lg:hidden relative z-10 w-full max-w-[400px] mb-6">
+          {/* Logo + bank name */}
+          <div className="flex items-center gap-3 mb-5">
+            <img
+              src="/nib-logo.png"
+              alt="NIB Logo"
+              className="w-11 h-11 rounded-full object-cover shadow-sm flex-shrink-0"
             />
+            <div className="w-px h-9" style={{ background: `${C.gold}60` }} />
+            <div>
+              <p className="font-bold text-sm leading-tight" style={{ color: C.text1 }}>Nib International</p>
+              <p className="font-bold text-sm leading-tight" style={{ color: C.text1 }}>Bank</p>
+            </div>
+          </div>
+          {/* Mobile headline */}
+          <p className="font-bold text-2xl leading-snug" style={{ color: C.text1 }}>Welcome to the</p>
+          <p className="font-bold text-2xl leading-snug" style={{ color: C.gold }}>NIB Referral Portal</p>
+          <p className="mt-2 text-sm" style={{ color: C.text2 }}>Connect. Refer. Grow.</p>
+          <div className="mt-2 h-[2px] rounded-full w-12" style={{ background: C.gold }} />
+        </div>
+
+        {/* ── Auth form card ── */}
+        <div className="relative z-10 w-full max-w-[400px]">
+          {view === 'apply' ? (
+            <AgentApplyForm onBack={() => setView('login')} onSuccess={handleApplySuccess} />
           ) : (
-            <div className="animate-fade-in">
+            <div>
               {/* Heading */}
-              <div className="mb-8">
-                <h1
-                  className="font-extrabold text-2xl tracking-tight leading-tight"
-                  style={{ color: C.text1 }}
-                >
-                  Welcome back
+              <div className="mb-7">
+                <h1 className="font-bold text-2xl tracking-tight" style={{ color: C.text1 }}>
+                  Welcome Back
                 </h1>
-                <p className="text-sm mt-1.5" style={{ color: C.text3 }}>
-                  Sign in to your secure staff portal.
+                <p className="text-sm mt-1" style={{ color: C.text3 }}>
+                  Sign in to continue
                 </p>
               </div>
 
-              {/* Success banner from agent apply */}
-              {applySuccess && (
-                <div className="mb-5">
-                  <SuccessBanner message={applySuccess} />
-                </div>
-              )}
+              {applySuccess && <div className="mb-5"><SuccessBanner message={applySuccess} /></div>}
 
-              {/* Login form */}
               <form
                 id="login-form"
                 onSubmit={handleSubmit}
                 noValidate
-                className="space-y-5"
+                className="space-y-4"
                 aria-label="Login form"
               >
-                {/* Username field */}
-                <div>
-                  <label
-                    className="block text-[11px] font-bold uppercase tracking-widest mb-1.5"
+                {/* Email / Staff ID */}
+                <div className="relative">
+                  <span
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none flex items-center"
                     style={{ color: C.text3 }}
-                    htmlFor="login-username"
                   >
-                    Username
-                  </label>
-                  <div className="relative">
-                    <span
-                      className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm pointer-events-none"
-                      aria-hidden="true"
-                    >
-                      👤
-                    </span>
-                    <input
-                      id="login-username"
-                      name="username"
-                      type="text"
-                      className={inputCls(!!error)}
-                      placeholder="Enter your username"
-                      value={form.username}
-                      onChange={handleChange}
-                      autoComplete="username"
-                      autoFocus
-                      required
-                    />
-                  </div>
+                    <IconUser />
+                  </span>
+                  <input
+                    id="login-username"
+                    name="username"
+                    type="text"
+                    className={inputCls(!!error)}
+                    placeholder="Email address or Staff ID"
+                    value={form.username}
+                    onChange={handleChange}
+                    autoComplete="username"
+                    autoFocus
+                    required
+                  />
                 </div>
 
-                {/* Password field */}
-                <div>
-                  <label
-                    className="block text-[11px] font-bold uppercase tracking-widest mb-1.5"
+                {/* Password */}
+                <div className="relative">
+                  <span
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none flex items-center"
                     style={{ color: C.text3 }}
-                    htmlFor="login-password"
                   >
-                    Password
-                  </label>
-                  <div className="relative">
-                    <span
-                      className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm pointer-events-none"
-                      aria-hidden="true"
-                    >
-                      🔒
-                    </span>
-                    <input
-                      id="login-password"
-                      name="password"
-                      type="password"
-                      className={inputCls(!!error)}
-                      placeholder="Enter your password"
-                      value={form.password}
-                      onChange={handleChange}
-                      autoComplete="current-password"
-                      required
-                    />
-                  </div>
-                </div>
-
-                {/* Error banner */}
-                {error && <ErrorBanner message={error} />}
-
-                {/* Submit */}
-                <SubmitButton
-                  loading={submitting}
-                  label="Sign In to Dashboard"
-                  loadingLabel="Signing in…"
-                  icon="🔐"
-                />
-              </form>
-
-              {/* Agent apply CTA */}
-              <div
-                className="mt-7 pt-6 text-center"
-                style={{ borderTop: `1px solid ${C.border}` }}
-              >
-                <p className="text-xs" style={{ color: C.text3 }}>
-                  Not a staff member?{' '}
+                    <IconLock />
+                  </span>
+                  <input
+                    id="login-password"
+                    name="password"
+                    type={showPw ? 'text' : 'password'}
+                    className={inputCls(!!error)}
+                    style={{ paddingRight: '2.75rem' }}
+                    placeholder="Password"
+                    value={form.password}
+                    onChange={handleChange}
+                    autoComplete="current-password"
+                    required
+                  />
+                  {/* Eye toggle */}
                   <button
                     type="button"
-                    className="font-bold underline-offset-2 hover:underline transition-colors duration-150"
-                    style={{ color: C.brown }}
-                    onMouseEnter={e => { e.currentTarget.style.color = C.gold; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = C.brown; }}
-                    onClick={() => { setError(''); setApplySuccess(''); setView('apply'); }}
+                    onClick={() => setShowPw(v => !v)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 flex items-center transition-opacity hover:opacity-70"
+                    style={{ color: C.text3 }}
+                    aria-label={showPw ? 'Hide password' : 'Show password'}
                   >
-                    Apply to become an agent →
+                    <IconEye off={showPw} />
                   </button>
-                </p>
+                </div>
+
+                {error && <ErrorBanner message={error} />}
+
+                {/* Sign in button */}
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold text-white transition-all duration-200 disabled:opacity-55 disabled:cursor-not-allowed"
+                  style={{ background: C.brown }}
+                  onMouseEnter={e => { if (!submitting) e.currentTarget.style.background = C.brownDark; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = C.brown; }}
+                  aria-busy={submitting}
+                >
+                  {submitting ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Signing in…
+                    </>
+                  ) : (
+                    'Sign in →'
+                  )}
+                </button>
+              </form>
+
+              {/* Footer — divider + NIB symbol + secure text */}
+              <div className="mt-8">
+                <div className="h-px w-full" style={{ background: C.border }} />
+                <div className="mt-5 flex flex-col items-center gap-2">
+                  <NibSymbol size={26} />
+                  <p className="text-[11px] text-center" style={{ color: C.text3 }}>
+                    Secure access for authorized users
+                  </p>
+                </div>
+              </div>
+
+              {/* Apply to become an agent — subtle bottom link */}
+              <div className="mt-5 text-center">
+                <button
+                  type="button"
+                  className="text-xs transition-colors duration-150"
+                  style={{ color: C.text3 }}
+                  onMouseEnter={e => { e.currentTarget.style.color = C.brown; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = C.text3; }}
+                  onClick={() => { setError(''); setApplySuccess(''); setView('apply'); }}
+                >
+                  Apply to become an agent →
+                </button>
               </div>
             </div>
           )}
-
-          {/* Security badge */}
-          <p
-            className="mt-10 text-center text-[10px] leading-relaxed"
-            style={{ color: C.text3 }}
-          >
-            🔐 Secured with HttpOnly JWT · Sessions are monitored
-            <br />Internal use only · Nib International Bank
-          </p>
         </div>
       </div>
     </div>
