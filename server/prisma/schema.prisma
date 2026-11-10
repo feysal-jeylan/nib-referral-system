@@ -85,12 +85,16 @@ model Campaign {
 }
 
 // ─── campaign_rules ──────────────────────────────────────────────────────────
+// DB-level CHECK constraint: campaign_rules_operator_check
+//   operator IN ('GREATER_THAN','LESS_THAN','EQUALS','GREATER_THAN_OR_EQUAL',
+//                'LESS_THAN_OR_EQUAL','NOT_EQUALS','N/A')
+// 'N/A' is the sentinel stored for COMPOSITE rules (operator is not applicable).
 model CampaignRule {
   id          Int    @id @default(autoincrement())
   campaign_id Int
-  rule_type   String @db.VarChar(50)
+  rule_type   String @db.VarChar(50) // 'MIN_DEPOSIT' | 'ACCOUNT_TYPE' | 'COMPOSITE'
   rule_value  Json   @db.JsonB
-  operator    String @default("EQUALS") @db.VarChar(30)
+  operator    String @default("EQUALS") @db.VarChar(30) // 'N/A' for COMPOSITE rules
 
   campaign Campaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
 
