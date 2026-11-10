@@ -19,10 +19,10 @@ async function createCampaign(req, res, next) {
 
     // Required-field validation
     const missing = [];
-    if (!name)         missing.push('name');
-    if (!start_date)   missing.push('start_date');
-    if (!end_date)     missing.push('end_date');
-    if (!reward_type)  missing.push('reward_type');
+    if (!name) missing.push('name');
+    if (!start_date) missing.push('start_date');
+    if (!end_date) missing.push('end_date');
+    if (!reward_type) missing.push('reward_type');
     if (!reward_value) missing.push('reward_value');
     if (missing.length > 0) {
       return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}.`, code: 'MISSING_FIELDS' });
@@ -30,10 +30,10 @@ async function createCampaign(req, res, next) {
 
     // Date validation
     const start = new Date(start_date);
-    const end   = new Date(end_date);
+    const end = new Date(end_date);
     if (isNaN(start.getTime())) return res.status(400).json({ error: 'Invalid start_date. Use ISO 8601 format.', code: 'INVALID_START_DATE' });
-    if (isNaN(end.getTime()))   return res.status(400).json({ error: 'Invalid end_date. Use ISO 8601 format.',   code: 'INVALID_END_DATE' });
-    if (end <= start)           return res.status(400).json({ error: 'end_date must be after start_date.',       code: 'INVALID_DATE_RANGE' });
+    if (isNaN(end.getTime())) return res.status(400).json({ error: 'Invalid end_date. Use ISO 8601 format.', code: 'INVALID_END_DATE' });
+    if (end <= start) return res.status(400).json({ error: 'end_date must be after start_date.', code: 'INVALID_DATE_RANGE' });
 
     // Threshold validation
     const threshold = reward_threshold != null ? parseInt(reward_threshold, 10) : null;
@@ -58,10 +58,18 @@ async function addRule(req, res, next) {
     if (!svc.VALID_RULE_TYPES.includes(rule_type)) {
       return res.status(400).json({ error: `Invalid rule_type "${rule_type}". Valid values: ${svc.VALID_RULE_TYPES.join(', ')}.`, code: 'INVALID_RULE_TYPE' });
     }
-    if (!operator) return res.status(400).json({ error: 'Missing required field: operator.', code: 'MISSING_FIELDS' });
-    if (!svc.VALID_OPERATORS.includes(operator)) {
+
+    // operator is required only for simple rule types (not COMPOSITE, which
+    // encodes its own logic inside rule_value.conditions).
+    const needsOperator = svc.OPERATOR_REQUIRED_TYPES.has(rule_type);
+    if (needsOperator && !operator) {
+      return res.status(400).json({ error: 'Missing required field: operator.', code: 'MISSING_FIELDS' });
+    }
+    if (needsOperator && !svc.VALID_OPERATORS.includes(operator)) {
       return res.status(400).json({ error: `Invalid operator "${operator}". Valid values: ${svc.VALID_OPERATORS.join(', ')}.`, code: 'INVALID_OPERATOR' });
     }
+
+    // rule_value must always be a plain JSON object (never null, never an array).
     if (rule_value === undefined || rule_value === null) {
       return res.status(400).json({ error: 'Missing required field: rule_value.', code: 'MISSING_FIELDS' });
     }
@@ -69,10 +77,28 @@ async function addRule(req, res, next) {
       return res.status(400).json({ error: 'rule_value must be a JSON object.', code: 'INVALID_RULE_VALUE' });
     }
 
+    // Extra validation for COMPOSITE: rule_value must have logical_operator and conditions.
+    if (rule_type === 'COMPOSITE') {
+      const lo = rule_value.logical_operator;
+      if (lo !== 'AND' && lo !== 'OR') {
+        return res.status(400).json({
+          error: 'COMPOSITE rule_value must include logical_operator ("AND" or "OR").',
+          code: 'INVALID_RULE_VALUE',
+        });
+      }
+      if (!Array.isArray(rule_value.conditions) || rule_value.conditions.length === 0) {
+        return res.status(400).json({
+          error: 'COMPOSITE rule_value must include a non-empty conditions array.',
+          code: 'INVALID_RULE_VALUE',
+        });
+      }
+    }
+
     const campaign = await svc.findCampaignById(campaignId);
     if (!campaign) return res.status(404).json({ error: `Campaign with id ${campaignId} not found.`, code: 'CAMPAIGN_NOT_FOUND' });
 
-    const rule = await svc.addRule(campaignId, { rule_type, operator, rule_value });
+    // For COMPOSITE rules, operator is not meaningful — store sentinel 'N/A'.
+    const rule = await svc.addRule(campaignId, { rule_type, operator: needsOperator ? operator : 'N/A', rule_value });
     return res.status(201).json({ rule });
   } catch (err) { next(err); }
 }
@@ -81,7 +107,7 @@ async function addRule(req, res, next) {
 async function deleteRule(req, res, next) {
   try {
     const campaignId = parseInt(req.params.id, 10);
-    const ruleId     = parseInt(req.params.ruleId, 10);
+    const ruleId = parseInt(req.params.ruleId, 10);
     if (isNaN(campaignId) || isNaN(ruleId)) {
       return res.status(400).json({ error: 'Campaign ID and Rule ID must be valid integers.', code: 'INVALID_ID' });
     }
@@ -104,7 +130,7 @@ async function activateCampaign(req, res, next) {
     if (existing.status !== 'DRAFT') {
       return res.status(400).json({
         error: `Campaign "${existing.name}" is already '${existing.status}'. Only 'DRAFT' campaigns can be activated.`,
-        code:  'INVALID_STATUS_TRANSITION',
+        code: 'INVALID_STATUS_TRANSITION',
       });
     }
 
@@ -123,21 +149,21 @@ async function updateCampaign(req, res, next) {
     if (!curr) return res.status(404).json({ error: `Campaign with id ${campaignId} not found.`, code: 'CAMPAIGN_NOT_FOUND' });
 
     const {
-      name         = curr.name,
-      start_date   = curr.start_date,
-      end_date     = curr.end_date,
+      name = curr.name,
+      start_date = curr.start_date,
+      end_date = curr.end_date,
       reward_value = curr.reward_value,
-      description  = curr.description,
+      description = curr.description,
       reward_threshold,
       campaign_code: rawUpdateCode,
     } = req.body;
 
     const start = new Date(start_date);
-    const end   = new Date(end_date);
+    const end = new Date(end_date);
     if (isNaN(start.getTime())) return res.status(400).json({ error: 'Invalid start_date.', code: 'INVALID_START_DATE' });
-    if (isNaN(end.getTime()))   return res.status(400).json({ error: 'Invalid end_date.',   code: 'INVALID_END_DATE' });
-    if (end <= start)           return res.status(400).json({ error: 'end_date must be after start_date.', code: 'INVALID_DATE_RANGE' });
-    if (!String(name).trim())         return res.status(400).json({ error: 'name cannot be empty.',         code: 'MISSING_FIELDS' });
+    if (isNaN(end.getTime())) return res.status(400).json({ error: 'Invalid end_date.', code: 'INVALID_END_DATE' });
+    if (end <= start) return res.status(400).json({ error: 'end_date must be after start_date.', code: 'INVALID_DATE_RANGE' });
+    if (!String(name).trim()) return res.status(400).json({ error: 'name cannot be empty.', code: 'MISSING_FIELDS' });
     if (!String(reward_value).trim()) return res.status(400).json({ error: 'reward_value cannot be empty.', code: 'MISSING_FIELDS' });
 
     const threshold = reward_threshold !== undefined
@@ -148,13 +174,13 @@ async function updateCampaign(req, res, next) {
     }
 
     const campaign = await svc.updateCampaign(campaignId, {
-      name:             String(name).trim(),
-      start_date:       start,
-      end_date:         end,
-      reward_value:     String(reward_value).trim(),
-      description:      description ?? null,
+      name: String(name).trim(),
+      start_date: start,
+      end_date: end,
+      reward_value: String(reward_value).trim(),
+      description: description ?? null,
       reward_threshold: threshold,
-      campaign_code:    rawUpdateCode !== undefined
+      campaign_code: rawUpdateCode !== undefined
         ? (rawUpdateCode ? rawUpdateCode.trim().toUpperCase() : null)
         : curr.campaign_code,
     });
@@ -179,7 +205,7 @@ async function deleteCampaign(req, res, next) {
     if (referralCount > 0) {
       return res.status(409).json({
         error: `Cannot delete campaign "${campaign.name}" — it has ${referralCount} referral(s) linked to it.`,
-        code:  'CAMPAIGN_HAS_REFERRALS',
+        code: 'CAMPAIGN_HAS_REFERRALS',
       });
     }
 
@@ -195,7 +221,7 @@ async function deleteCampaign(req, res, next) {
 // ── GET /api/campaigns ────────────────────────────────────────────────────────
 async function listCampaigns(req, res, next) {
   try {
-    const page  = Math.max(1, parseInt(req.query.page,  10) || 1);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
 
     const [total, rows] = await svc.listCampaigns(page, limit);

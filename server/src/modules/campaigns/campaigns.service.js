@@ -12,7 +12,11 @@
 const prisma = require('@/config/db');
 
 const VALID_OPERATORS  = ['GREATER_THAN','LESS_THAN','EQUALS','GREATER_THAN_OR_EQUAL','LESS_THAN_OR_EQUAL','NOT_EQUALS'];
-const VALID_RULE_TYPES = ['MIN_DEPOSIT', 'ACCOUNT_TYPE'];
+// COMPOSITE rules do not use operator/rule_value_raw at the top level;
+// their logic lives entirely inside the rule_value JSONB object.
+const VALID_RULE_TYPES = ['MIN_DEPOSIT', 'ACCOUNT_TYPE', 'COMPOSITE'];
+// Rule types that require a top-level operator field (simple rules only).
+const OPERATOR_REQUIRED_TYPES = new Set(['MIN_DEPOSIT', 'ACCOUNT_TYPE']);
 
 // ── Create campaign ───────────────────────────────────────────────────────────
 async function createCampaign({ name, campaign_code, description, start_date, end_date, reward_type, reward_value, reward_threshold }) {
@@ -104,6 +108,7 @@ async function countReferrals(campaignId) {
 module.exports = {
   VALID_OPERATORS,
   VALID_RULE_TYPES,
+  OPERATOR_REQUIRED_TYPES,
   createCampaign,
   findCampaignById,
   addRule,
