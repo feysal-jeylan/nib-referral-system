@@ -32,13 +32,15 @@ export default function App() {
         role="status"
         aria-label="Checking authentication…"
       >
-        {/* NIB monogram spinner */}
-        <div className="relative w-14 h-14">
+        {/* NIB logo spinner */}
+        <div className="relative w-20 h-20">
           <div className="absolute inset-0 rounded-full border-2 border-border border-t-brand animate-spin" />
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-9 h-9 rounded-lg bg-brand flex items-center justify-center">
-              <span className="text-white font-black text-base select-none">N</span>
-            </div>
+            <img
+              src="/nib-logo.png"
+              alt="NIB"
+              className="w-16 h-16 rounded-full object-cover"
+            />
           </div>
         </div>
         <p className="text-text-3 text-sm font-medium">Verifying session…</p>
