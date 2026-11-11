@@ -14,12 +14,14 @@
 import { useRef, useState } from 'react';
 import api from '@/services/api';
 import Spinner from '@/components/ui/Spinner';
+import { Input }  from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 
-// Shared input class
+// Shared input override — merges on top of shadcn base styles
 const INPUT_CLS =
-  'w-full px-4 py-2.5 bg-bg border border-border rounded-md text-sm text-text-1 ' +
-  'placeholder-text-3 outline-none transition-all duration-150 ' +
-  'focus:border-gold focus:ring-1 focus:ring-gold focus:bg-surface';
+  'h-auto w-full px-4 py-2.5 bg-bg border-border rounded-md text-sm text-text-1 ' +
+  'placeholder:text-text-3 shadow-none transition-all duration-150 ' +
+  'focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-surface';
 
 export default function AgentForm({ onCreated, onToast }) {
   const [form, setForm]             = useState({ name: '', phone: '', email: '' });
@@ -84,7 +86,7 @@ export default function AgentForm({ onCreated, onToast }) {
           >
             Full Name
           </label>
-          <input
+          <Input
             id="agent-name" name="name" type="text"
             placeholder="e.g. Abebe Kebede"
             value={form.name} onChange={handleChange}
@@ -101,7 +103,7 @@ export default function AgentForm({ onCreated, onToast }) {
           >
             Phone Number
           </label>
-          <input
+          <Input
             id="agent-phone" name="phone" type="tel"
             placeholder="e.g. 0911234567"
             value={form.phone} onChange={handleChange}
@@ -118,7 +120,7 @@ export default function AgentForm({ onCreated, onToast }) {
           >
             Email Address
           </label>
-          <input
+          <Input
             id="agent-email" name="email" type="email"
             placeholder="e.g. abebe@nib.com"
             value={form.email} onChange={handleChange}
@@ -128,15 +130,15 @@ export default function AgentForm({ onCreated, onToast }) {
         </div>
       </div>
 
-      <button
+      <Button
         id="submit-agent-btn"
         type="submit"
         disabled={submitting}
-        className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-semibold px-5 py-2.5 rounded-md transition-colors shadow-sm disabled:opacity-55 disabled:cursor-not-allowed"
+        className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-semibold px-5 py-2.5 h-auto rounded-md transition-colors shadow-sm disabled:opacity-55 disabled:cursor-not-allowed"
       >
         {submitting && <Spinner small />}
         {submitting ? 'Registering…' : 'Register Agent'}
-      </button>
+      </Button>
     </form>
   );
 }

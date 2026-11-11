@@ -16,6 +16,8 @@
 import { useRef, useState } from 'react';
 import api from '@/services/api';
 import Spinner from '@/components/ui/Spinner';
+import { Input }  from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { RULE_TYPES, OPERATORS, OPERATOR_SYMBOL, COMPOSITE_FIELDS, NUMERIC_CONDITION_FIELDS } from './constants';
 
 const EMPTY_CAMPAIGN = {
@@ -30,11 +32,11 @@ const EMPTY_RULE = {
 };
 const EMPTY_CONDITION = { field: 'deposit_amount', operator: 'GREATER_THAN', value_raw: '' };
 
-// Shared input / select class
+// Shared input / select class (shadcn Input override)
 const INPUT_CLS =
-  'w-full px-4 py-2.5 bg-bg border border-border rounded-md text-sm text-text-1 ' +
-  'placeholder-text-3 outline-none transition-all duration-150 ' +
-  'focus:border-gold focus:ring-1 focus:ring-gold focus:bg-surface';
+  'h-auto w-full px-4 py-2.5 bg-bg border-border rounded-md text-sm text-text-1 ' +
+  'placeholder:text-text-3 shadow-none transition-all duration-150 ' +
+  'focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-surface';
 
 const LABEL_CLS = 'block text-[11px] font-semibold text-text-3 uppercase tracking-wide mb-1.5';
 
@@ -242,7 +244,7 @@ export default function CampaignForm({ onCreated, onToast }) {
         {/* Campaign Name */}
         <div>
           <label htmlFor="camp-name" className={LABEL_CLS}>Campaign Name</label>
-          <input
+          <Input
             id="camp-name" name="name" type="text"
             placeholder="e.g. Q4 Savings Drive"
             value={form.name} onChange={handleCampaignChange}
@@ -256,7 +258,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             Campaign Code{' '}
             <span className="normal-case font-normal text-text-3">(Temenos ID)</span>
           </label>
-          <input
+          <Input
             id="camp-code" name="campaign_code" type="text"
             placeholder="e.g. SAV-2026-OCT"
             value={form.campaign_code} onChange={handleCampaignChange}
@@ -270,7 +272,7 @@ export default function CampaignForm({ onCreated, onToast }) {
         {/* Start Date */}
         <div>
           <label htmlFor="camp-start" className={LABEL_CLS}>Start Date</label>
-          <input
+          <Input
             id="camp-start" name="start_date" type="date"
             value={form.start_date} onChange={handleCampaignChange}
             required className={INPUT_CLS}
@@ -279,7 +281,7 @@ export default function CampaignForm({ onCreated, onToast }) {
         {/* End Date */}
         <div>
           <label htmlFor="camp-end" className={LABEL_CLS}>End Date</label>
-          <input
+          <Input
             id="camp-end" name="end_date" type="date"
             value={form.end_date} onChange={handleCampaignChange}
             required className={INPUT_CLS}
@@ -300,7 +302,7 @@ export default function CampaignForm({ onCreated, onToast }) {
         {/* Reward Value */}
         <div>
           <label htmlFor="camp-reward-value" className={LABEL_CLS}>Reward Value</label>
-          <input
+          <Input
             id="camp-reward-value" name="reward_value" type="text"
             placeholder="e.g. 500 ETB"
             value={form.reward_value} onChange={handleCampaignChange}
@@ -313,7 +315,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             Reward Threshold{' '}
             <span className="normal-case font-normal text-text-3">(optional)</span>
           </label>
-          <input
+          <Input
             id="camp-threshold" name="reward_threshold" type="number"
             placeholder="e.g. 5 referrals"
             value={form.reward_threshold} onChange={handleCampaignChange}
@@ -326,7 +328,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             Description{' '}
             <span className="normal-case font-normal text-text-3">(optional)</span>
           </label>
-          <input
+          <Input
             id="camp-desc" name="description" type="text"
             placeholder="e.g. Year-end savings promotion for SAVINGS accounts"
             value={form.description} onChange={handleCampaignChange}
@@ -378,7 +380,7 @@ export default function CampaignForm({ onCreated, onToast }) {
 
               <div>
                 <label htmlFor="rule-value" className={LABEL_CLS}>Value</label>
-                <input
+                <Input
                   id="rule-value" name="rule_value_raw" type="text"
                   placeholder={rulePlaceholder}
                   value={currentRule.rule_value_raw}
@@ -450,7 +452,7 @@ export default function CampaignForm({ onCreated, onToast }) {
                   </div>
                   <div>
                     <label className={LABEL_CLS}>Value</label>
-                    <input
+                    <Input
                       type="text"
                       value={cond.value_raw}
                       onChange={e => handleConditionChange(idx, 'value_raw', e.target.value)}
@@ -525,15 +527,15 @@ export default function CampaignForm({ onCreated, onToast }) {
         )}
       </div>
 
-      <button
+      <Button
         id="submit-campaign-btn"
         type="submit"
         disabled={submitting}
-        className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-semibold px-5 py-2.5 rounded-md transition-colors shadow-sm disabled:opacity-55 disabled:cursor-not-allowed"
+        className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-semibold px-5 py-2.5 h-auto rounded-md transition-colors shadow-sm disabled:opacity-55 disabled:cursor-not-allowed"
       >
         {submitting && <Spinner small />}
         {submitting ? 'Creating…' : 'Create Campaign'}
-      </button>
+      </Button>
     </form>
   );
 }

@@ -23,97 +23,61 @@ import Spinner from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
 import { CampaignStatusPill } from '@/components/ui/Badge';
 import { OPERATOR_SYMBOL } from './constants';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+  DialogDescription, DialogFooter,
+} from '@/components/ui/dialog';
 
 // ── Shared input class for the inline edit form ───────────────────────────────
 const EDIT_INPUT_CLS =
   'w-full px-3 py-2 bg-bg border border-border rounded text-sm text-text-1 ' +
   'placeholder-text-3 outline-none transition-all focus:border-gold focus:ring-1 focus:ring-gold focus:bg-surface';
 
-// ─── Delete confirmation modal ────────────────────────────────────────────────
+// ─── Delete confirmation — shadcn Dialog ──────────────────────────────────────
 /**
- * DeleteModal
- * A professional, accessible confirmation dialog — replaces window.confirm().
- *
- * Props:
- *   campaignName {string}
- *   onConfirm    {() => void}
- *   onCancel     {() => void}
- *   loading      {boolean}
+ * DeleteDialog
+ * Wraps the radix-ui Dialog primitive from shadcn/ui.
+ * open/onOpenChange are controlled externally via deleteTarget state.
  */
-function DeleteModal({ campaignName, onConfirm, onCancel, loading }) {
+function DeleteDialog({ campaignName, open, onConfirm, onCancel, loading }) {
   return (
-    /* Fixed overlay */
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(28, 15, 5, 0.52)', backdropFilter: 'blur(3px)' }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="delete-modal-title"
-      aria-describedby="delete-modal-desc"
-      /* Click outside = cancel */
-      onClick={e => { if (e.target === e.currentTarget && !loading) onCancel(); }}
-    >
-      {/* Modal card */}
-      <div
-        className="bg-surface w-full max-w-sm rounded-xl shadow-2xl border border-border-color p-7 flex flex-col gap-5"
-        style={{ boxShadow: '0 20px 60px rgba(28,15,5,0.22)' }}
-      >
-        {/* Icon */}
-        <div className="flex items-center justify-center w-12 h-12 rounded-full bg-reject-bg mx-auto">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-            className="text-reject-txt" aria-hidden="true">
-            <polyline points="3 6 5 6 21 6" />
-            <path d="M19 6l-1 14H6L5 6" />
-            <path d="M10 11v6M14 11v6" />
-            <path d="M9 6V4h6v2" />
-          </svg>
-        </div>
-
-        {/* Text */}
-        <div className="text-center">
-          <h2
-            id="delete-modal-title"
-            className="text-text-1 font-bold text-base mb-2"
-          >
-            Delete Campaign?
-          </h2>
-          <p id="delete-modal-desc" className="text-text-2 text-sm leading-relaxed">
+    <Dialog open={open} onOpenChange={isOpen => { if (!isOpen && !loading) onCancel(); }}>
+      <DialogContent showCloseButton={!loading} className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="text-[#3E2723]">Delete Campaign?</DialogTitle>
+          <DialogDescription>
             Are you sure you want to delete{' '}
-            <span className="font-semibold text-text-1">"{campaignName}"</span>?
-            <br />
+            <span className="font-semibold text-[#3E2723]">"{campaignName}"</span>?{' '}
             This action cannot be undone.
-          </p>
-        </div>
+          </DialogDescription>
+        </DialogHeader>
 
-        {/* Actions */}
-        <div className="flex gap-3">
-          <button
-            type="button"
+        <DialogFooter>
+          {/* Cancel — outline variant */}
+          <Button
+            variant="outline"
             disabled={loading}
             onClick={onCancel}
-            className="flex-1 px-4 py-2.5 text-sm font-semibold rounded-lg border border-border-color text-text-2
-                       hover:bg-panel hover:text-text-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
-          </button>
-          <button
-            type="button"
+          </Button>
+
+          {/* Delete — destructive variant overridden with our brand red */}
+          <Button
+            variant="destructive"
             disabled={loading}
             onClick={onConfirm}
-            className="flex-1 px-4 py-2.5 text-sm font-semibold rounded-lg text-white
-                       bg-reject-txt hover:bg-[#a83228] transition-colors
-                       disabled:opacity-50 disabled:cursor-not-allowed
-                       flex items-center justify-center gap-2"
+            className="bg-reject-txt text-white hover:bg-[#a83228] focus-visible:ring-reject-txt/40"
           >
             {loading && (
-              <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin mr-1" />
             )}
             {loading ? 'Deleting…' : 'Delete'}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -236,15 +200,14 @@ export default function CampaignTable({
 
   return (
     <>
-      {/* Delete confirmation modal — rendered at z-50 above everything */}
-      {deleteTarget && (
-        <DeleteModal
-          campaignName={deleteTarget.name}
-          onConfirm={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          loading={isDeleting}
-        />
-      )}
+      {/* Delete confirmation dialog — controlled by deleteTarget state */}
+      <DeleteDialog
+        open={!!deleteTarget}
+        campaignName={deleteTarget?.name ?? ''}
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+        loading={isDeleting}
+      />
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse" aria-label="Campaign list">

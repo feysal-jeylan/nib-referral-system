@@ -15,6 +15,8 @@
 import { useState } from 'react';
 import { useAuth } from './AuthContext';
 import api from '@/services/api';
+import { Input }  from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 
 // ─── Brand tokens ──────────────────────────────────────────────────────────────
 const C = {
@@ -528,7 +530,7 @@ export default function Login() {
                   >
                     <IconUser />
                   </span>
-                  <input
+                  <Input
                     id="login-username"
                     name="username"
                     type="text"
@@ -550,7 +552,7 @@ export default function Login() {
                   >
                     <IconLock />
                   </span>
-                  <input
+                  <Input
                     id="login-password"
                     name="password"
                     type={showPw ? 'text' : 'password'}
@@ -577,10 +579,10 @@ export default function Login() {
                 {error && <ErrorBanner message={error} />}
 
                 {/* Sign in button */}
-                <button
+                <Button
                   type="submit"
                   disabled={submitting}
-                  className="w-full flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold text-white transition-all duration-200 disabled:opacity-55 disabled:cursor-not-allowed"
+                  className="w-full flex items-center justify-center gap-2 py-3 h-auto rounded-lg text-sm font-bold text-white transition-all duration-200 disabled:opacity-55 disabled:cursor-not-allowed"
                   style={{ background: C.brown }}
                   onMouseEnter={e => { if (!submitting) e.currentTarget.style.background = C.brownDark; }}
                   onMouseLeave={e => { e.currentTarget.style.background = C.brown; }}
@@ -594,7 +596,7 @@ export default function Login() {
                   ) : (
                     'Sign in →'
                   )}
-                </button>
+                </Button>
               </form>
 
               {/* Footer — divider + NIB symbol + secure text */}
