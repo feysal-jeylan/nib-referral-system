@@ -27,9 +27,9 @@
 // ── MUST be first — registers '@/' → './src' alias ────────────────────────────
 require('module-alias/register');
 
-const express      = require('express');
-const helmet       = require('helmet');
-const cors         = require('cors');
+const express = require('express');
+const helmet = require('helmet');
+const cors = require('cors');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
@@ -37,13 +37,13 @@ require('dotenv').config();
 const prisma = require('@/config/db');
 
 // ── Route Imports (all via @/ alias) ─────────────────────────────────────────
-const authRouter        = require('@/modules/auth/auth.routes');
-const agentsRouter      = require('@/modules/agents/agents.routes');
-const referralsRouter   = require('@/modules/referrals/referrals.routes');
-const campaignsRouter   = require('@/modules/campaigns/campaigns.routes');
+const authRouter = require('@/modules/auth/auth.routes');
+const agentsRouter = require('@/modules/agents/agents.routes');
+const referralsRouter = require('@/modules/referrals/referrals.routes');
+const campaignsRouter = require('@/modules/campaigns/campaigns.routes');
 const integrationRouter = require('@/modules/integration/integration.routes');
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Security Middleware ───────────────────────────────────────────────────────
@@ -52,9 +52,9 @@ app.use(helmet());
 // credentials:true + explicit origin required for HttpOnly cookie cross-port flow
 // (Vite :5173 → API :3000)
 app.use(cors({
-  origin:         'http://localhost:5173',
-  credentials:    true,
-  methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  origin: 'http://localhost:5173',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type'],
 }));
 
@@ -69,16 +69,16 @@ app.use(express.json());
  */
 app.get('/api/health', (req, res) => {
   res.status(200).json({
-    status:    'ok',
-    message:   'Referral API is running',
+    status: 'ok',
+    message: 'Referral API is running',
     timestamp: new Date().toISOString(),
   });
 });
 
-app.use('/api/auth',        authRouter);
-app.use('/api/agents',      agentsRouter);
-app.use('/api/referrals',   referralsRouter);
-app.use('/api/campaigns',   campaignsRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/agents', agentsRouter);
+app.use('/api/referrals', referralsRouter);
+app.use('/api/campaigns', campaignsRouter);
 app.use('/api/integration', integrationRouter);
 
 // ── Error Handling ────────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ app.use('/api/integration', integrationRouter);
 app.use((req, res) => {
   res.status(404).json({
     error: 'The requested resource was not found.',
-    code:  'NOT_FOUND',
+    code: 'NOT_FOUND',
   });
 });
 
@@ -98,7 +98,7 @@ app.use((err, req, res, next) => {
   console.error('[Server Error]', err.message, err.stack);
   res.status(err.status || 500).json({
     error: err.message || 'An unexpected server error occurred.',
-    code:  err.code    || 'INTERNAL_SERVER_ERROR',
+    code: err.code || 'INTERNAL_SERVER_ERROR',
   });
 });
 
@@ -108,7 +108,11 @@ app.listen(PORT, async () => {
   console.log(`[referral-api] Health check    -> http://localhost:${PORT}/api/health`);
 
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    // prisma.$queryRaw is NOT supported with the @prisma/adapter-pg driver adapter
+    // in Prisma v7 — it fails silently with an empty invocation error.
+    // prisma.$connect() is the correct way to verify the connection when using
+    // a driver adapter; it exercises the actual pg Pool without raw SQL.
+    await prisma.$connect();
     console.log('[referral-api] Prisma connected to PostgreSQL successfully.');
   } catch (err) {
     console.error('[referral-api] Prisma DB connection FAILED:', err.message);
