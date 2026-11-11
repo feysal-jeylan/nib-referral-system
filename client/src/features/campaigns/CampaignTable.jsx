@@ -209,8 +209,8 @@ export default function CampaignTable({
         loading={isDeleting}
       />
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm border-collapse" aria-label="Campaign list">
+      <div className="overflow-x-auto w-full">
+        <table className="min-w-[900px] w-full text-sm border-collapse" aria-label="Campaign list">
           <thead>
             <tr className="bg-panel border-b border-border">
               <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">#</th>
