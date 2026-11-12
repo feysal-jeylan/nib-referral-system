@@ -8,7 +8,7 @@
  * Backend returns: { total, page, limit, logs: [...] }  (NOT { data, meta })
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '@/services/api';
 
 import IntegrationLogsTable from '@/features/integration/IntegrationLogsTable';
@@ -33,21 +33,24 @@ export default function IntegrationLogsPage({ user, isAdmin, onToast }) {
   const [meta,    setMeta]    = useState(null);
   const [loading, setLoading] = useState(true);
   const [status,  setStatus]  = useState('');
+  const [search,  setSearch]  = useState('');
   const [page,    setPage]    = useState(1);
+  const debounceRef = useRef(null);
 
-  const fetchLogs = useCallback(async (pg, st) => {
+  const fetchLogs = useCallback(async (pg, st, srch = '') => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
         page: pg, limit: LIMIT,
-        ...(st ? { status: st } : {}),
+        ...(st   ? { status: st }   : {}),
+        ...(srch ? { search: srch } : {}),
       });
       const { data: res } = await api.get(`/integration/logs?${params}`);
 
       // Backend returns legacy shape: { total, page, limit, logs: [...] }
       setData(res.logs ?? []);
-      const total      = res.total ?? res.logs?.length ?? 0;
-      const resLimit   = res.limit ?? LIMIT;
+      const total    = res.total ?? res.logs?.length ?? 0;
+      const resLimit = res.limit ?? LIMIT;
       setMeta({
         total,
         page:       res.page ?? pg,
@@ -61,13 +64,21 @@ export default function IntegrationLogsPage({ user, isAdmin, onToast }) {
     }
   }, [onToast]);
 
-  useEffect(() => { fetchLogs(1, ''); }, [fetchLogs]);
+  useEffect(() => { fetchLogs(1, '', ''); }, [fetchLogs]);
 
+  function handleSearchChange(val) {
+    setSearch(val);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setPage(1);
+      fetchLogs(1, status, val);
+    }, 300);
+  }
   function handleStatusChange(val) {
-    setStatus(val); setPage(1); fetchLogs(1, val);
+    setStatus(val); setPage(1); fetchLogs(1, val, search);
   }
   function handlePageChange(pg) {
-    setPage(pg); fetchLogs(pg, status);
+    setPage(pg); fetchLogs(pg, status, search);
   }
 
   return (
@@ -101,8 +112,8 @@ export default function IntegrationLogsPage({ user, isAdmin, onToast }) {
 
         {/* Filters */}
         <TableFilters
-          search=""
-          onSearchChange={() => {}}
+          search={search}
+          onSearchChange={handleSearchChange}
           searchPlaceholder="Search logs…"
           statusValue={status}
           onStatusChange={handleStatusChange}

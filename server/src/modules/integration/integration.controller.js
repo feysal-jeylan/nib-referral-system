@@ -110,9 +110,15 @@ async function accountOpened(req, res, next) {
 // ── GET /api/integration/logs  (ADMIN) ───────────────────────────────────────
 async function getLogs(req, res, next) {
   try {
-    const page  = Math.max(1, parseInt(req.query.page,  10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
-    const result = await svc.listIntegrationLogs(page, limit);
+    const page   = Math.max(1, parseInt(req.query.page,  10) || 1);
+    const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const search = (req.query.search ?? '').trim();
+
+    const VALID_STATUSES = ['RECEIVED', 'PROCESSED', 'FAILED'];
+    const rawStatus = (req.query.status ?? '').trim().toUpperCase();
+    const status = VALID_STATUSES.includes(rawStatus) ? rawStatus : '';
+
+    const result = await svc.listIntegrationLogs(page, limit, { status, search });
     return res.status(200).json(result);
   } catch (err) {
     console.error('[GET /api/integration/logs] Prisma error:', err.message);

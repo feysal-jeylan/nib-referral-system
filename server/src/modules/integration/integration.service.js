@@ -218,11 +218,24 @@ async function processWebhook({
 }
 
 // ── Admin audit log ────────────────────────────────────────────────────────────
-async function listIntegrationLogs(page, limit) {
+async function listIntegrationLogs(page, limit, { status = '', search = '' } = {}) {
   const skip = (page - 1) * limit;
+
+  const statusFilter = status ? { status } : {};
+  const searchFilter = search
+    ? {
+        OR: [
+          { transaction_id: { contains: search, mode: 'insensitive' } },
+          { error_message:  { contains: search, mode: 'insensitive' } },
+        ],
+      }
+    : {};
+  const where = { ...statusFilter, ...searchFilter };
+
   const [total, rows] = await prisma.$transaction([
-    prisma.integrationLog.count(),
+    prisma.integrationLog.count({ where }),
     prisma.integrationLog.findMany({
+      where,
       skip,
       take:    limit,
       orderBy: { created_at: 'desc' },
