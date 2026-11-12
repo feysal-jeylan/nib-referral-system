@@ -37,11 +37,12 @@ require('dotenv').config();
 const prisma = require('@/config/db');
 
 // ── Route Imports (all via @/ alias) ─────────────────────────────────────────
-const authRouter = require('@/modules/auth/auth.routes');
-const agentsRouter = require('@/modules/agents/agents.routes');
-const referralsRouter = require('@/modules/referrals/referrals.routes');
-const campaignsRouter = require('@/modules/campaigns/campaigns.routes');
+const authRouter        = require('@/modules/auth/auth.routes');
+const agentsRouter      = require('@/modules/agents/agents.routes');
+const referralsRouter   = require('@/modules/referrals/referrals.routes');
+const campaignsRouter   = require('@/modules/campaigns/campaigns.routes');
 const integrationRouter = require('@/modules/integration/integration.routes');
+const dashboardRouter   = require('@/modules/dashboard/dashboard.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -75,11 +76,12 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.use('/api/auth', authRouter);
-app.use('/api/agents', agentsRouter);
-app.use('/api/referrals', referralsRouter);
-app.use('/api/campaigns', campaignsRouter);
+app.use('/api/auth',        authRouter);
+app.use('/api/agents',      agentsRouter);
+app.use('/api/referrals',   referralsRouter);
+app.use('/api/campaigns',   campaignsRouter);
 app.use('/api/integration', integrationRouter);
+app.use('/api/dashboard',   dashboardRouter);
 
 // ── Error Handling ────────────────────────────────────────────────────────────
 
