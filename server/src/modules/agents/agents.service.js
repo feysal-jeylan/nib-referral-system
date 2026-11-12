@@ -37,6 +37,11 @@ async function listAgents(role, agentId, { page = 1, limit = 10, search = '', st
   const skip = (page - 1) * limit;
 
   // AGENT role: can only see their own record
+  if (role === 'AGENT' && (agentId == null)) {
+    const err = new Error('Agent account is not linked to an agent profile.');
+    err.status = 403;
+    throw err;
+  }
   const baseWhere = role === 'AGENT' ? { id: agentId } : {};
 
   // Admin filters

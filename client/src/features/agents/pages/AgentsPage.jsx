@@ -58,7 +58,8 @@ export default function AgentsPage({ user, isAdmin, onToast }) {
         ...(st   ? { status: st   } : {}),
       });
       const { data: res } = await api.get(`/agents?${params}`);
-      setData(res.data   ?? []);
+      const rows = Array.isArray(res) ? res : (res.data ?? []);
+      setData(rows);
       setMeta(res.meta   ?? null);
     } catch {
       onToast({ type: 'error', message: '🔴 Failed to load agents.' });

@@ -15,12 +15,13 @@ async function listReferrals(req, res, next) {
     const page   = Math.max(1,  parseInt(req.query.page,  10) || 1);
     const limit  = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const status = (req.query.status ?? '').trim().toUpperCase();
+    const search = (req.query.search ?? '').trim();
 
     const VALID_STATUSES = ['PENDING', 'SUCCESSFUL', 'REJECTED'];
     const safeStatus = VALID_STATUSES.includes(status) ? status : '';
 
     const result = await svc.listReferrals(
-      req.user.role, req.user.agent_id, page, limit, { status: safeStatus }
+      req.user.role, req.user.agent_id, page, limit, { status: safeStatus, search }
     );
     return res.status(200).json(result);
   } catch (err) {

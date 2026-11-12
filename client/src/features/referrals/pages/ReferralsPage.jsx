@@ -6,7 +6,7 @@
  * Props: user, isAdmin, onToast
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '@/services/api';
 
 import ReferralTable       from '@/features/referrals/ReferralTable';
@@ -31,15 +31,18 @@ export default function ReferralsPage({ user, isAdmin, onToast }) {
   const [meta,    setMeta]    = useState(null);
   const [loading, setLoading] = useState(true);
   const [status,  setStatus]  = useState('');
+  const [search,  setSearch]  = useState('');
   const [page,    setPage]    = useState(1);
+  const debounceRef = useRef(null);
   const LIMIT = 10;
 
-  const fetchReferrals = useCallback(async (pg, st) => {
+  const fetchReferrals = useCallback(async (pg, st, srch = '') => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
         page: pg, limit: LIMIT,
-        ...(st ? { status: st } : {}),
+        ...(st   ? { status: st }   : {}),
+        ...(srch ? { search: srch } : {}),
       });
       const { data: res } = await api.get(`/referrals?${params}`);
       // Support both new { data, meta } and legacy { referrals } shapes
@@ -52,13 +55,21 @@ export default function ReferralsPage({ user, isAdmin, onToast }) {
     }
   }, [onToast]);
 
-  useEffect(() => { fetchReferrals(1, ''); }, [fetchReferrals]);
+  useEffect(() => { fetchReferrals(1, '', ''); }, [fetchReferrals]);
 
+  function handleSearchChange(val) {
+    setSearch(val);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setPage(1);
+      fetchReferrals(1, status, val);
+    }, 300);
+  }
   function handleStatusChange(val) {
-    setStatus(val); setPage(1); fetchReferrals(1, val);
+    setStatus(val); setPage(1); fetchReferrals(1, val, search);
   }
   function handlePageChange(pg) {
-    setPage(pg); fetchReferrals(pg, status);
+    setPage(pg); fetchReferrals(pg, status, search);
   }
 
   async function handleStatusChange_Referral(referralId, newStatus) {
@@ -104,8 +115,8 @@ export default function ReferralsPage({ user, isAdmin, onToast }) {
 
         {/* Filters */}
         <TableFilters
-          search=""
-          onSearchChange={() => {}}
+          search={search}
+          onSearchChange={handleSearchChange}
           searchPlaceholder="Search referrals…"
           statusValue={status}
           onStatusChange={handleStatusChange}

@@ -11,13 +11,22 @@ const prisma = require('@/config/db');
 
 const ALLOWED_STATUSES = ['SUCCESSFUL', 'REJECTED'];
 
-// ── List referrals (RBAC-filtered, paginated, status-filtered) ────────────────
-async function listReferrals(role, agentId, page, limit, { status = '' } = {}) {
+// ── List referrals (RBAC-filtered, paginated, status-filtered, searchable) ────
+async function listReferrals(role, agentId, page, limit, { status = '', search = '' } = {}) {
   const skip = (page - 1) * limit;
 
   const baseWhere   = role === 'AGENT' ? { agent_id: agentId } : {};
   const statusFilter = status ? { status } : {};
-  const where = { ...baseWhere, ...statusFilter };
+  const searchFilter = search
+    ? {
+        OR: [
+          { customer_name:  { contains: search, mode: 'insensitive' } },
+          { customer_phone: { contains: search, mode: 'insensitive' } },
+          { agent: { referral_code: { contains: search, mode: 'insensitive' } } },
+        ],
+      }
+    : {};
+  const where = { ...baseWhere, ...statusFilter, ...searchFilter };
 
   const [total, rows] = await prisma.$transaction([
     prisma.referral.count({ where }),
