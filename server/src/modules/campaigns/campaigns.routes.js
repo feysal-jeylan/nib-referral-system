@@ -17,11 +17,12 @@ const router    = express.Router();
 const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 
 // Campaign CRUD
-router.post('/',             ...adminOnly, ctrl.createCampaign);
-router.get('/',              ...adminOnly, ctrl.listCampaigns);
-router.put('/:id',           ...adminOnly, ctrl.updateCampaign);
-router.delete('/:id',        ...adminOnly, ctrl.deleteCampaign);
-router.patch('/:id/activate',...adminOnly, ctrl.activateCampaign);
+router.post('/',              ...adminOnly, ctrl.createCampaign);
+router.get('/',               ...adminOnly, ctrl.listCampaigns);
+router.get('/roots',          ...adminOnly, ctrl.listRootCampaigns);  // ← must be before /:id
+router.put('/:id',            ...adminOnly, ctrl.updateCampaign);
+router.delete('/:id',         ...adminOnly, ctrl.deleteCampaign);
+router.patch('/:id/activate', ...adminOnly, ctrl.activateCampaign);
 
 // Rules sub-resource
 router.post('/:id/rules',              ...adminOnly, ctrl.addRule);

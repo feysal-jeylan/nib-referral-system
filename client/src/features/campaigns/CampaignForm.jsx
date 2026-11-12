@@ -13,7 +13,7 @@
  *   onCreated {() => void}
  *   onToast   {(toast: { type, message }) => void}
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import api from '@/services/api';
 import Spinner from '@/components/ui/Spinner';
 import { Input }  from '@/components/ui/input';
@@ -23,7 +23,7 @@ import { RULE_TYPES, OPERATORS, OPERATOR_SYMBOL, COMPOSITE_FIELDS, NUMERIC_CONDI
 const EMPTY_CAMPAIGN = {
   name: '', campaign_code: '', start_date: '', end_date: '',
   reward_type: 'CASH', reward_value: '',
-  description: '', reward_threshold: '',
+  description: '', reward_threshold: '', parent_id: '',
 };
 const EMPTY_RULE = {
   rule_type: 'MIN_DEPOSIT',
@@ -45,6 +45,14 @@ export default function CampaignForm({ onCreated, onToast }) {
   const [pendingRules, setPendingRules] = useState([]);
   const [currentRule, setCurrentRule] = useState(EMPTY_RULE);
   const [submitting, setSubmitting]   = useState(false);
+
+  // ── Parent campaigns for picker ──────────────────────────────────────────
+  const [rootCampaigns, setRootCampaigns] = useState([]);
+  useEffect(() => {
+    api.get('/campaigns/roots')
+      .then(r => setRootCampaigns(r.data?.data ?? []))
+      .catch(() => {}); // silent — picker just shows empty
+  }, []);
 
   // ── COMPOSITE rule state ─────────────────────────────────────────────────
   const [compositeLogicalOp,  setCompositeLogicalOp]  = useState('AND');
@@ -169,6 +177,7 @@ export default function CampaignForm({ onCreated, onToast }) {
         reward_type:      form.reward_type,
         reward_value:     form.reward_value,
         reward_threshold: form.reward_threshold ? parseInt(form.reward_threshold, 10) : undefined,
+        parent_id:        form.parent_id ? parseInt(form.parent_id, 10) : undefined,
       });
 
       const campaignId = data.campaign.id;
@@ -334,6 +343,28 @@ export default function CampaignForm({ onCreated, onToast }) {
             value={form.description} onChange={handleCampaignChange}
             autoComplete="off" className={INPUT_CLS}
           />
+        </div>
+        {/* Parent Campaign — full width */}
+        <div className="sm:col-span-2 lg:col-span-3">
+          <label htmlFor="camp-parent" className={LABEL_CLS}>
+            Parent Campaign{' '}
+            <span className="normal-case font-normal text-text-3">(optional — creates a sub-campaign)</span>
+          </label>
+          <select
+            id="camp-parent" name="parent_id"
+            value={form.parent_id} onChange={handleCampaignChange}
+            className={INPUT_CLS}
+          >
+            <option value="">— None (root campaign) —</option>
+            {rootCampaigns.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.name}{p.campaign_code ? ` (${p.campaign_code})` : ''} · {p.status}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[10px] text-text-3 leading-relaxed">
+            Only root campaigns are shown. A child campaign cannot itself be a parent.
+          </p>
         </div>
       </div>
 

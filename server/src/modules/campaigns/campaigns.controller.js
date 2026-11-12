@@ -15,7 +15,7 @@ const svc = require('./campaigns.service');
 // ── POST /api/campaigns ───────────────────────────────────────────────────────
 async function createCampaign(req, res, next) {
   try {
-    const { name, start_date, end_date, reward_type, reward_value, description, reward_threshold, campaign_code } = req.body;
+    const { name, start_date, end_date, reward_type, reward_value, description, reward_threshold, campaign_code, parent_id: rawParentId } = req.body;
 
     // Required-field validation
     const missing = [];
@@ -41,7 +41,33 @@ async function createCampaign(req, res, next) {
       return res.status(400).json({ error: 'reward_threshold must be a non-negative integer.', code: 'INVALID_REWARD_THRESHOLD' });
     }
 
-    const campaign = await svc.createCampaign({ name, campaign_code: campaign_code ? campaign_code.trim().toUpperCase() : null, description, start_date, end_date, reward_type, reward_value, reward_threshold: threshold });
+    // Parent campaign validation (optional)
+    let parentId = null;
+    if (rawParentId != null && rawParentId !== '') {
+      parentId = parseInt(rawParentId, 10);
+      if (isNaN(parentId)) {
+        return res.status(400).json({ error: 'parent_id must be a valid integer.', code: 'INVALID_PARENT_ID' });
+      }
+      const parent = await svc.findCampaignById(parentId);
+      if (!parent) {
+        return res.status(404).json({ error: `Parent campaign with id ${parentId} not found.`, code: 'PARENT_NOT_FOUND' });
+      }
+      // Prevent chains: a child campaign cannot itself be a parent (depth = 1 only)
+      if (parent.parent_id != null) {
+        return res.status(400).json({
+          error: `Campaign "${parent.name}" is already a child campaign and cannot be used as a parent. Only root campaigns can be parents.`,
+          code: 'NESTED_CHILD_FORBIDDEN',
+        });
+      }
+    }
+
+    const campaign = await svc.createCampaign({
+      name,
+      campaign_code: campaign_code ? campaign_code.trim().toUpperCase() : null,
+      description, start_date, end_date, reward_type, reward_value,
+      reward_threshold: threshold,
+      parent_id: parentId,
+    });
     return res.status(201).json({ campaign });
   } catch (err) { next(err); }
 }
@@ -251,6 +277,14 @@ async function getCampaignStats(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// ── GET /api/campaigns/roots  (parent picker for new campaign form) ───────────
+async function listRootCampaigns(req, res, next) {
+  try {
+    const roots = await svc.findRootCampaigns();
+    return res.status(200).json({ data: roots });
+  } catch (err) { next(err); }
+}
+
 module.exports = {
   createCampaign,
   addRule,
@@ -259,6 +293,7 @@ module.exports = {
   updateCampaign,
   deleteCampaign,
   listCampaigns,
+  listRootCampaigns,
   getCampaignStats,
 };
 

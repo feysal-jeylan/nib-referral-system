@@ -26,12 +26,10 @@ export const OPERATOR_SYMBOL = {
   NOT_EQUALS:            '!=',
 };
 
-/** Fields available for COMPOSITE rule conditions. */
+/** Fields available for COMPOSITE rule conditions. Banking rules only. */
 export const COMPOSITE_FIELDS = [
-  { value: 'deposit_amount',  label: 'Deposit Amount'  },
-  { value: 'account_type',    label: 'Account Type'    },
-  { value: 'customer_name',   label: 'Customer Name'   },
-  { value: 'customer_phone',  label: 'Customer Phone'  },
+  { value: 'deposit_amount', label: 'Deposit Amount' },
+  { value: 'account_type',   label: 'Account Type'   },
 ];
 
 /** Fields whose values are numeric (used to coerce condition values). */

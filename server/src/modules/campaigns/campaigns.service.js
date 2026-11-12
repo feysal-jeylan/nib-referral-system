@@ -19,7 +19,7 @@ const VALID_RULE_TYPES = ['MIN_DEPOSIT', 'ACCOUNT_TYPE', 'COMPOSITE'];
 const OPERATOR_REQUIRED_TYPES = new Set(['MIN_DEPOSIT', 'ACCOUNT_TYPE']);
 
 // ── Create campaign ───────────────────────────────────────────────────────────
-async function createCampaign({ name, campaign_code, description, start_date, end_date, reward_type, reward_value, reward_threshold }) {
+async function createCampaign({ name, campaign_code, description, start_date, end_date, reward_type, reward_value, reward_threshold, parent_id }) {
   return prisma.campaign.create({
     data: {
       name,
@@ -32,13 +32,23 @@ async function createCampaign({ name, campaign_code, description, start_date, en
       reward_threshold: reward_threshold ?? null,
       is_active:        true,
       status:           'DRAFT',
+      parent_id:        parent_id ?? null,
     },
   });
 }
 
 // ── Add a rule to a campaign ──────────────────────────────────────────────────
 async function findCampaignById(id) {
-  return prisma.campaign.findUnique({ where: { id }, select: { id: true, name: true, status: true } });
+  return prisma.campaign.findUnique({ where: { id }, select: { id: true, name: true, status: true, parent_id: true } });
+}
+
+// ── Fetch root campaigns (parent_id IS NULL) for the parent picker ────────────
+async function findRootCampaigns() {
+  return prisma.campaign.findMany({
+    where:   { parent_id: null },
+    select:  { id: true, name: true, campaign_code: true, status: true },
+    orderBy: { created_at: 'desc' },
+  });
 }
 
 async function addRule(campaignId, { rule_type, operator, rule_value }) {
@@ -107,7 +117,10 @@ async function listCampaigns(page, limit, { search = '', status = '' } = {}) {
       skip,
       take:    limit,
       orderBy: { created_at: 'desc' },
-      include: { rules: true },
+      include: {
+        rules:  true,
+        parent: { select: { id: true, name: true } },
+      },
     }),
   ]);
 
@@ -128,6 +141,7 @@ module.exports = {
   OPERATOR_REQUIRED_TYPES,
   createCampaign,
   findCampaignById,
+  findRootCampaigns,
   addRule,
   deleteRule,
   activateCampaign,

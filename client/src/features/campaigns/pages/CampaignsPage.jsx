@@ -91,6 +91,31 @@ function DetailsDialog({ campaign, open, onClose, onDelete, onEdit, onActivate, 
         </DialogHeader>
 
         <div className="space-y-4 py-2 text-sm">
+          {/* Hierarchy badge */}
+          {(campaign.parent_id || (campaign.children && campaign.children.length > 0)) && (
+            <div
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
+              style={{ background: 'rgba(138,77,31,0.07)', border: `1px solid ${BORDER}` }}
+            >
+              {campaign.parent_id ? (
+                <>
+                  <span style={{ color: MUTED }}>↳</span>
+                  <span style={{ color: CHOCOLATE }}>
+                    Sub-campaign of{' '}
+                    <span className="font-semibold">{campaign.parent?.name ?? `Campaign #${campaign.parent_id}`}</span>
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span style={{ color: BRAND }}>⊕</span>
+                  <span style={{ color: CHOCOLATE }}>
+                    Root campaign · {campaign.children?.length ?? 0} sub-campaign{campaign.children?.length !== 1 ? 's' : ''}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Meta */}
           <div className="grid grid-cols-2 gap-3">
             <InfoRow label="Campaign Code" value={campaign.campaign_code
@@ -457,8 +482,20 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
                       <td className="px-5 py-3.5 text-xs tabular-nums" style={{ color: MUTED }}>
                         {(page - 1) * LIMIT + i + 1}
                       </td>
-                      <td className="px-5 py-3.5 font-medium max-w-[200px] truncate" style={{ color: CHOCOLATE }}>
-                        {c.name}
+                      <td className="px-5 py-3.5 font-medium max-w-[220px]" style={{ color: CHOCOLATE }}>
+                        {c.parent_id ? (
+                          <div className="ml-4">
+                            <span className="truncate block">{c.name}</span>
+                            <span
+                              className="text-[10px] font-normal mt-0.5 block"
+                              style={{ color: MUTED }}
+                            >
+                              ↳ Child of {c.parent?.name ?? `#${c.parent_id}`}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="truncate block">{c.name}</span>
+                        )}
                       </td>
                       <td className="px-5 py-3.5">
                         {c.campaign_code

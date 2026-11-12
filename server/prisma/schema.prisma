@@ -77,6 +77,10 @@ model Campaign {
   description      String?
   reward_threshold Int?
   is_active        Boolean  @default(true)
+  parent_id        Int?
+
+  parent   Campaign?  @relation("CampaignHierarchy", fields: [parent_id], references: [id], onDelete: SetNull)
+  children Campaign[] @relation("CampaignHierarchy")
 
   rules     CampaignRule[]
   referrals Referral[]
