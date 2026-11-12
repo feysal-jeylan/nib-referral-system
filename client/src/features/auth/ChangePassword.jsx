@@ -15,6 +15,7 @@
 
 import { useRef, useState } from 'react';
 import { useAuth } from './AuthContext';
+import useAppStore from '@/store/useAppStore';
 import api from '@/services/api';
 
 // ─── Strength helpers ─────────────────────────────────────────────────────────
@@ -130,7 +131,8 @@ function BrandPanel() {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function ChangePassword() {
-  const { user, logout, refreshUser } = useAuth();
+  const { logout, refreshUser } = useAuth();
+  const user = useAppStore(s => s.user);
 
   const [form, setForm]             = useState({ newPassword: '', confirmPassword: '' });
   const [submitting, setSubmitting] = useState(false);

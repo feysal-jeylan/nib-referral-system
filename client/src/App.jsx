@@ -3,27 +3,32 @@
  * ───────────────────
  * Nib International Bank — Referral Management System
  *
- * Pure routing shell. All data-fetching, state, and layout live in Dashboard.
+ * Phase 1 (Zustand migration):
+ *   - `user` is now read from Zustand (useAppStore) instead of AuthContext.
+ *   - `loading` is still read from AuthContext (it owns the session-check lifecycle).
+ *   - `logout` comes from AuthContext (it clears the HttpOnly cookie AND Zustand).
  *
- * Auth flow (useAuth from AuthContext):
- *   loading  → full-page spinner (prevents login-screen flash)
+ * Auth flow:
+ *   loading  → full-page NIB logo spinner (prevents login-screen flash)
  *   !user    → <Login />
  *   must_change_password → <ChangePassword />
  *   otherwise → <Dashboard />
  *
  * Security: HttpOnly JWT cookie — no token in JS memory.
- * Axios instance (services/api.js) sends withCredentials: true automatically.
- *
- * Phase 5b: App.css import removed — fully migrated to Tailwind.
  */
 
-import { useAuth } from '@/features/auth/AuthContext';
-import Login from '@/features/auth/Login';
+import { useAuth }    from '@/features/auth/AuthContext';
+import useAppStore    from '@/store/useAppStore';
+import Login          from '@/features/auth/Login';
 import ChangePassword from '@/features/auth/ChangePassword';
-import Dashboard from '@/features/dashboard/Dashboard';
+import Dashboard      from '@/features/dashboard/Dashboard';
 
 export default function App() {
-  const { user, loading, logout } = useAuth();
+  // Session-check lifecycle lives in AuthContext
+  const { loading, logout } = useAuth();
+
+  // User object lives in Zustand (pushed there by AuthContext on resolve)
+  const user = useAppStore(s => s.user);
 
   if (loading) {
     return (
