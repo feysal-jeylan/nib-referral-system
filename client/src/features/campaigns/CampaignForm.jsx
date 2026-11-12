@@ -2,7 +2,7 @@
  * features/campaigns/CampaignForm.jsx
  * ─────────────────────────────────────
  * Admin-only form to create a new campaign with an inline Rules Builder.
- * Pure Tailwind — matches Nib Bank design tokens.
+ * Pure Tailwind — matches Nib Bank design tokens with high-contrast inputs.
  *
  * Submit flow:
  *   1. POST /api/campaigns            → get campaign id
@@ -52,13 +52,20 @@ const EMPTY_CONDITION = {
   value_raw: '',
 };
 
-// Shared input / select class (shadcn Input override)
+// ── High-contrast Input & Select classes ──────────────────────────────────────
 const INPUT_CLS =
-  'h-auto w-full px-4 py-2.5 bg-bg border-border rounded-md text-sm text-text-1 ' +
-  'placeholder:text-text-3 shadow-none transition-all duration-150 ' +
-  'focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-surface';
+  'h-auto w-full px-4 py-2.5 bg-white border border-[#E5DED6] rounded-md text-sm text-[#3E2723] ' +
+  'placeholder:text-[#9C8577] placeholder:opacity-100 shadow-none transition-all duration-150 ' +
+  'focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-white';
 
-const LABEL_CLS = 'block text-[11px] font-semibold text-text-3 uppercase tracking-wide mb-1.5';
+const SELECT_CLS =
+  'h-auto w-full px-4 py-2.5 bg-white border border-[#E5DED6] rounded-md text-sm text-[#3E2723] font-medium ' +
+  'shadow-none transition-all duration-150 ' +
+  'focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-white';
+
+const OPTION_CLS = 'bg-white text-[#3E2723] py-1.5';
+
+const LABEL_CLS = 'block text-[11px] font-semibold text-[#3E2723] uppercase tracking-wide mb-1.5';
 
 export default function CampaignForm({ onCreated, onSuccess, onToast }) {
   const [form, setForm]                 = useState(EMPTY_CAMPAIGN);
@@ -334,10 +341,10 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
           <select
             id="camp-reward-type" name="reward_type"
             value={form.reward_type} onChange={handleCampaignChange}
-            required className={INPUT_CLS}
+            required className={SELECT_CLS}
           >
-            <option value="CASH">CASH</option>
-            <option value="BADGE">BADGE</option>
+            <option value="CASH" className={OPTION_CLS}>CASH</option>
+            <option value="BADGE" className={OPTION_CLS}>BADGE</option>
           </select>
         </div>
 
@@ -391,12 +398,12 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
             name="parent_id"
             value={form.parent_id}
             onChange={handleCampaignChange}
-            className={INPUT_CLS}
+            className={SELECT_CLS}
             aria-label="Parent campaign picker"
           >
-            <option value="">None (Root Campaign)</option>
+            <option value="" className={OPTION_CLS}>None (Root Campaign)</option>
             {rootCampaigns.map(c => (
-              <option key={c.id} value={c.id}>
+              <option key={c.id} value={c.id} className={OPTION_CLS}>
                 {c.name} {c.campaign_code ? `(${c.campaign_code})` : ''}
               </option>
             ))}
@@ -426,10 +433,10 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
               name="rule_type"
               value={currentRule.rule_type}
               onChange={handleRuleChange}
-              className={INPUT_CLS}
+              className={SELECT_CLS}
             >
               {RULE_TYPES.map(rt => (
-                <option key={rt.value} value={rt.value}>{rt.label}</option>
+                <option key={rt.value} value={rt.value} className={OPTION_CLS}>{rt.label}</option>
               ))}
             </select>
           </div>
@@ -442,10 +449,10 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
               value={currentRule.operator}
               onChange={handleRuleChange}
               disabled={currentRule.rule_type === 'COMPOSITE'}
-              className={`${INPUT_CLS} disabled:opacity-40 disabled:cursor-not-allowed`}
+              className={`${SELECT_CLS} disabled:opacity-40 disabled:cursor-not-allowed`}
             >
               {OPERATORS.map(op => (
-                <option key={op.value} value={op.value}>{op.label}</option>
+                <option key={op.value} value={op.value} className={OPTION_CLS}>{op.label}</option>
               ))}
             </select>
           </div>
@@ -463,7 +470,7 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
               onChange={handleRuleChange}
               disabled={currentRule.rule_type === 'COMPOSITE'}
               autoComplete="off"
-              className={`${INPUT_CLS} disabled:opacity-40 disabled:cursor-not-allowed`}
+              className={`${INPUT_CLS} text-[#3E2723] placeholder:text-[#9C8577] placeholder:opacity-100 disabled:opacity-40 disabled:cursor-not-allowed`}
             />
           </div>
         </div>
@@ -505,11 +512,11 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
                     <select
                       value={cond.field}
                       onChange={e => handleConditionChange(idx, 'field', e.target.value)}
-                      className={INPUT_CLS}
+                      className={SELECT_CLS}
                       aria-label={`Condition ${idx + 1} field`}
                     >
                       {COMPOSITE_FIELDS.map(f => (
-                        <option key={f.value} value={f.value}>{f.label}</option>
+                        <option key={f.value} value={f.value} className={OPTION_CLS}>{f.label}</option>
                       ))}
                     </select>
                   </div>
@@ -518,11 +525,11 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
                     <select
                       value={cond.operator}
                       onChange={e => handleConditionChange(idx, 'operator', e.target.value)}
-                      className={INPUT_CLS}
+                      className={SELECT_CLS}
                       aria-label={`Condition ${idx + 1} operator`}
                     >
                       {OPERATORS.map(op => (
-                        <option key={op.value} value={op.value}>{op.label}</option>
+                        <option key={op.value} value={op.value} className={OPTION_CLS}>{op.label}</option>
                       ))}
                     </select>
                   </div>
@@ -534,7 +541,7 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
                       onChange={e => handleConditionChange(idx, 'value_raw', e.target.value)}
                       placeholder={NUMERIC_CONDITION_FIELDS.has(cond.field) ? 'e.g. 5000' : 'e.g. SAVINGS'}
                       autoComplete="off"
-                      className={INPUT_CLS}
+                      className={`${INPUT_CLS} text-[#3E2723] placeholder:text-[#9C8577] placeholder:opacity-100`}
                       aria-label={`Condition ${idx + 1} value`}
                     />
                   </div>
