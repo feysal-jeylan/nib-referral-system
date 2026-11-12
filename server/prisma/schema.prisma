@@ -18,13 +18,16 @@ datasource db {
 
 // ─── users ───────────────────────────────────────────────────────────────────
 model User {
-  id                   Int      @id @default(autoincrement())
-  username             String   @unique @db.VarChar(50)
-  password_hash        String   @db.VarChar(100)
-  role                 String   @db.VarChar(10)
+  id                   Int       @id @default(autoincrement())
+  username             String    @unique @db.VarChar(50)
+  password_hash        String    @db.VarChar(100)
+  role                 String    @db.VarChar(10)
   agent_id             Int?
-  created_at           DateTime @default(now()) @db.Timestamp(6)
-  must_change_password Boolean  @default(true)
+  created_at           DateTime  @default(now()) @db.Timestamp(6)
+  must_change_password Boolean   @default(true)
+  activationToken      String?   @db.VarChar(255)
+  activationExpires    DateTime?
+  isActivated          Boolean   @default(false)
 
   agent Agent? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
 

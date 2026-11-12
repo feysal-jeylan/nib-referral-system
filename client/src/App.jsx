@@ -17,13 +17,19 @@
  * Security: HttpOnly JWT cookie — no token in JS memory.
  */
 
-import { useAuth }    from '@/features/auth/AuthContext';
-import useAppStore    from '@/store/useAppStore';
-import Login          from '@/features/auth/Login';
-import ChangePassword from '@/features/auth/ChangePassword';
-import Dashboard      from '@/features/dashboard/Dashboard';
+import { useAuth }        from '@/features/auth/AuthContext';
+import useAppStore        from '@/store/useAppStore';
+import Login              from '@/features/auth/Login';
+import ChangePassword     from '@/features/auth/ChangePassword';
+import Dashboard          from '@/features/dashboard/Dashboard';
+import ActivateAccount    from '@/features/auth/ActivateAccount';
 
 export default function App() {
+  // ── Activation route — no auth needed, render before the session check ───────
+  if (window.location.pathname === '/activate') {
+    return <ActivateAccount />;
+  }
+
   // Session-check lifecycle lives in AuthContext
   const { loading, logout } = useAuth();
 

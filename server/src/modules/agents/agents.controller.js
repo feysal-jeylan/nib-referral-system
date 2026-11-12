@@ -70,10 +70,9 @@ async function createAgent(req, res, next) {
   }
 
   try {
-    const { agent, tempPassword, email: agentEmail } = await svc.createApprovedAgent({ name, phone, email });
+    const { agent, email: agentEmail } = await svc.createApprovedAgent({ name, phone, email });
 
-    console.log(`[AGENT ONBOARDING] Temp password for ${agentEmail}: ${tempPassword}`);
-    console.log(`[AGENT ONBOARDING] ⚠️  This should be delivered via secure email.`);
+    console.log(`[AGENT ONBOARDING] Activation email sent to: ${agentEmail}`);
 
     return res.status(201).json({
       id:            agent.id,
@@ -81,8 +80,7 @@ async function createAgent(req, res, next) {
       referral_code: agent.referral_code,
       status:        agent.status,
       created_at:    agent.created_at,
-      message:       `Agent created. Temporary credentials have been dispatched to ${agentEmail}.`,
-      temp_password: tempPassword,
+      message:       `Agent created. An activation email has been sent to ${agentEmail}.`,
     });
   } catch (err) {
     if (err.code === 'P2002') {
@@ -119,18 +117,16 @@ async function approveAgent(req, res, next) {
   }
 
   try {
-    const { agent: updated, tempPassword } = await svc.approveAgent(agentId, agent.email, agent.referral_code);
+    const { agent: updated } = await svc.approveAgent(agentId, agent.email, agent.name, agent.referral_code);
 
-    console.log(`[AGENT APPROVAL] Temp password for ${agent.email}: ${tempPassword}`);
-    console.log(`[AGENT APPROVAL] ⚠️  Deliver this via secure email in production.`);
+    console.log(`[AGENT APPROVAL] Activation email sent to: ${agent.email}`);
 
     return res.status(200).json({
       id:            updated.id,
       name:          updated.name,
       referral_code: updated.referral_code,
       status:        updated.status,
-      temp_password: tempPassword,
-      message:       `Agent approved. Temporary credentials dispatched to ${agent.email}.`,
+      message:       `Agent approved. An activation email has been sent to ${agent.email}.`,
     });
   } catch (err) {
     if (err.code === 'P2002') {

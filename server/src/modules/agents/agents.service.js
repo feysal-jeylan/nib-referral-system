@@ -10,6 +10,7 @@
 const crypto  = require('crypto');
 const bcrypt  = require('bcrypt');
 const prisma  = require('@/config/db');
+const { sendActivationEmail } = require('@/services/emailService');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function generateReferralCode() {
@@ -21,8 +22,12 @@ async function hashPassword(plain) {
   return bcrypt.hash(plain, 12);
 }
 
-function generateTempPassword() {
-  return crypto.randomBytes(16).toString('hex');
+/** Generates a 32-byte hex token and its SHA-256 hash. */
+function generateActivationToken() {
+  const rawToken    = crypto.randomBytes(32).toString('hex');
+  const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const expires     = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+  return { rawToken, hashedToken, expires };
 }
 
 // ── PUBLIC: submit application ────────────────────────────────────────────────
@@ -104,11 +109,10 @@ async function listAgents(role, agentId, { page = 1, limit = 10, search = '', st
   };
 }
 
-// ── ADMIN: create approved agent ──────────────────────────────────────────────
+// ── ADMIN: create approved agent (direct creation flow) ───────────────────────
 async function createApprovedAgent({ name, phone, email }) {
   const referralCode = generateReferralCode();
-  const tempPassword = generateTempPassword();
-  const passwordHash = await hashPassword(tempPassword);
+  const { rawToken, hashedToken, expires } = generateActivationToken();
 
   const newAgent = await prisma.$transaction(async (tx) => {
     const agent = await tx.agent.create({
@@ -118,16 +122,22 @@ async function createApprovedAgent({ name, phone, email }) {
     await tx.user.create({
       data: {
         username:             email,
-        password_hash:        passwordHash,
+        password_hash:        'PENDING_ACTIVATION',   // placeholder — overwritten on activate
         role:                 'AGENT',
         agent_id:             agent.id,
         must_change_password: true,
+        activationToken:      hashedToken,
+        activationExpires:    expires,
+        isActivated:          false,
       },
     });
     return agent;
   });
 
-  return { agent: newAgent, tempPassword, email };
+  // Send the activation email (never expose rawToken to the Admin response)
+  await sendActivationEmail(email, name, rawToken);
+
+  return { agent: newAgent, email };
 }
 
 // ── ADMIN: approve pending agent ──────────────────────────────────────────────
@@ -138,10 +148,9 @@ async function findAgentById(id) {
   });
 }
 
-async function approveAgent(agentId, agentEmail, existingCode) {
+async function approveAgent(agentId, agentEmail, agentName, existingCode) {
   const referralCode = existingCode ?? generateReferralCode();
-  const tempPassword = generateTempPassword();
-  const passwordHash = await hashPassword(tempPassword);
+  const { rawToken, hashedToken, expires } = generateActivationToken();
 
   const updated = await prisma.$transaction(async (tx) => {
     const updatedAgent = await tx.agent.update({
@@ -152,16 +161,22 @@ async function approveAgent(agentId, agentEmail, existingCode) {
     await tx.user.create({
       data: {
         username:             agentEmail,
-        password_hash:        passwordHash,
+        password_hash:        'PENDING_ACTIVATION',   // placeholder — overwritten on activate
         role:                 'AGENT',
         agent_id:             agentId,
         must_change_password: true,
+        activationToken:      hashedToken,
+        activationExpires:    expires,
+        isActivated:          false,
       },
     });
     return updatedAgent;
   });
 
-  return { agent: updated, tempPassword };
+  // Send activation email — Admin NEVER sees the rawToken
+  await sendActivationEmail(agentEmail, agentName, rawToken);
+
+  return { agent: updated };
 }
 
 // ── ADMIN: reject pending agent ───────────────────────────────────────────────

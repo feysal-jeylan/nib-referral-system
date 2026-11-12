@@ -8,7 +8,9 @@
 
 'use strict';
 
-const svc = require('./auth.service');
+const svc   = require('./auth.service');
+const email = require('@/services/emailService');
+const prisma = require('@/config/db');
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
 async function login(req, res, next) {
@@ -131,5 +133,68 @@ async function changePassword(req, res, next) {
   }
 }
 
-module.exports = { login, me, logout, changePassword };
+// ── POST /api/auth/activate ───────────────────────────────────────────────────
+async function activateAccount(req, res, next) {
+  const { token, newPassword } = req.body;
+
+  if (!token) {
+    return res.status(400).json({ error: 'Activation token is required.', code: 'MISSING_TOKEN' });
+  }
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters.', code: 'WEAK_PASSWORD' });
+  }
+
+  try {
+    const user = await svc.findUserByActivationToken(token);
+    if (!user) {
+      return res.status(400).json({
+        error: 'This activation link is invalid or has expired.',
+        code:  'INVALID_OR_EXPIRED_TOKEN',
+      });
+    }
+
+    await svc.activateUser(user.id, newPassword);
+    return res.status(200).json({ message: 'Account activated successfully. You can now log in.' });
+  } catch (err) {
+    console.error('[POST /api/auth/activate] Error:', err.message);
+    next(err);
+  }
+}
+
+// ── POST /api/auth/resend-activation ─────────────────────────────────────────
+async function resendActivation(req, res, next) {
+  const emailAddr = req.body.email?.trim()?.toLowerCase();
+  if (!emailAddr) {
+    return res.status(400).json({ error: 'Email is required.', code: 'MISSING_FIELDS' });
+  }
+
+  try {
+    // refreshActivationToken looks up by username (which equals email for agents)
+    const result = await svc.refreshActivationToken(emailAddr);
+
+    if (result.error === 'USER_NOT_FOUND') {
+      return res.status(404).json({ error: 'No account found with this email.', code: 'USER_NOT_FOUND' });
+    }
+    if (result.error === 'ALREADY_ACTIVATED') {
+      return res.status(409).json({
+        error: 'This account is already activated. Please log in.',
+        code:  'ALREADY_ACTIVATED',
+      });
+    }
+
+    // Fetch agent name for the branded email
+    const agent = result.agentId
+      ? await prisma.agent.findUnique({ where: { id: result.agentId }, select: { name: true } })
+      : null;
+    const agentName = agent?.name ?? emailAddr;
+
+    await email.sendActivationEmail(emailAddr, agentName, result.rawToken);
+    return res.status(200).json({ message: 'A new activation link has been sent to your email.' });
+  } catch (err) {
+    console.error('[POST /api/auth/resend-activation] Error:', err.message);
+    next(err);
+  }
+}
+
+module.exports = { login, me, logout, changePassword, activateAccount, resendActivation };
 

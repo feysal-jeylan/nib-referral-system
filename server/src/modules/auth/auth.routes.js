@@ -13,10 +13,14 @@ const ctrl = require('./auth.controller');
 
 const router = express.Router();
 
-router.post('/login',           ctrl.login);
-router.get('/me',               ctrl.me);
-router.post('/logout',          ctrl.logout);
-router.post('/change-password', authenticateToken, ctrl.changePassword);
+router.post('/login',              ctrl.login);
+router.get('/me',                  ctrl.me);
+router.post('/logout',             ctrl.logout);
+router.post('/change-password',    authenticateToken, ctrl.changePassword);
+
+// ── Pre-login flows (no auth required) ───────────────────────────────────────
+router.post('/activate',           ctrl.activateAccount);
+router.post('/resend-activation',  ctrl.resendActivation);
 
 module.exports = router;
 
