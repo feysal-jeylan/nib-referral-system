@@ -2,35 +2,55 @@
  * features/campaigns/CampaignForm.jsx
  * ─────────────────────────────────────
  * Admin-only form to create a new campaign with an inline Rules Builder.
- * Pure Tailwind — no App.css dependency.
+ * Pure Tailwind — matches Nib Bank design tokens.
  *
  * Submit flow:
- *   1. POST /api/campaigns        → get campaign id
+ *   1. POST /api/campaigns            → get campaign id
  *   2. POST /api/campaigns/:id/rules  for each queued rule (sequential)
- *   3. Call onCreated() to trigger a list refresh in Dashboard
+ *   3. Call onCreated() to refresh list & onSuccess() to close modal
  *
  * Props:
  *   onCreated {() => void}
+ *   onSuccess {() => void}
  *   onToast   {(toast: { type, message }) => void}
  */
+
 import { useEffect, useRef, useState } from 'react';
 import api from '@/services/api';
 import Spinner from '@/components/ui/Spinner';
 import { Input }  from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { RULE_TYPES, OPERATORS, OPERATOR_SYMBOL, COMPOSITE_FIELDS, NUMERIC_CONDITION_FIELDS } from './constants';
+import {
+  RULE_TYPES,
+  OPERATORS,
+  OPERATOR_SYMBOL,
+  COMPOSITE_FIELDS,
+  NUMERIC_CONDITION_FIELDS,
+} from './constants';
 
 const EMPTY_CAMPAIGN = {
-  name: '', campaign_code: '', start_date: '', end_date: '',
-  reward_type: 'CASH', reward_value: '',
-  description: '', reward_threshold: '', parent_id: '',
+  name: '',
+  campaign_code: '',
+  start_date: '',
+  end_date: '',
+  reward_type: 'CASH',
+  reward_value: '',
+  description: '',
+  reward_threshold: '',
+  parent_id: '',
 };
+
 const EMPTY_RULE = {
   rule_type: 'MIN_DEPOSIT',
   operator: 'GREATER_THAN_OR_EQUAL',
   rule_value_raw: '',
 };
-const EMPTY_CONDITION = { field: 'deposit_amount', operator: 'GREATER_THAN', value_raw: '' };
+
+const EMPTY_CONDITION = {
+  field: 'deposit_amount',
+  operator: 'GREATER_THAN',
+  value_raw: '',
+};
 
 // Shared input / select class (shadcn Input override)
 const INPUT_CLS =
@@ -40,11 +60,11 @@ const INPUT_CLS =
 
 const LABEL_CLS = 'block text-[11px] font-semibold text-text-3 uppercase tracking-wide mb-1.5';
 
-export default function CampaignForm({ onCreated, onToast }) {
-  const [form, setForm]               = useState(EMPTY_CAMPAIGN);
+export default function CampaignForm({ onCreated, onSuccess, onToast }) {
+  const [form, setForm]                 = useState(EMPTY_CAMPAIGN);
   const [pendingRules, setPendingRules] = useState([]);
-  const [currentRule, setCurrentRule] = useState(EMPTY_RULE);
-  const [submitting, setSubmitting]   = useState(false);
+  const [currentRule, setCurrentRule]   = useState(EMPTY_RULE);
+  const [submitting, setSubmitting]     = useState(false);
 
   // ── Parent campaigns for picker ──────────────────────────────────────────
   const [rootCampaigns, setRootCampaigns] = useState([]);
@@ -59,6 +79,14 @@ export default function CampaignForm({ onCreated, onToast }) {
   const [compositeConditions, setCompositeConditions] = useState([{ ...EMPTY_CONDITION }]);
 
   const nameRef = useRef(null);
+
+  // ── Reset entire form state ──────────────────────────────────────────────
+  function resetForm() {
+    setForm(EMPTY_CAMPAIGN);
+    setPendingRules([]);
+    setCurrentRule(EMPTY_RULE);
+    resetCompositeState();
+  }
 
   function handleCampaignChange(e) {
     const { name, value } = e.target;
@@ -197,25 +225,24 @@ export default function CampaignForm({ onCreated, onToast }) {
               ruleErr.response?.data?.error ?? 'Unknown error'
             }`,
           });
-          onCreated();
-          setForm(EMPTY_CAMPAIGN);
-          setPendingRules([]);
+          onCreated?.();
+          resetForm();
+          onSuccess?.();
           return;
         }
       }
 
       // ── Step 3: Success ───────────────────────────────────────────────────
       const ruleCount = pendingRules.length;
-      onCreated();
+      onCreated?.();
       onToast({
         type: 'success',
         message: `Campaign "${data.campaign.name}" created as DRAFT` +
           (ruleCount > 0 ? ` with ${ruleCount} rule${ruleCount !== 1 ? 's' : ''}.` : '.'),
       });
-      setForm(EMPTY_CAMPAIGN);
-      setPendingRules([]);
-      resetCompositeState();
-      nameRef.current?.focus();
+
+      resetForm();
+      onSuccess?.();
 
     } catch (err) {
       const status = err.response?.status;
@@ -229,6 +256,11 @@ export default function CampaignForm({ onCreated, onToast }) {
     }
   }
 
+  function handleCancel() {
+    resetForm();
+    onSuccess?.();
+  }
+
   // COMPOSITE uses its own condition inputs; placeholder only used for simple types.
   const rulePlaceholder = currentRule.rule_type === 'MIN_DEPOSIT'
     ? 'e.g. 5000'
@@ -239,17 +271,13 @@ export default function CampaignForm({ onCreated, onToast }) {
   return (
     <form
       id="campaign-form"
-      className="p-6"
+      className="space-y-6"
       onSubmit={handleSubmit}
       noValidate
       aria-label="Create a new campaign"
     >
-      <h2 className="text-text-1 font-bold text-base mb-5 pb-4 border-b border-border">
-        Create New Campaign
-      </h2>
-
       {/* ── Core campaign fields ──────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Campaign Name */}
         <div>
           <label htmlFor="camp-name" className={LABEL_CLS}>Campaign Name</label>
@@ -261,6 +289,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             className={INPUT_CLS}
           />
         </div>
+
         {/* Campaign Code — the Temenos attribution key */}
         <div>
           <label htmlFor="camp-code" className={LABEL_CLS}>
@@ -278,6 +307,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             Temenos must send this exact code in the webhook <code className="font-mono">campaign_code</code> field.
           </p>
         </div>
+
         {/* Start Date */}
         <div>
           <label htmlFor="camp-start" className={LABEL_CLS}>Start Date</label>
@@ -287,6 +317,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             required className={INPUT_CLS}
           />
         </div>
+
         {/* End Date */}
         <div>
           <label htmlFor="camp-end" className={LABEL_CLS}>End Date</label>
@@ -296,6 +327,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             required className={INPUT_CLS}
           />
         </div>
+
         {/* Reward Type */}
         <div>
           <label htmlFor="camp-reward-type" className={LABEL_CLS}>Reward Type</label>
@@ -308,6 +340,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             <option value="BADGE">BADGE</option>
           </select>
         </div>
+
         {/* Reward Value */}
         <div>
           <label htmlFor="camp-reward-value" className={LABEL_CLS}>Reward Value</label>
@@ -318,6 +351,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             required autoComplete="off" className={INPUT_CLS}
           />
         </div>
+
         {/* Reward Threshold */}
         <div>
           <label htmlFor="camp-threshold" className={LABEL_CLS}>
@@ -331,6 +365,7 @@ export default function CampaignForm({ onCreated, onToast }) {
             min="0" autoComplete="off" className={INPUT_CLS}
           />
         </div>
+
         {/* Description — full width */}
         <div className="sm:col-span-2 lg:col-span-3">
           <label htmlFor="camp-desc" className={LABEL_CLS}>
@@ -344,107 +379,117 @@ export default function CampaignForm({ onCreated, onToast }) {
             autoComplete="off" className={INPUT_CLS}
           />
         </div>
+
         {/* Parent Campaign — full width */}
         <div className="sm:col-span-2 lg:col-span-3">
           <label htmlFor="camp-parent" className={LABEL_CLS}>
             Parent Campaign{' '}
-            <span className="normal-case font-normal text-text-3">(optional — creates a sub-campaign)</span>
+            <span className="normal-case font-normal text-text-3">(optional — make this a sub-campaign)</span>
           </label>
           <select
-            id="camp-parent" name="parent_id"
-            value={form.parent_id} onChange={handleCampaignChange}
+            id="camp-parent"
+            name="parent_id"
+            value={form.parent_id}
+            onChange={handleCampaignChange}
             className={INPUT_CLS}
+            aria-label="Parent campaign picker"
           >
-            <option value="">— None (root campaign) —</option>
-            {rootCampaigns.map(p => (
-              <option key={p.id} value={p.id}>
-                {p.name}{p.campaign_code ? ` (${p.campaign_code})` : ''} · {p.status}
+            <option value="">None (Root Campaign)</option>
+            {rootCampaigns.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.name} {c.campaign_code ? `(${c.campaign_code})` : ''}
               </option>
             ))}
           </select>
           <p className="mt-1 text-[10px] text-text-3 leading-relaxed">
-            Only root campaigns are shown. A child campaign cannot itself be a parent.
+            Linking to a parent creates a sub-campaign. Sub-campaigns cannot themselves have children.
           </p>
         </div>
       </div>
 
       {/* ── Rules Builder ─────────────────────────────────────────────────── */}
-      <div className="mb-6 bg-panel border border-border rounded-lg p-5">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-4">
-          <span className="text-text-1 font-semibold text-sm">Qualification Rules</span>
-          <span className="text-text-3 text-xs">Rules are evaluated in order — all must pass</span>
-        </div>
+      <div className="p-4 bg-bg border border-border rounded-lg">
+        <h3 className="text-text-1 font-bold text-sm mb-1">
+          Qualification Rules{' '}
+          <span className="font-normal text-text-3 text-xs">(optional)</span>
+        </h3>
+        <p className="text-text-3 text-xs mb-4">
+          Add rules that a customer referral must satisfy to qualify for this campaign's reward.
+        </p>
 
         {/* Rule input row */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
           <div>
             <label htmlFor="rule-type" className={LABEL_CLS}>Rule Type</label>
             <select
-              id="rule-type" name="rule_type"
+              id="rule-type"
+              name="rule_type"
               value={currentRule.rule_type}
               onChange={handleRuleChange}
               className={INPUT_CLS}
             >
               {RULE_TYPES.map(rt => (
-                <option key={rt} value={rt}>{rt.replace('_', ' ')}</option>
+                <option key={rt.value} value={rt.value}>{rt.label}</option>
               ))}
             </select>
           </div>
 
-          {/* MIN_DEPOSIT and ACCOUNT_TYPE — simple operator + value */}
-          {currentRule.rule_type !== 'COMPOSITE' && (
-            <>
-              <div>
-                <label htmlFor="rule-operator" className={LABEL_CLS}>Operator</label>
-                <select
-                  id="rule-operator" name="operator"
-                  value={currentRule.operator}
-                  onChange={handleRuleChange}
-                  className={INPUT_CLS}
-                >
-                  {OPERATORS.map(op => (
-                    <option key={op.value} value={op.value}>{op.label}</option>
-                  ))}
-                </select>
-              </div>
+          <div>
+            <label htmlFor="rule-operator" className={LABEL_CLS}>Operator</label>
+            <select
+              id="rule-operator"
+              name="operator"
+              value={currentRule.operator}
+              onChange={handleRuleChange}
+              disabled={currentRule.rule_type === 'COMPOSITE'}
+              className={`${INPUT_CLS} disabled:opacity-40 disabled:cursor-not-allowed`}
+            >
+              {OPERATORS.map(op => (
+                <option key={op.value} value={op.value}>{op.label}</option>
+              ))}
+            </select>
+          </div>
 
-              <div>
-                <label htmlFor="rule-value" className={LABEL_CLS}>Value</label>
-                <Input
-                  id="rule-value" name="rule_value_raw" type="text"
-                  placeholder={rulePlaceholder}
-                  value={currentRule.rule_value_raw}
-                  onChange={handleRuleChange}
-                  autoComplete="off" className={INPUT_CLS}
-                />
-              </div>
-            </>
-          )}
+          <div>
+            <label htmlFor="rule-value" className={LABEL_CLS}>
+              Rule Value {currentRule.rule_type === 'COMPOSITE' && <span className="font-normal text-text-3">(configured below)</span>}
+            </label>
+            <Input
+              id="rule-value"
+              name="rule_value_raw"
+              type="text"
+              placeholder={rulePlaceholder}
+              value={currentRule.rule_value_raw}
+              onChange={handleRuleChange}
+              disabled={currentRule.rule_type === 'COMPOSITE'}
+              autoComplete="off"
+              className={`${INPUT_CLS} disabled:opacity-40 disabled:cursor-not-allowed`}
+            />
+          </div>
         </div>
 
-        {/* COMPOSITE rule builder — rendered below the type row */}
+        {/* ── COMPOSITE builder panel ──────────────────────────────────────── */}
         {currentRule.rule_type === 'COMPOSITE' && (
-          <div className="mb-4 border border-border rounded-md p-4 bg-bg">
-            {/* Logical operator selector */}
-            <div className="flex items-center gap-4 mb-4">
-              <span className={LABEL_CLS + ' mb-0'}>Logical Operator</span>
-              <div className="flex gap-3">
+          <div className="mb-4 p-3 bg-surface border border-gold/40 rounded-lg">
+            <div className="flex items-center gap-3 mb-3">
+              <span className="text-xs font-semibold text-text-1">Combine conditions using:</span>
+              <div className="inline-flex rounded border border-border overflow-hidden">
                 {['AND', 'OR'].map(op => (
-                  <label key={op} className="flex items-center gap-1.5 cursor-pointer text-sm text-text-1">
-                    <input
-                      type="radio"
-                      name="compositeLogicalOp"
-                      value={op}
-                      checked={compositeLogicalOp === op}
-                      onChange={() => setCompositeLogicalOp(op)}
-                      className="accent-brand"
-                    />
+                  <button
+                    key={op}
+                    type="button"
+                    onClick={() => setCompositeLogicalOp(op)}
+                    className={`px-3 py-1 text-xs font-bold transition-colors ${
+                      compositeLogicalOp === op
+                        ? 'bg-brand text-white'
+                        : 'bg-surface text-text-2 hover:bg-bg'
+                    }`}
+                  >
                     {op}
-                  </label>
+                  </button>
                 ))}
               </div>
-              <span className="text-text-3 text-xs ml-auto">
+              <span className="text-[11px] text-text-3">
                 {compositeLogicalOp === 'AND'
                   ? 'All conditions must pass'
                   : 'At least one condition must pass'}
@@ -501,7 +546,7 @@ export default function CampaignForm({ onCreated, onToast }) {
                       aria-label={`Remove condition ${idx + 1}`}
                       className="text-text-3 hover:text-reject-txt text-sm font-bold px-2 py-2.5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                     >
-                      x
+                      ✕
                     </button>
                   </div>
                 </div>
@@ -558,15 +603,28 @@ export default function CampaignForm({ onCreated, onToast }) {
         )}
       </div>
 
-      <Button
-        id="submit-campaign-btn"
-        type="submit"
-        disabled={submitting}
-        className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-semibold px-5 py-2.5 h-auto rounded-md transition-colors shadow-sm disabled:opacity-55 disabled:cursor-not-allowed"
-      >
-        {submitting && <Spinner small />}
-        {submitting ? 'Creating…' : 'Create Campaign'}
-      </Button>
+      {/* ── Form Actions ──────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-end gap-3 pt-4 border-t border-border">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={submitting}
+          onClick={handleCancel}
+          className="border-border text-text-2 hover:bg-surface px-4 py-2 text-sm rounded-md transition-colors"
+        >
+          Cancel
+        </Button>
+
+        <Button
+          id="submit-campaign-btn"
+          type="submit"
+          disabled={submitting}
+          className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-semibold px-5 py-2.5 h-auto rounded-md transition-colors shadow-sm disabled:opacity-55 disabled:cursor-not-allowed"
+        >
+          {submitting && <Spinner small />}
+          {submitting ? 'Creating…' : 'Create Campaign'}
+        </Button>
+      </div>
     </form>
   );
 }

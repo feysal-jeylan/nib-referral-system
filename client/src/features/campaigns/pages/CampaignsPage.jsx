@@ -1,17 +1,17 @@
 /**
  * features/campaigns/pages/CampaignsPage.jsx
  * ────────────────────────────────────────────
- * Phase 2: Full campaigns page with:
- *   - CampaignForm (admin)
- *   - Search + status filter
- *   - Minimal-row table (Name, Code, Dates, Status, Actions)
- *   - "View Details" shadcn Dialog — shows full rules + Edit/Delete
- *   - Server-side pagination
+ * Campaign management interface for Admins:
+ *   - Page header with "+ New Campaign" modal trigger
+ *   - Modal (shadcn Dialog) hosting the full Rules Builder CampaignForm
+ *   - Minimal-row data table with details dialog, edit dialog, delete dialog
+ *   - Status filtering, search, and server-side pagination
  *
  * Props: user, isAdmin, onToast
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Plus } from 'lucide-react';
 import api from '@/services/api';
 
 import CampaignForm from '@/features/campaigns/CampaignForm';
@@ -23,8 +23,12 @@ import Spinner    from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
 import { Button } from '@/components/ui/button';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-  DialogDescription, DialogFooter,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
 } from '@/components/ui/dialog';
 
 const BRAND     = '#8A4D1F';
@@ -327,7 +331,8 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
   const [page,    setPage]    = useState(1);
   const LIMIT = 10;
 
-  // Modal state
+  // Modal states
+  const [isFormOpen,   setIsFormOpen]   = useState(false); // New Campaign modal
   const [viewTarget,   setViewTarget]   = useState(null);  // campaign for details dialog
   const [deleteTarget, setDeleteTarget] = useState(null);  // { id, name }
   const [editTarget,   setEditTarget]   = useState(null);  // campaign for edit dialog
@@ -406,17 +411,29 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
   return (
     <div className="p-6 space-y-6">
 
-      {/* ── Admin: Campaign Form ─────────────────────────────────────────── */}
-      {isAdmin && (
-        <section
-          className="bg-white rounded-xl shadow-sm overflow-hidden"
-          style={{ border: `1px solid ${BORDER}` }}
-        >
-          <CampaignForm onCreated={refresh} onToast={onToast} />
-        </section>
-      )}
+      {/* ── 1. Page Header with "+ New Campaign" CTA ──────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight" style={{ color: CHOCOLATE }}>
+            Campaign Management
+          </h1>
+          <p className="text-xs mt-0.5" style={{ color: MUTED }}>
+            Configure and oversee referral qualification campaigns, reward tiers, and rule logic.
+          </p>
+        </div>
 
-      {/* ── Campaign Table ───────────────────────────────────────────────── */}
+        {isAdmin && (
+          <Button
+            onClick={() => setIsFormOpen(true)}
+            className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white font-semibold text-sm px-4 py-2.5 rounded-lg shadow-sm transition-all"
+          >
+            <Plus size={16} strokeWidth={2.4} />
+            <span>New Campaign</span>
+          </Button>
+        )}
+      </div>
+
+      {/* ── 2. Campaign Table Section ──────────────────────────────────────── */}
       <section
         className="bg-white rounded-xl shadow-sm overflow-hidden"
         style={{ border: `1px solid ${BORDER}` }}
@@ -426,9 +443,9 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
           style={{ borderBottom: `1px solid ${BORDER}` }}
         >
           <div>
-            <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>Campaign Management</h2>
+            <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>All Campaigns</h2>
             <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-              Create, activate, and manage referral campaigns.
+              Overview of active and draft campaigns configured in the system.
             </p>
           </div>
           {meta && (
@@ -453,8 +470,11 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
             <p className="text-sm" style={{ color: MUTED }}>Loading campaigns…</p>
           </div>
         ) : data.length === 0 ? (
-          <EmptyState icon="📋" title="No campaigns found"
-            sub={search || status ? 'Try clearing the filters.' : 'Create your first campaign above.'} />
+          <EmptyState
+            icon="📋"
+            title="No campaigns found"
+            sub={search || status ? 'Try clearing the filters.' : 'Click "+ New Campaign" above to create your first campaign.'}
+          />
         ) : (
           <>
             {/* Minimal table */}
@@ -537,7 +557,30 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
         )}
       </section>
 
-      {/* ── Dialogs ──────────────────────────────────────────────────────── */}
+      {/* ── 3. Create Campaign Dialog (Modal) ─────────────────────────────── */}
+      <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-bg border border-border rounded-xl p-0 sm:max-w-4xl">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b border-border bg-surface sticky top-0 z-10">
+            <DialogTitle className="text-lg font-bold" style={{ color: CHOCOLATE }}>
+              Create New Campaign
+            </DialogTitle>
+            <DialogDescription className="text-xs" style={{ color: MUTED }}>
+              Define campaign parameters, rewards, and referral qualification rules.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="p-6">
+            <CampaignForm
+              key={isFormOpen ? 'open' : 'closed'}
+              onCreated={refresh}
+              onSuccess={() => setIsFormOpen(false)}
+              onToast={onToast}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 4. Action Dialogs (Details, Delete, Inline Edit) ──────────────── */}
       <DetailsDialog
         campaign={viewTarget}
         open={!!viewTarget}
