@@ -132,7 +132,7 @@ async function approveAgent(req, res, next) {
     if (err.code === 'P2002') {
       return res.status(409).json({ error: 'A user account for this agent already exists.', code: 'DUPLICATE_ENTRY' });
     }
-    console.error('[PATCH /api/agents/:id/approve] Prisma error:', err.message);
+    console.error('[PATCH /api/agents/:id/approve] Error:', err.message);
     next(err);
   }
 }

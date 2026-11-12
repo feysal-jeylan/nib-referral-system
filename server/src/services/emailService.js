@@ -17,12 +17,12 @@ const nodemailer = require('nodemailer');
 
 // ── Transporter factory ───────────────────────────────────────────────────────
 async function createTransporter() {
-  // Production: use real SMTP credentials from environment
-  if (process.env.SMTP_HOST) {
+  // Production/override: use real SMTP credentials if ALL are present in .env
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     return nodemailer.createTransport({
       host:   process.env.SMTP_HOST,
-      port:   parseInt(process.env.SMTP_PORT || '587', 10),
-      secure: process.env.SMTP_SECURE === 'true',
+      port:   parseInt(process.env.SMTP_PORT || '465', 10),
+      secure: process.env.SMTP_SECURE !== 'false', // default true for port 465
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
@@ -30,13 +30,15 @@ async function createTransporter() {
     });
   }
 
-  // Development/Test: use Ethereal (auto-generates a test account)
+  // Development/Test: use Ethereal (auto-generates a test account).
+  // Port 465 (SMTPS / direct TLS) is used instead of 587 (STARTTLS)
+  // because many ISPs and corporate networks silently block port 587.
   const testAccount = await nodemailer.createTestAccount();
   console.log('[emailService] 📬 Ethereal test account:', testAccount.user);
   return nodemailer.createTransport({
     host:   'smtp.ethereal.email',
-    port:   587,
-    secure: false,
+    port:   465,
+    secure: true,          // direct TLS — avoids STARTTLS handshake on port 587
     auth: {
       user: testAccount.user,
       pass: testAccount.pass,
@@ -56,23 +58,24 @@ async function sendActivationEmail(toEmail, agentName, rawToken) {
 
   const transporter = await createTransporter();
 
-  const info = await transporter.sendMail({
-    from:    `"NIB Referral System" <no-reply@nib.et>`,
-    to:      toEmail,
-    subject: 'Activate Your NIB Referral Agent Account',
-    text: [
-      `Hello ${agentName},`,
-      '',
-      'Your NIB Referral System agent account has been approved!',
-      'Click the link below to set your password and activate your account.',
-      'This link expires in 30 minutes.',
-      '',
-      activateLink,
-      '',
-      'If you did not request this, you can safely ignore this email.',
-      '',
-      '— NIB Bank',
-    ].join('\n'),
+  try {
+    const info = await transporter.sendMail({
+      from:    `"NIB Referral System" <no-reply@nib.et>`,
+      to:      toEmail,
+      subject: 'Activate Your NIB Referral Agent Account',
+      text: [
+        `Hello ${agentName},`,
+        '',
+        'Your NIB Referral System agent account has been approved!',
+        'Click the link below to set your password and activate your account.',
+        'This link expires in 30 minutes.',
+        '',
+        activateLink,
+        '',
+        'If you did not request this, you can safely ignore this email.',
+        '',
+        '— NIB Bank',
+      ].join('\n'),
     html: `
 <!DOCTYPE html>
 <html>
@@ -159,16 +162,27 @@ async function sendActivationEmail(toEmail, agentName, rawToken) {
 </body>
 </html>
     `.trim(),
-  });
+    });
 
-  // Log the Ethereal preview URL in development
-  const previewUrl = nodemailer.getTestMessageUrl(info);
-  if (previewUrl) {
-    console.log(`[emailService] 📧 Activation email sent to: ${toEmail}`);
-    console.log(`[emailService] 👁  Preview URL: ${previewUrl}`);
+    // Log the Ethereal preview URL in development
+    const previewUrl = nodemailer.getTestMessageUrl(info);
+    if (previewUrl) {
+      console.log(`[emailService] 📧 Activation email sent to: ${toEmail}`);
+      console.log(`[emailService] 👁  Preview URL: ${previewUrl}`);
+    }
+
+    return info;
+  } catch (emailErr) {
+    // ── Dev-fallback ────────────────────────────────────────────────────────────
+    // If the SMTP connection times out or fails (e.g. port 587/465 blocked on
+    // the local network), do NOT crash the approval flow.
+    // Print the activation link directly to the server console so the developer
+    // can still test the full activation flow without a working SMTP connection.
+    console.warn(`[emailService] ⚠️  Email delivery failed: ${emailErr.message}`);
+    console.warn(`[emailService] 🔗 [DEV-FALLBACK] Activation Link for ${toEmail}:`);
+    console.warn(`[emailService] 🔗 ${activateLink}`);
+    return null; // non-fatal — the DB transaction already succeeded
   }
-
-  return info;
 }
 
 // ── sendResendEmail (alias — same template, same function) ────────────────────

@@ -25,9 +25,10 @@ model User {
   agent_id             Int?
   created_at           DateTime  @default(now()) @db.Timestamp(6)
   must_change_password Boolean   @default(true)
-  activationToken      String?   @db.VarChar(255)
-  activationExpires    DateTime?
-  isActivated          Boolean   @default(false)
+  
+  activationToken      String?   @map("activation_token") @db.VarChar(255)
+  activationExpires    DateTime? @map("activation_expires") @db.Timestamp(6)
+  isActivated          Boolean   @default(false) @map("is_activated")
 
   agent Agent? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
 

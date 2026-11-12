@@ -18,16 +18,16 @@ import api from '@/services/api';
 
 export default function ActivateAccount() {
   const params = new URLSearchParams(window.location.search);
-  const token  = params.get('token') ?? '';
+  const token = params.get('token') ?? '';
 
-  const [password,    setPassword]    = useState('');
-  const [confirm,     setConfirm]     = useState('');
-  const [status,      setStatus]      = useState('idle'); // idle | loading | success | error | expired
-  const [message,     setMessage]     = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [status, setStatus] = useState('idle'); // idle | loading | success | error | expired
+  const [message, setMessage] = useState('');
   const [resendEmail, setResendEmail] = useState('');
-  const [resendMsg,   setResendMsg]   = useState('');
-  const [resending,   setResending]   = useState(false);
-  const [showPass,    setShowPass]    = useState(false);
+  const [resendMsg, setResendMsg] = useState('');
+  const [resending, setResending] = useState(false);
+  const [showPass, setShowPass] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
   // ── Set password ─────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ export default function ActivateAccount() {
                   color: '#3E2723',
                 }}
                 onFocus={e => (e.target.style.borderColor = '#8A4D1F')}
-                onBlur={e  => (e.target.style.borderColor = '#D6CCC5')}
+                onBlur={e => (e.target.style.borderColor = '#D6CCC5')}
               />
             </div>
 
@@ -206,7 +206,7 @@ export default function ActivateAccount() {
                 className="w-full px-4 py-2.5 pr-10 rounded-lg border outline-none transition text-sm"
                 style={{ borderColor: '#D6CCC5', backgroundColor: '#FFFFFF', color: '#3E2723' }}
                 onFocus={e => (e.target.style.borderColor = '#8A4D1F')}
-                onBlur={e  => (e.target.style.borderColor = '#D6CCC5')}
+                onBlur={e => (e.target.style.borderColor = '#D6CCC5')}
                 autoComplete="new-password"
               />
               <button
@@ -226,8 +226,8 @@ export default function ActivateAccount() {
                   style={{
                     width: `${Math.min(100, (password.length / 16) * 100)}%`,
                     backgroundColor:
-                      password.length < 8  ? '#EF4444' :
-                      password.length < 12 ? '#D4AF37' : '#16A34A',
+                      password.length < 8 ? '#EF4444' :
+                        password.length < 12 ? '#D4AF37' : '#16A34A',
                   }}
                 />
               </div>
@@ -252,7 +252,7 @@ export default function ActivateAccount() {
                   color: '#3E2723',
                 }}
                 onFocus={e => (e.target.style.borderColor = '#8A4D1F')}
-                onBlur={e  => (e.target.style.borderColor = confirm && confirm !== password ? '#EF4444' : '#D6CCC5')}
+                onBlur={e => (e.target.style.borderColor = confirm && confirm !== password ? '#EF4444' : '#D6CCC5')}
                 autoComplete="new-password"
               />
               <button
@@ -333,3 +333,4 @@ function PageShell({ children }) {
     </div>
   );
 }
+
