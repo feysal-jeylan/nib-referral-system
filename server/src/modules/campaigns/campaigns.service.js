@@ -86,18 +86,35 @@ async function deleteCampaignWithRules(campaignId) {
   ]);
 }
 
-// ── List campaigns (paginated) ────────────────────────────────────────────────
-async function listCampaigns(page, limit) {
+// ── List campaigns (paginated, filtered) ──────────────────────────────────────
+async function listCampaigns(page, limit, { search = '', status = '' } = {}) {
   const skip = (page - 1) * limit;
-  return prisma.$transaction([
-    prisma.campaign.count(),
+
+  const where = {
+    ...(status ? { status } : {}),
+    ...(search ? {
+      OR: [
+        { name:          { contains: search, mode: 'insensitive' } },
+        { campaign_code: { contains: search, mode: 'insensitive' } },
+      ],
+    } : {}),
+  };
+
+  const [total, rows] = await prisma.$transaction([
+    prisma.campaign.count({ where }),
     prisma.campaign.findMany({
+      where,
       skip,
       take:    limit,
       orderBy: { created_at: 'desc' },
       include: { rules: true },
     }),
   ]);
+
+  return {
+    data: rows,
+    meta: { total: Number(total), page, limit, totalPages: Math.ceil(Number(total) / limit) },
+  };
 }
 
 // ── Campaign stats ────────────────────────────────────────────────────────────

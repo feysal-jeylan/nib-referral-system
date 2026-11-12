@@ -11,10 +11,13 @@ const prisma = require('@/config/db');
 
 const ALLOWED_STATUSES = ['SUCCESSFUL', 'REJECTED'];
 
-// ── List referrals (RBAC-filtered, paginated) ─────────────────────────────────
-async function listReferrals(role, agentId, page, limit) {
-  const skip  = (page - 1) * limit;
-  const where = role === 'AGENT' ? { agent_id: agentId } : {};
+// ── List referrals (RBAC-filtered, paginated, status-filtered) ────────────────
+async function listReferrals(role, agentId, page, limit, { status = '' } = {}) {
+  const skip = (page - 1) * limit;
+
+  const baseWhere   = role === 'AGENT' ? { agent_id: agentId } : {};
+  const statusFilter = status ? { status } : {};
+  const where = { ...baseWhere, ...statusFilter };
 
   const [total, rows] = await prisma.$transaction([
     prisma.referral.count({ where }),
@@ -27,7 +30,7 @@ async function listReferrals(role, agentId, page, limit) {
     }),
   ]);
 
-  const referrals = rows.map(r => ({
+  const data = rows.map(r => ({
     id:             r.id,
     customer_name:  r.customer_name,
     customer_phone: r.customer_phone,
@@ -37,7 +40,10 @@ async function listReferrals(role, agentId, page, limit) {
     created_at:     r.created_at,
   }));
 
-  return { total: Number(total), page, limit, referrals };
+  return {
+    data,
+    meta: { total: Number(total), page, limit, totalPages: Math.ceil(Number(total) / limit) },
+  };
 }
 
 // ── Update referral status ────────────────────────────────────────────────────

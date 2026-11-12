@@ -12,10 +12,16 @@ const svc = require('./referrals.service');
 // ── GET /api/referrals ────────────────────────────────────────────────────────
 async function listReferrals(req, res, next) {
   try {
-    const page  = Math.max(1, parseInt(req.query.page,  10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const page   = Math.max(1,  parseInt(req.query.page,  10) || 1);
+    const limit  = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const status = (req.query.status ?? '').trim().toUpperCase();
 
-    const result = await svc.listReferrals(req.user.role, req.user.agent_id, page, limit);
+    const VALID_STATUSES = ['PENDING', 'SUCCESSFUL', 'REJECTED'];
+    const safeStatus = VALID_STATUSES.includes(status) ? status : '';
+
+    const result = await svc.listReferrals(
+      req.user.role, req.user.agent_id, page, limit, { status: safeStatus }
+    );
     return res.status(200).json(result);
   } catch (err) {
     console.error('[GET /api/referrals] Prisma error:', err.message);

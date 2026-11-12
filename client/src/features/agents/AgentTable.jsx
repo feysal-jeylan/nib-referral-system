@@ -1,25 +1,41 @@
 /**
  * features/agents/AgentTable.jsx
  * ───────────────────────────────
- * Displays all agents (or just the current agent for non-admin users).
- * Pure display component — no fetch calls.
- * Pure Tailwind — no App.css dependency.
+ * Displays agents. Pure display — no fetch calls.
+ * Phase 2: Accepts actioning/onApprove/onReject props so PENDING
+ * agents can be managed inline (replaces the old Dashboard section).
  *
  * Props:
- *   agents  {object[]}
- *   loading {boolean}
- *   isAdmin {boolean}
+ *   agents     {object[]}
+ *   loading    {boolean}
+ *   isAdmin    {boolean}
+ *   actioning  {Set<number>}        — IDs currently being acted on
+ *   onApprove  {(id, name) => void} — admin only
+ *   onReject   {(id, name) => void} — admin only
  */
 import Spinner from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
 import { RewardBadge, AgentStatusPill } from '@/components/ui/Badge';
 
-export default function AgentTable({ agents, loading, isAdmin }) {
+const BRAND     = '#8A4D1F';
+const CHOCOLATE = '#3E2723';
+const MUTED     = '#9C8577';
+const BORDER    = 'rgba(138,77,31,0.10)';
+const IVORY     = '#FAF8F5';
+
+export default function AgentTable({
+  agents,
+  loading,
+  isAdmin,
+  actioning = new Set(),
+  onApprove,
+  onReject,
+}) {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16">
         <Spinner />
-        <p className="text-text-3 text-sm">Loading agents…</p>
+        <p className="text-sm" style={{ color: MUTED }}>Loading agents…</p>
       </div>
     );
   }
@@ -33,42 +49,92 @@ export default function AgentTable({ agents, loading, isAdmin }) {
     );
   }
 
+  const showActions = isAdmin && (onApprove || onReject);
+
   return (
     <div className="overflow-x-auto w-full">
       <table className="min-w-[800px] w-full text-sm border-collapse" aria-label="Agent list">
         <thead>
-          <tr className="bg-panel border-b border-border">
-            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">#</th>
-            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Name</th>
-            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Referral Code</th>
-            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Successful Referrals</th>
-            <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Reward Tier</th>
-            {isAdmin && <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Status</th>}
+          <tr style={{ background: IVORY, borderBottom: `1px solid ${BORDER}` }}>
+            {['#', 'Name', 'Referral Code', 'Referrals', 'Reward Tier', 'Status',
+              ...(showActions ? ['Actions'] : [])
+            ].map(h => (
+              <th
+                key={h}
+                scope="col"
+                className="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-wider"
+                style={{ color: MUTED }}
+              >
+                {h}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
-          {agents.map((a, i) => (
-            <tr key={a.id} className="border-b border-border last:border-0 hover:bg-bg transition-colors duration-150">
-              <td className="px-6 py-4 text-text-3 text-xs tabular-nums">{i + 1}</td>
-              <td className="px-6 py-4 text-text-1 font-medium">{a.name}</td>
-              <td className="px-6 py-4">
-                {a.referral_code
-                  ? <code className="font-mono text-xs bg-brand-light text-brand px-2 py-0.5 rounded">{a.referral_code}</code>
-                  : <span className="text-text-3 text-xs">—</span>
-                }
-              </td>
-              <td className="px-6 py-4">
-                <span
-                  className="inline-flex items-center justify-center min-w-[28px] h-7 rounded-full bg-gold-light text-[#7C5900] text-xs font-bold px-2"
-                  title="Successful referrals"
-                >
-                  {a.successful_referrals}
-                </span>
-              </td>
-              <td className="px-6 py-4"><RewardBadge tier={a.current_reward} /></td>
-              {isAdmin && <td className="px-6 py-4"><AgentStatusPill status={a.status} /></td>}
-            </tr>
-          ))}
+          {agents.map((a, i) => {
+            const busy = actioning.has(a.id);
+            return (
+              <tr
+                key={a.id}
+                className="transition-colors duration-100"
+                style={{ borderBottom: `1px solid ${BORDER}` }}
+                onMouseEnter={e => { e.currentTarget.style.background = IVORY; }}
+                onMouseLeave={e => { e.currentTarget.style.background = ''; }}
+              >
+                <td className="px-6 py-4 text-xs tabular-nums" style={{ color: MUTED }}>{i + 1}</td>
+
+                <td className="px-6 py-4 font-medium" style={{ color: CHOCOLATE }}>{a.name}</td>
+
+                <td className="px-6 py-4">
+                  {a.referral_code
+                    ? <code className="font-mono text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(138,77,31,0.08)', color: BRAND }}>{a.referral_code}</code>
+                    : <span className="text-xs" style={{ color: MUTED }}>—</span>
+                  }
+                </td>
+
+                <td className="px-6 py-4">
+                  <span
+                    className="inline-flex items-center justify-center min-w-[28px] h-7 rounded-full text-xs font-bold px-2"
+                    style={{ background: 'rgba(212,175,55,0.15)', color: '#7C5900' }}
+                    title="Successful referrals"
+                  >
+                    {a.successful_referrals}
+                  </span>
+                </td>
+
+                <td className="px-6 py-4"><RewardBadge tier={a.current_reward} /></td>
+
+                <td className="px-6 py-4"><AgentStatusPill status={a.status} /></td>
+
+                {showActions && (
+                  <td className="px-6 py-4">
+                    {a.status === 'PENDING' ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          disabled={busy}
+                          onClick={() => onApprove(a.id, a.name)}
+                          className="inline-flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded transition-colors disabled:opacity-50"
+                          style={{ background: 'rgba(46,125,50,0.10)', color: '#2E7D32', border: '1px solid rgba(46,125,50,0.25)' }}
+                        >
+                          {busy ? <Spinner small /> : '✓ Approve'}
+                        </button>
+                        <button
+                          disabled={busy}
+                          onClick={() => onReject(a.id, a.name)}
+                          className="inline-flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded transition-colors disabled:opacity-50"
+                          style={{ background: 'rgba(192,57,43,0.08)', color: '#C0392B', border: '1px solid rgba(192,57,43,0.25)' }}
+                        >
+                          {busy ? <Spinner small /> : '✕ Reject'}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-xs" style={{ color: MUTED }}>—</span>
+                    )}
+                  </td>
+                )}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

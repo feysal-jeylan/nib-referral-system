@@ -32,17 +32,28 @@ async function applyAsAgent({ name, phone, email }) {
   });
 }
 
-// ── List agents (RBAC-filtered) ───────────────────────────────────────────────
-async function listAgents(role, agentId) {
-  const where = role === 'AGENT' ? { id: agentId } : {};
+// ── List agents (RBAC-filtered, paginated, searchable) ───────────────────────
+async function listAgents(role, agentId, { page = 1, limit = 10, search = '', status = '' } = {}) {
+  const skip = (page - 1) * limit;
 
-  const agents = await prisma.agent.findMany({
-    where,
-    orderBy: { created_at: 'desc' },
-    include: { referrals: { select: { status: true } } },
-  });
+  // AGENT role: can only see their own record
+  const baseWhere = role === 'AGENT' ? { id: agentId } : {};
 
-  // reward_rules not in Prisma schema — use $queryRaw
+  // Admin filters
+  const statusFilter  = status  ? { status }  : {};
+  const searchFilter  = search
+    ? {
+        OR: [
+          { name:          { contains: search, mode: 'insensitive' } },
+          { phone:         { contains: search, mode: 'insensitive' } },
+          { referral_code: { contains: search, mode: 'insensitive' } },
+          { email:         { contains: search, mode: 'insensitive' } },
+        ],
+      }
+    : {};
+
+  const where = { ...baseWhere, ...statusFilter, ...searchFilter };
+
   const tiers = await prisma.$queryRaw`
     SELECT reward_name, min_referrals
     FROM   reward_rules
@@ -57,7 +68,18 @@ async function listAgents(role, agentId) {
     return tier;
   };
 
-  return agents.map(agent => {
+  const [total, agents] = await prisma.$transaction([
+    prisma.agent.count({ where }),
+    prisma.agent.findMany({
+      where,
+      skip,
+      take:    limit,
+      orderBy: { created_at: 'desc' },
+      include: { referrals: { select: { status: true } } },
+    }),
+  ]);
+
+  const data = agents.map(agent => {
     const successfulCount = agent.referrals.filter(r => r.status === 'SUCCESSFUL').length;
     return {
       id:                   agent.id,
@@ -70,6 +92,11 @@ async function listAgents(role, agentId) {
       current_reward:       getRewardTier(successfulCount),
     };
   });
+
+  return {
+    data,
+    meta: { total: Number(total), page, limit, totalPages: Math.ceil(Number(total) / limit) },
+  };
 }
 
 // ── ADMIN: create approved agent ──────────────────────────────────────────────

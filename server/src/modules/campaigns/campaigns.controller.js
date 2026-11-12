@@ -221,11 +221,16 @@ async function deleteCampaign(req, res, next) {
 // ── GET /api/campaigns ────────────────────────────────────────────────────────
 async function listCampaigns(req, res, next) {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const page   = Math.max(1,  parseInt(req.query.page,  10) || 1);
+    const limit  = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const search = (req.query.search ?? '').trim();
+    const status = (req.query.status ?? '').trim().toUpperCase();
 
-    const [total, rows] = await svc.listCampaigns(page, limit);
-    return res.status(200).json({ total: Number(total), page, limit, campaigns: rows });
+    const VALID_STATUSES = ['DRAFT', 'ACTIVE'];
+    const safeStatus = VALID_STATUSES.includes(status) ? status : '';
+
+    const result = await svc.listCampaigns(page, limit, { search, status: safeStatus });
+    return res.status(200).json(result);
   } catch (err) {
     console.error('[GET /api/campaigns] Prisma error:', err.message);
     next(err);

@@ -38,8 +38,18 @@ async function applyAsAgent(req, res, next) {
 // ── GET /api/agents ───────────────────────────────────────────────────────────
 async function listAgents(req, res, next) {
   try {
-    const shaped = await svc.listAgents(req.user.role, req.user.agent_id);
-    return res.status(200).json(shaped);
+    const page   = Math.max(1,   parseInt(req.query.page,  10) || 1);
+    const limit  = Math.min(50,  Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const search = (req.query.search ?? '').trim();
+    const status = (req.query.status ?? '').trim().toUpperCase();
+
+    const VALID_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'];
+    const safeStatus = VALID_STATUSES.includes(status) ? status : '';
+
+    const result = await svc.listAgents(req.user.role, req.user.agent_id, {
+      page, limit, search, status: safeStatus,
+    });
+    return res.status(200).json(result);
   } catch (err) {
     console.error('[GET /api/agents] Prisma error:', err.message);
     next(err);
