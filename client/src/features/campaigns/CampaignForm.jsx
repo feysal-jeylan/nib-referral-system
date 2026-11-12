@@ -21,6 +21,13 @@ import Spinner from '@/components/ui/Spinner';
 import { Input }  from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   RULE_TYPES,
   OPERATORS,
   OPERATOR_SYMBOL,
@@ -58,12 +65,15 @@ const INPUT_CLS =
   'placeholder:text-[#9C8577] placeholder:opacity-100 shadow-none transition-all duration-150 ' +
   'focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-white';
 
-const SELECT_CLS =
-  'h-auto w-full px-4 py-2.5 bg-white border border-[#E5DED6] rounded-md text-sm text-[#3E2723] font-medium ' +
-  'shadow-none transition-all duration-150 ' +
-  'focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-white';
+const SELECT_TRIGGER_CLS =
+  'w-full h-auto px-4 py-2.5 bg-white border border-[#E5DED6] rounded-md text-sm text-[#3E2723] font-medium ' +
+  'shadow-none transition-all duration-150 hover:bg-white ' +
+  'focus:border-gold focus:ring-1 focus:ring-gold focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-white';
 
-const OPTION_CLS = 'bg-white text-[#3E2723] py-1.5';
+const SELECT_CONTENT_CLS = 'bg-white border border-[#E5DED6] text-[#3E2723] shadow-lg z-[60]';
+
+const SELECT_ITEM_CLS =
+  'text-[#3E2723] cursor-pointer hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723] font-medium';
 
 const LABEL_CLS = 'block text-[11px] font-semibold text-[#3E2723] uppercase tracking-wide mb-1.5';
 
@@ -338,14 +348,18 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
         {/* Reward Type */}
         <div>
           <label htmlFor="camp-reward-type" className={LABEL_CLS}>Reward Type</label>
-          <select
-            id="camp-reward-type" name="reward_type"
-            value={form.reward_type} onChange={handleCampaignChange}
-            required className={SELECT_CLS}
+          <Select
+            value={form.reward_type}
+            onValueChange={val => setForm(prev => ({ ...prev, reward_type: val }))}
           >
-            <option value="CASH" className={OPTION_CLS}>CASH</option>
-            <option value="BADGE" className={OPTION_CLS}>BADGE</option>
-          </select>
+            <SelectTrigger id="camp-reward-type" className={SELECT_TRIGGER_CLS}>
+              <SelectValue placeholder="Select reward type" />
+            </SelectTrigger>
+            <SelectContent className={SELECT_CONTENT_CLS}>
+              <SelectItem value="CASH" className={SELECT_ITEM_CLS}>CASH</SelectItem>
+              <SelectItem value="BADGE" className={SELECT_ITEM_CLS}>BADGE</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {/* Reward Value */}
@@ -393,21 +407,22 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
             Parent Campaign{' '}
             <span className="normal-case font-normal text-text-3">(optional — make this a sub-campaign)</span>
           </label>
-          <select
-            id="camp-parent"
-            name="parent_id"
-            value={form.parent_id}
-            onChange={handleCampaignChange}
-            className={SELECT_CLS}
-            aria-label="Parent campaign picker"
+          <Select
+            value={form.parent_id ? String(form.parent_id) : 'none'}
+            onValueChange={val => setForm(prev => ({ ...prev, parent_id: val === 'none' ? '' : val }))}
           >
-            <option value="" className={OPTION_CLS}>None (Root Campaign)</option>
-            {rootCampaigns.map(c => (
-              <option key={c.id} value={c.id} className={OPTION_CLS}>
-                {c.name} {c.campaign_code ? `(${c.campaign_code})` : ''}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id="camp-parent" className={SELECT_TRIGGER_CLS} aria-label="Parent campaign picker">
+              <SelectValue placeholder="None (Root Campaign)" />
+            </SelectTrigger>
+            <SelectContent className={SELECT_CONTENT_CLS}>
+              <SelectItem value="none" className={SELECT_ITEM_CLS}>None (Root Campaign)</SelectItem>
+              {rootCampaigns.map(c => (
+                <SelectItem key={c.id} value={String(c.id)} className={SELECT_ITEM_CLS}>
+                  {c.name} {c.campaign_code ? `(${c.campaign_code})` : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <p className="mt-1 text-[10px] text-text-3 leading-relaxed">
             Linking to a parent creates a sub-campaign. Sub-campaigns cannot themselves have children.
           </p>
@@ -428,33 +443,48 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
           <div>
             <label htmlFor="rule-type" className={LABEL_CLS}>Rule Type</label>
-            <select
-              id="rule-type"
-              name="rule_type"
+            <Select
               value={currentRule.rule_type}
-              onChange={handleRuleChange}
-              className={SELECT_CLS}
+              onValueChange={val => setCurrentRule(prev => ({ ...prev, rule_type: val }))}
             >
-              {RULE_TYPES.map(rt => (
-                <option key={rt.value} value={rt.value} className={OPTION_CLS}>{rt.label}</option>
-              ))}
-            </select>
+              <SelectTrigger id="rule-type" className={SELECT_TRIGGER_CLS}>
+                <SelectValue placeholder="Select rule type" />
+              </SelectTrigger>
+              <SelectContent className={SELECT_CONTENT_CLS}>
+                {RULE_TYPES.map(rt => {
+                  const val = typeof rt === 'string' ? rt : rt.value;
+                  const lbl = typeof rt === 'string' ? rt : (rt.label || rt.value);
+                  return (
+                    <SelectItem key={val} value={val} className={SELECT_ITEM_CLS}>
+                      {lbl}
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
           </div>
 
           <div>
             <label htmlFor="rule-operator" className={LABEL_CLS}>Operator</label>
-            <select
-              id="rule-operator"
-              name="operator"
+            <Select
               value={currentRule.operator}
-              onChange={handleRuleChange}
+              onValueChange={val => setCurrentRule(prev => ({ ...prev, operator: val }))}
               disabled={currentRule.rule_type === 'COMPOSITE'}
-              className={`${SELECT_CLS} disabled:opacity-40 disabled:cursor-not-allowed`}
             >
-              {OPERATORS.map(op => (
-                <option key={op.value} value={op.value} className={OPTION_CLS}>{op.label}</option>
-              ))}
-            </select>
+              <SelectTrigger
+                id="rule-operator"
+                className={`${SELECT_TRIGGER_CLS} disabled:opacity-40 disabled:cursor-not-allowed`}
+              >
+                <SelectValue placeholder="Select operator" />
+              </SelectTrigger>
+              <SelectContent className={SELECT_CONTENT_CLS}>
+                {OPERATORS.map(op => (
+                  <SelectItem key={op.value} value={op.value} className={SELECT_ITEM_CLS}>
+                    {op.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div>
@@ -509,29 +539,39 @@ export default function CampaignForm({ onCreated, onSuccess, onToast }) {
                 <div key={idx} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end">
                   <div>
                     <label className={LABEL_CLS}>Field</label>
-                    <select
+                    <Select
                       value={cond.field}
-                      onChange={e => handleConditionChange(idx, 'field', e.target.value)}
-                      className={SELECT_CLS}
-                      aria-label={`Condition ${idx + 1} field`}
+                      onValueChange={val => handleConditionChange(idx, 'field', val)}
                     >
-                      {COMPOSITE_FIELDS.map(f => (
-                        <option key={f.value} value={f.value} className={OPTION_CLS}>{f.label}</option>
-                      ))}
-                    </select>
+                      <SelectTrigger className={SELECT_TRIGGER_CLS} aria-label={`Condition ${idx + 1} field`}>
+                        <SelectValue placeholder="Select field" />
+                      </SelectTrigger>
+                      <SelectContent className={SELECT_CONTENT_CLS}>
+                        {COMPOSITE_FIELDS.map(f => (
+                          <SelectItem key={f.value} value={f.value} className={SELECT_ITEM_CLS}>
+                            {f.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
                     <label className={LABEL_CLS}>Operator</label>
-                    <select
+                    <Select
                       value={cond.operator}
-                      onChange={e => handleConditionChange(idx, 'operator', e.target.value)}
-                      className={SELECT_CLS}
-                      aria-label={`Condition ${idx + 1} operator`}
+                      onValueChange={val => handleConditionChange(idx, 'operator', val)}
                     >
-                      {OPERATORS.map(op => (
-                        <option key={op.value} value={op.value} className={OPTION_CLS}>{op.label}</option>
-                      ))}
-                    </select>
+                      <SelectTrigger className={SELECT_TRIGGER_CLS} aria-label={`Condition ${idx + 1} operator`}>
+                        <SelectValue placeholder="Select operator" />
+                      </SelectTrigger>
+                      <SelectContent className={SELECT_CONTENT_CLS}>
+                        {OPERATORS.map(op => (
+                          <SelectItem key={op.value} value={op.value} className={SELECT_ITEM_CLS}>
+                            {op.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
                     <label className={LABEL_CLS}>Value</label>
