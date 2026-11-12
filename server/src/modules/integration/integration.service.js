@@ -8,6 +8,7 @@
 
 'use strict';
 
+const { Prisma }        = require('@prisma/client');
 const prisma            = require('@/config/db');
 const { evaluateRules } = require('@/services/ruleEngine');
 
@@ -221,30 +222,63 @@ async function processWebhook({
 async function listIntegrationLogs(page, limit, { status = '', search = '' } = {}) {
   const skip = (page - 1) * limit;
 
-  const statusFilter = status ? { status } : {};
-  const searchFilter = search
-    ? {
-        OR: [
-          { transaction_id: { contains: search, mode: 'insensitive' } },
-          { error_message:  { contains: search, mode: 'insensitive' } },
-        ],
-      }
-    : {};
-  const where = { ...statusFilter, ...searchFilter };
+  if (!search) {
+    // ── Fast path: no text search — use standard Prisma ORM ─────────────────
+    const where = status ? { status } : {};
+    const [total, rows] = await prisma.$transaction([
+      prisma.integrationLog.count({ where }),
+      prisma.integrationLog.findMany({
+        where,
+        skip,
+        take:    limit,
+        orderBy: { created_at: 'desc' },
+        select: {
+          id: true, transaction_id: true, payload: true,
+          status: true, error_message: true, created_at: true,
+        },
+      }),
+    ]);
+    return { total: Number(total), page, limit, logs: rows };
+  }
 
-  const [total, rows] = await prisma.$transaction([
-    prisma.integrationLog.count({ where }),
-    prisma.integrationLog.findMany({
-      where,
-      skip,
-      take:    limit,
-      orderBy: { created_at: 'desc' },
-      select: {
-        id: true, transaction_id: true, payload: true,
-        status: true, error_message: true, created_at: true,
-      },
-    }),
+  // ── Search path: $queryRaw for case-insensitive JSONB search ─────────────
+  // payload->>'customer_name' extracts the JSONB text value so ILIKE works.
+  const likeParam    = `%${search}%`;
+  const statusClause = status ? Prisma.sql`AND il.status = ${status}` : Prisma.empty;
+
+  const [countResult, rows] = await Promise.all([
+    prisma.$queryRaw`
+      SELECT COUNT(*)::int AS total
+      FROM   integration_logs il
+      WHERE (
+               il.transaction_id              ILIKE ${likeParam}
+            OR il.error_message               ILIKE ${likeParam}
+            OR il.payload->>'customer_name'   ILIKE ${likeParam}
+      )
+      ${statusClause}
+    `,
+    prisma.$queryRaw`
+      SELECT
+        il.id,
+        il.transaction_id,
+        il.payload,
+        il.status,
+        il.error_message,
+        il.created_at
+      FROM   integration_logs il
+      WHERE (
+               il.transaction_id              ILIKE ${likeParam}
+            OR il.error_message               ILIKE ${likeParam}
+            OR il.payload->>'customer_name'   ILIKE ${likeParam}
+      )
+      ${statusClause}
+      ORDER BY il.created_at DESC
+      LIMIT  ${limit}
+      OFFSET ${skip}
+    `,
   ]);
+
+  const total = countResult[0]?.total ?? 0;
   return { total: Number(total), page, limit, logs: rows };
 }
 

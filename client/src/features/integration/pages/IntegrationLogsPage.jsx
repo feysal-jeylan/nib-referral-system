@@ -114,7 +114,7 @@ export default function IntegrationLogsPage({ user, isAdmin, onToast }) {
         <TableFilters
           search={search}
           onSearchChange={handleSearchChange}
-          searchPlaceholder="Search logs…"
+          searchPlaceholder="Search by Transaction ID, Customer Name, or Error…"
           statusValue={status}
           onStatusChange={handleStatusChange}
           statusOptions={STATUS_OPTIONS}
