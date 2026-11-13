@@ -3,12 +3,12 @@
  * ──────────────────────────────
  * Admin-only form to register a new agent directly (bypasses the
  * self-registration flow). On success, calls onCreated() with the
- * optimistic agent object so the parent can prepend it to the list
- * immediately while the next poll refreshes the full data.
- * Pure Tailwind — no App.css dependency.
+ * optimistic agent object and onSuccess() to close the modal.
+ * Pure Tailwind — matches Nib Bank design tokens.
  *
  * Props:
  *   onCreated {(agent: object) => void}
+ *   onSuccess {() => void}
  *   onToast   {(toast: { type, message }) => void}
  */
 import { useRef, useState } from 'react';
@@ -17,13 +17,13 @@ import Spinner from '@/components/ui/Spinner';
 import { Input }  from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 
-// Shared input override — merges on top of shadcn base styles
+// High-contrast Input classes — matches Nib Bank warm brown / ivory theme
 const INPUT_CLS =
-  'h-auto w-full px-4 py-2.5 bg-bg border-border rounded-md text-sm text-text-1 ' +
-  'placeholder:text-text-3 shadow-none transition-all duration-150 ' +
-  'focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-surface';
+  'h-auto w-full px-4 py-2.5 bg-white border border-[#E5DED6] rounded-md text-sm text-[#3E2723] ' +
+  'placeholder:text-[#9C8577] placeholder:opacity-100 shadow-none transition-all duration-150 ' +
+  'focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold focus-visible:bg-white';
 
-export default function AgentForm({ onCreated, onToast }) {
+export default function AgentForm({ onCreated, onSuccess, onToast }) {
   const [form, setForm]             = useState({ name: '', phone: '', email: '' });
   const [submitting, setSubmitting] = useState(false);
   const nameRef = useRef(null);
@@ -38,28 +38,30 @@ export default function AgentForm({ onCreated, onToast }) {
     try {
       const { data } = await api.post('/agents', form);
 
-      onCreated({
-        id: data.id, name: data.name,
+      onCreated?.({
+        id: data.id,
+        name: data.name,
         referral_code: data.referral_code,
         status: data.status ?? 'APPROVED',
-        successful_referrals: 0, current_reward: null,
+        successful_referrals: 0,
+        current_reward: null,
       });
-      onToast({
+      onToast?.({
         type: 'success',
         message: `✅ Agent "${data.name}" created — Code: ${data.referral_code} · Temp Password: ${data.temp_password}`,
       });
       setForm({ name: '', phone: '', email: '' });
-      nameRef.current?.focus();
+      onSuccess?.();
     } catch (err) {
       const status = err.response?.status;
       if (status === 401 || status === 403) {
-        onToast({ type: 'error', message: '🔒 Your session has expired. Please log in again.' });
+        onToast?.({ type: 'error', message: '🔒 Your session has expired. Please log in again.' });
         return;
       }
       const msg = status === 409
         ? '⚠️ An agent with this phone number or email already exists.'
         : (err.response?.data?.error ?? 'Something went wrong. Please try again.');
-      onToast({ type: 'error', message: msg });
+      onToast?.({ type: 'error', message: msg });
     } finally {
       setSubmitting(false);
     }
@@ -68,21 +70,17 @@ export default function AgentForm({ onCreated, onToast }) {
   return (
     <form
       id="agent-form"
-      className="p-6"
+      className="p-1"
       onSubmit={handleSubmit}
       noValidate
       aria-label="Register a new agent"
     >
-      <h2 className="text-text-1 font-bold text-base mb-5 pb-4 border-b border-border">
-        Register New Agent
-      </h2>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         {/* Full Name */}
         <div>
           <label
             htmlFor="agent-name"
-            className="block text-[11px] font-semibold text-text-3 uppercase tracking-wide mb-1.5"
+            className="block text-[11px] font-semibold text-[#3E2723] uppercase tracking-wide mb-1.5"
           >
             Full Name
           </label>
@@ -99,7 +97,7 @@ export default function AgentForm({ onCreated, onToast }) {
         <div>
           <label
             htmlFor="agent-phone"
-            className="block text-[11px] font-semibold text-text-3 uppercase tracking-wide mb-1.5"
+            className="block text-[11px] font-semibold text-[#3E2723] uppercase tracking-wide mb-1.5"
           >
             Phone Number
           </label>
@@ -112,11 +110,11 @@ export default function AgentForm({ onCreated, onToast }) {
           />
         </div>
 
-        {/* Email — spans remaining column(s) */}
+        {/* Email */}
         <div>
           <label
             htmlFor="agent-email"
-            className="block text-[11px] font-semibold text-text-3 uppercase tracking-wide mb-1.5"
+            className="block text-[11px] font-semibold text-[#3E2723] uppercase tracking-wide mb-1.5"
           >
             Email Address
           </label>
@@ -130,15 +128,26 @@ export default function AgentForm({ onCreated, onToast }) {
         </div>
       </div>
 
-      <Button
-        id="submit-agent-btn"
-        type="submit"
-        disabled={submitting}
-        className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-semibold px-5 py-2.5 h-auto rounded-md transition-colors shadow-sm disabled:opacity-55 disabled:cursor-not-allowed"
-      >
-        {submitting && <Spinner small />}
-        {submitting ? 'Registering…' : 'Register Agent'}
-      </Button>
+      <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#E5DED6]">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => onSuccess?.()}
+          disabled={submitting}
+          className="border-[#E5DED6] text-[#3E2723] hover:bg-[#FAF8F5]"
+        >
+          Cancel
+        </Button>
+        <Button
+          id="submit-agent-btn"
+          type="submit"
+          disabled={submitting}
+          className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-semibold px-5 py-2.5 h-auto rounded-md transition-colors shadow-sm disabled:opacity-55 disabled:cursor-not-allowed"
+        >
+          {submitting && <Spinner small />}
+          {submitting ? 'Registering…' : 'Register Agent'}
+        </Button>
+      </div>
     </form>
   );
 }

@@ -2,20 +2,32 @@
  * features/agents/AgentTable.jsx
  * ───────────────────────────────
  * Displays agents. Pure display — no fetch calls.
- * Phase 2: Accepts actioning/onApprove/onReject props so PENDING
- * agents can be managed inline (replaces the old Dashboard section).
+ * Phase 2 & Enterprise UI:
+ *   - Inline Approve / Reject for PENDING agents
+ *   - Three-dot DropdownMenu actions on each row (View Details, Edit Profile, Delete Agent)
  *
  * Props:
- *   agents     {object[]}
- *   loading    {boolean}
- *   isAdmin    {boolean}
- *   actioning  {Set<number>}        — IDs currently being acted on
- *   onApprove  {(id, name) => void} — admin only
- *   onReject   {(id, name) => void} — admin only
+ *   agents        {object[]}
+ *   loading       {boolean}
+ *   isAdmin       {boolean}
+ *   actioning     {Set<number>}        — IDs currently being acted on
+ *   onApprove     {(id, name) => void} — admin only
+ *   onReject      {(id, name) => void} — admin only
+ *   onViewDetails {(agent) => void}
+ *   onEditProfile {(agent) => void}
+ *   onDeleteAgent {(agent) => void}
  */
+import { MoreVertical } from 'lucide-react';
 import Spinner from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
 import { RewardBadge, AgentStatusPill } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 const BRAND     = '#8A4D1F';
 const CHOCOLATE = '#3E2723';
@@ -30,6 +42,9 @@ export default function AgentTable({
   actioning = new Set(),
   onApprove,
   onReject,
+  onViewDetails,
+  onEditProfile,
+  onDeleteAgent,
 }) {
   if (loading) {
     return (
@@ -49,7 +64,7 @@ export default function AgentTable({
     );
   }
 
-  const showActions = isAdmin && (onApprove || onReject);
+  const showActions = isAdmin;
 
   return (
     <div className="overflow-x-auto w-full">
@@ -62,7 +77,9 @@ export default function AgentTable({
               <th
                 key={h}
                 scope="col"
-                className="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-wider"
+                className={`px-6 py-3 text-[11px] font-semibold uppercase tracking-wider ${
+                  h === 'Actions' ? 'text-right' : 'text-left'
+                }`}
                 style={{ color: MUTED }}
               >
                 {h}
@@ -98,7 +115,7 @@ export default function AgentTable({
                     style={{ background: 'rgba(212,175,55,0.15)', color: '#7C5900' }}
                     title="Successful referrals"
                   >
-                    {a.successful_referrals}
+                    {a.successful_referrals ?? 0}
                   </span>
                 </td>
 
@@ -108,28 +125,64 @@ export default function AgentTable({
 
                 {showActions && (
                   <td className="px-6 py-4">
-                    {a.status === 'PENDING' ? (
-                      <div className="flex items-center gap-2">
-                        <button
-                          disabled={busy}
-                          onClick={() => onApprove(a.id, a.name)}
-                          className="inline-flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded transition-colors disabled:opacity-50"
-                          style={{ background: 'rgba(46,125,50,0.10)', color: '#2E7D32', border: '1px solid rgba(46,125,50,0.25)' }}
-                        >
-                          {busy ? <Spinner small /> : '✓ Approve'}
-                        </button>
-                        <button
-                          disabled={busy}
-                          onClick={() => onReject(a.id, a.name)}
-                          className="inline-flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded transition-colors disabled:opacity-50"
-                          style={{ background: 'rgba(192,57,43,0.08)', color: '#C0392B', border: '1px solid rgba(192,57,43,0.25)' }}
-                        >
-                          {busy ? <Spinner small /> : '✕ Reject'}
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="text-xs" style={{ color: MUTED }}>—</span>
-                    )}
+                    <div className="flex items-center justify-end gap-2">
+                      {a.status === 'PENDING' && (
+                        <div className="flex items-center gap-1.5 mr-1">
+                          <button
+                            disabled={busy}
+                            onClick={() => onApprove?.(a.id, a.name)}
+                            className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
+                            style={{ background: 'rgba(46,125,50,0.10)', color: '#2E7D32', border: '1px solid rgba(46,125,50,0.25)' }}
+                            title="Approve agent"
+                          >
+                            {busy ? <Spinner small /> : '✓ Approve'}
+                          </button>
+                          <button
+                            disabled={busy}
+                            onClick={() => onReject?.(a.id, a.name)}
+                            className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
+                            style={{ background: 'rgba(192,57,43,0.08)', color: '#C0392B', border: '1px solid rgba(192,57,43,0.25)' }}
+                            title="Reject agent"
+                          >
+                            {busy ? <Spinner small /> : '✕ Reject'}
+                          </button>
+                        </div>
+                      )}
+
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-[#FAF8F5] rounded-md"
+                            aria-label={`Actions for ${a.name}`}
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40 bg-white border border-[#E5DED6] shadow-md z-50">
+                          <DropdownMenuItem
+                            onClick={() => onViewDetails?.(a)}
+                            className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
+                          >
+                            View Details
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => onEditProfile?.(a)}
+                            className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
+                          >
+                            Edit Profile
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onClick={() => onDeleteAgent?.(a)}
+                            className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
+                          >
+                            Delete Agent
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </td>
                 )}
               </tr>
