@@ -13,6 +13,14 @@ const ALLOWED_STATUSES = ['SUCCESSFUL', 'REJECTED'];
 
 // ── List referrals (RBAC-filtered, paginated, status-filtered, searchable) ────
 async function listReferrals(role, agentId, page, limit, { status = '', search = '' } = {}) {
+  // SEC-P2-01: Guard against unlinked/missing agentId exposing all bank referrals
+  if (role === 'AGENT' && !agentId) {
+    const err = new Error('Agent ID missing from session');
+    err.status = 403;
+    err.code   = 'FORBIDDEN';
+    throw err;
+  }
+
   const skip = (page - 1) * limit;
 
   const baseWhere   = role === 'AGENT' ? { agent_id: agentId } : {};

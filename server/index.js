@@ -20,6 +20,7 @@
  *   cors         — restrict origin to Vite dev server (credentials: true)
  *   cookieParser — populate req.cookies for HttpOnly JWT auth
  *   express.json — parse JSON request bodies
+ *   rateLimit    — brute-force protection on auth & webhook gateways (SEC-P0-02)
  */
 
 'use strict';
@@ -31,6 +32,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 // Prisma singleton — warms up the connection pool on startup.
@@ -47,6 +49,10 @@ const financeRouter     = require('@/modules/dashboard/finance.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Trust reverse proxy (Vite dev server / Nginx / cloud load balancers)
+// Ensures express-rate-limit accurately resolves client IP
+app.set('trust proxy', 1);
 
 // ── Security Middleware ───────────────────────────────────────────────────────
 app.use(helmet());

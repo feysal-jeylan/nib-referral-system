@@ -22,7 +22,7 @@ async function accountOpened(req, res, next) {
     await svc.logWhitelistFailure(tid, unauthorizedFields);
     return res.status(400).json({
       error: `Payload contains unauthorized fields: ${unauthorizedFields.join(', ')}.`,
-      code:  'UNAUTHORIZED_FIELDS',
+      code: 'UNAUTHORIZED_FIELDS',
     });
   }
 
@@ -30,12 +30,12 @@ async function accountOpened(req, res, next) {
   const { transaction_id, customer_name, customer_phone, referral_code, account_type, deposit_amount, campaign_code } = req.body;
 
   const missing = [];
-  if (!transaction_id)  missing.push('transaction_id');
-  if (!customer_name)   missing.push('customer_name');
-  if (!customer_phone)  missing.push('customer_phone');
-  if (!referral_code)   missing.push('referral_code');
-  if (!campaign_code)   missing.push('campaign_code');
-  if (!account_type)    missing.push('account_type');
+  if (!transaction_id) missing.push('transaction_id');
+  if (!customer_name) missing.push('customer_name');
+  if (!customer_phone) missing.push('customer_phone');
+  if (!referral_code) missing.push('referral_code');
+  if (!campaign_code) missing.push('campaign_code');
+  if (!account_type) missing.push('account_type');
   if (deposit_amount === undefined || deposit_amount === null) missing.push('deposit_amount');
 
   if (missing.length > 0) {
@@ -72,43 +72,43 @@ async function accountOpened(req, res, next) {
     case 'AGENT_404':
       return res.status(404).json({
         error: `No agent found with referral_code '${referral_code}'.`,
-        code:  'AGENT_NOT_FOUND',
+        code: 'AGENT_NOT_FOUND',
       });
 
     case 'AGENT_NOT_APPROVED':
       return res.status(403).json({
         error: `Agent with referral code '${referral_code}' is not approved (status: ${txResult.status}). Referrals are rejected.`,
-        code:  'AGENT_NOT_APPROVED',
+        code: 'AGENT_NOT_APPROVED',
       });
 
     case 'NO_CAMPAIGN':
       return res.status(400).json({
         error: 'Campaign not found or not active. Ensure the campaign_code in the payload is correct and the campaign status is ACTIVE.',
-        code:  'NO_ACTIVE_CAMPAIGN',
+        code: 'NO_ACTIVE_CAMPAIGN',
       });
 
     case 'RULE_FAILED':
       // 202 — event was valid, customer just didn't qualify. Prevents Temenos retries.
       return res.status(202).json({
-        message:      'Event received. Customer did not meet campaign qualification rules.',
+        message: 'Event received. Customer did not meet campaign qualification rules.',
         transaction_id,
         disqualified: true,
-        reason:       txResult.failedRule,
+        reason: txResult.failedRule,
       });
 
     case 'DUPLICATE_CUSTOMER':
       return res.status(409).json({
         error: 'This customer has already been referred for this campaign.',
-        code:  'DUPLICATE_CUSTOMER',
+        code: 'DUPLICATE_CUSTOMER',
       });
 
     case 'SUCCESS':
     default:
       return res.status(202).json({
-        message:     'Referral recorded and automatically qualified.',
+        message: 'Referral recorded and automatically qualified.',
         referral_id: txResult.referral.id,
-        agent:       txResult.agent.name,
-        campaign:    txResult.campaign.name,
+        agent: txResult.agent.name,
+        campaign: txResult.campaign.name,
       });
   }
 }
@@ -116,8 +116,8 @@ async function accountOpened(req, res, next) {
 // ── GET /api/integration/logs  (ADMIN) ───────────────────────────────────────
 async function getLogs(req, res, next) {
   try {
-    const page   = Math.max(1, parseInt(req.query.page,  10) || 1);
-    const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const search = (req.query.search ?? '').trim();
 
     const VALID_STATUSES = ['RECEIVED', 'PROCESSED', 'FAILED'];
@@ -144,21 +144,24 @@ async function retryLog(req, res, next) {
 
     if (result.outcome === 'SUCCESS') {
       return res.status(200).json({
-        message:     'Webhook retried successfully and referral qualified.',
-        outcome:     'SUCCESS',
+        message: 'Webhook retried successfully and referral qualified.',
+        outcome: 'SUCCESS',
         referral_id: result.referral.id,
-        agent:       result.agent.name,
-        campaign:    result.campaign.name,
+        agent: result.agent.name,
+        campaign: result.campaign.name,
       });
     }
 
     // Business rule or qualification failure on retry
     return res.status(400).json({
-      error:   result.error_message || result.failedRule || 'Retry failed: event did not qualify.',
+      error: result.error_message || result.failedRule || 'Retry failed: event did not qualify.',
       outcome: result.outcome,
-      code:    result.outcome,
+      code: result.outcome,
     });
   } catch (err) {
+    if (err.status === 400 || err.code === 'ALREADY_PROCESSED') {
+      return res.status(err.status || 400).json({ error: err.message, code: err.code || 'ALREADY_PROCESSED' });
+    }
     console.error(`[POST /api/integration/logs/${req.params.id}/retry] Error:`, err.message);
     next(err);
   }
@@ -174,7 +177,7 @@ async function deleteLog(req, res, next) {
     }
     return res.status(200).json({
       message: 'Integration log deleted successfully.',
-      id:      deleted.id,
+      id: deleted.id,
     });
   } catch (err) {
     console.error(`[DELETE /api/integration/logs/${req.params.id}] Error:`, err.message);

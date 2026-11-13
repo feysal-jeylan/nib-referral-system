@@ -26,6 +26,7 @@
  */
 
 import axios from 'axios';
+import useAppStore from '@/store/useAppStore';
 
 // ── Axios instance ────────────────────────────────────────────────────────────
 const api = axios.create({
@@ -50,14 +51,28 @@ api.interceptors.response.use(
   // 2xx — pass through unchanged
   (response) => response,
 
-  // Error — inspect and potentially signal session expiry
+  // Error — inspect and potentially signal session expiry or suspension
   (error) => {
     const url    = error.config?.url ?? '';
     const status = error.response?.status;
+    const code   = error.response?.data?.code;
 
-    if (status === 401 && !SKIP_INTERCEPT.has(url)) {
+    // Auto-logout on 401/403 with ACCOUNT_SUSPENDED or NO_TOKEN
+    if (
+      (status === 401 || status === 403) &&
+      (code === 'ACCOUNT_SUSPENDED' || code === 'NO_TOKEN')
+    ) {
+      useAppStore.getState().clearUser();
+      window.dispatchEvent(
+        new CustomEvent('auth:unauthorized', { detail: { url, code } })
+      );
+      if (window.location.pathname !== '/login' && window.location.pathname !== '/activate') {
+        window.location.href = '/login';
+      }
+    } else if (status === 401 && !SKIP_INTERCEPT.has(url)) {
       // Mid-session expiry: notify AuthContext via DOM event.
       // AuthContext's listener will call setUser(null) → <Login /> renders.
+      useAppStore.getState().clearUser();
       window.dispatchEvent(
         new CustomEvent('auth:unauthorized', { detail: { url } })
       );

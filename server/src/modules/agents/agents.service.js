@@ -47,11 +47,11 @@ async function listAgents(role, agentId, { page = 1, limit = 10, search = '', st
     err.status = 403;
     throw err;
   }
-  const baseWhere = role === 'AGENT' ? { id: agentId } : {};
-
-  // Admin filters
-  const statusFilter  = status  ? { status }  : {};
-  const searchFilter  = search
+  
+  // Base query for AGENT is strictly by id — never filter out by status (even if suspended)
+  const baseWhere     = role === 'AGENT' ? { id: agentId } : {};
+  const statusFilter  = (role !== 'AGENT' && status) ? { status } : {};
+  const searchFilter  = (role !== 'AGENT' && search)
     ? {
         OR: [
           { name:          { contains: search, mode: 'insensitive' } },

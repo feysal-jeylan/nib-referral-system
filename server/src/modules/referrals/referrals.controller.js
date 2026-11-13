@@ -25,6 +25,9 @@ async function listReferrals(req, res, next) {
     );
     return res.status(200).json(result);
   } catch (err) {
+    if (err.status === 403 || err.message === 'Agent ID missing from session') {
+      return res.status(403).json({ error: err.message, code: 'FORBIDDEN' });
+    }
     console.error('[GET /api/referrals] Prisma error:', err.message);
     next(err);
   }

@@ -12,15 +12,29 @@
 'use strict';
 
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { authenticateToken, authorizeRole } = require('@/middleware/auth');
 const ctrl = require('./integration.controller');
-const svc  = require('./integration.service');
 
 const router  = express.Router();
 const API_KEY = process.env.MOCK_TEMENOS_API_KEY;
 
+// ── Rate Limiter: Max 1000 requests per 1 minute for webhooks (SEC-P0-02) ────
+const webhookLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many webhook requests from this IP, please try again after 1 minute.',
+    code: 'RATE_LIMIT_EXCEEDED',
+  },
+});
+
 // ── Webhook API-key guard (for external Temenos webhook ingestion) ───────────
-async function requireApiKey(req, res, next) {
+// SEC-P0-01: Removed database write (svc.logApiKeyFailure) to prevent
+// pre-authentication idempotency cache poisoning on transaction_id.
+function requireApiKey(req, res, next) {
   const providedKey = req.headers['x-api-key'];
   if (providedKey !== API_KEY) {
     const ip  = req.ip || req.connection?.remoteAddress;
@@ -32,7 +46,6 @@ async function requireApiKey(req, res, next) {
       `IP: ${ip}, transaction_id: ${tid ?? 'N/A'}`
     );
 
-    await svc.logApiKeyFailure(tid, ip);
     return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
   }
   next();
@@ -41,8 +54,8 @@ async function requireApiKey(req, res, next) {
 const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-// Temenos webhook ingestion (protected by API key)
-router.post('/account-opened', requireApiKey, ctrl.accountOpened);
+// Temenos webhook ingestion (rate-limited + protected by API key)
+router.post('/account-opened', webhookLimiter, requireApiKey, ctrl.accountOpened);
 
 // Admin audit log management (protected by JWT + ADMIN role)
 router.get('/logs',            ...adminOnly, ctrl.getLogs);

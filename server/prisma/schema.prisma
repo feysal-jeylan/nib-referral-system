@@ -63,8 +63,12 @@ model Referral {
   created_at     DateTime @default(now()) @db.Timestamp(6)
 
   agent    Agent     @relation(fields: [agent_id], references: [id], onDelete: Restrict)
-  campaign Campaign? @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  campaign Campaign? @relation(fields: [campaign_id], references: [id], onDelete: Restrict)
 
+  @@index([agent_id])
+  @@index([campaign_id])
+  @@index([customer_phone])
+  @@index([status, payout_status])
   @@map("referrals")
 }
 

@@ -305,6 +305,14 @@ async function retryIntegrationLog(id) {
     return { outcome: 'LOG_NOT_FOUND' };
   }
 
+  // SEC-P2-02: Prevent state inversion — cannot retry an already processed log
+  if (log.status === 'PROCESSED') {
+    const err = new Error('Cannot retry an integration event that has already been successfully processed.');
+    err.status = 400;
+    err.code = 'ALREADY_PROCESSED';
+    throw err;
+  }
+
   const payload = (log.payload && typeof log.payload === 'object') ? log.payload : {};
   const {
     customer_name, customer_phone, referral_code,
