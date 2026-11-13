@@ -43,6 +43,7 @@ const referralsRouter   = require('@/modules/referrals/referrals.routes');
 const campaignsRouter   = require('@/modules/campaigns/campaigns.routes');
 const integrationRouter = require('@/modules/integration/integration.routes');
 const dashboardRouter   = require('@/modules/dashboard/dashboard.routes');
+const financeRouter     = require('@/modules/dashboard/finance.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -82,6 +83,7 @@ app.use('/api/referrals',   referralsRouter);
 app.use('/api/campaigns',   campaignsRouter);
 app.use('/api/integration', integrationRouter);
 app.use('/api/dashboard',   dashboardRouter);
+app.use('/api/dashboard',   financeRouter);
 
 // ── Error Handling ────────────────────────────────────────────────────────────
 
