@@ -15,5 +15,6 @@ const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 
 router.get('/finance', ...adminOnly, ctrl.getFinance);
 router.get('/config',  ...adminOnly, ctrl.getConfig);
+router.put('/config',  ...adminOnly, ctrl.updateConfig);
 
 module.exports = router;

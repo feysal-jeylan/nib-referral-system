@@ -12,7 +12,7 @@
  *     - Payout ledger table (Agent Name, Referrals, Total Earned, Status pill, Mark as Paid)
  *  3. System Configuration (Admin Only)
  *     - Reward rules / milestone tiers (Bronze, Silver, Gold)
- *     - Disabled "Edit Configuration" action button
+ *     - Functional "Edit Configuration" dialog to dynamically update tier thresholds
  *
  * Props: user, onToast
  */
@@ -50,6 +50,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import Spinner from '@/components/ui/Spinner';
 
 // ── Brand tokens ──────────────────────────────────────────────────────────────
@@ -166,13 +167,85 @@ export default function SettingsPage({ user: propUser, onToast }) {
     }
   }
 
+  // ── Modal State for Edit Reward Rules Configuration ─────────────────────────
+  const [configModalOpen,  setConfigModalOpen]  = useState(false);
+  const [bronzeVal,        setBronzeVal]        = useState('3');
+  const [silverVal,        setSilverVal]        = useState('5');
+  const [goldVal,          setGoldVal]          = useState('10');
+  const [configModalError, setConfigModalError] = useState('');
+  const [configSubmitting, setConfigSubmitting] = useState(false);
+
+  const rewardRules = configData?.reward_rules ?? [];
+
+  function handleOpenConfigModal() {
+    const bronze = rewardRules.find((r) => r.reward_name?.toLowerCase() === 'bronze');
+    const silver = rewardRules.find((r) => r.reward_name?.toLowerCase() === 'silver');
+    const gold   = rewardRules.find((r) => r.reward_name?.toLowerCase() === 'gold');
+
+    setBronzeVal(String(bronze?.min_referrals ?? 3));
+    setSilverVal(String(silver?.min_referrals ?? 5));
+    setGoldVal(String(gold?.min_referrals ?? 10));
+    setConfigModalError('');
+    setConfigModalOpen(true);
+  }
+
+  async function handleConfigSubmit(e) {
+    e.preventDefault();
+    setConfigModalError('');
+
+    const b = parseInt(bronzeVal, 10);
+    const s = parseInt(silverVal, 10);
+    const g = parseInt(goldVal, 10);
+
+    if (isNaN(b) || isNaN(s) || isNaN(g) || b < 0 || s < 0 || g < 0) {
+      const err = 'Please enter valid non-negative numbers for all tiers.';
+      setConfigModalError(err);
+      onToast?.({ type: 'error', message: `❌ ${err}` });
+      return;
+    }
+
+    // Strict validation: Bronze < Silver < Gold
+    if (!(b < s && s < g)) {
+      const err = 'Hierarchy Rule Violated: Bronze threshold must be strictly less than Silver, and Silver must be strictly less than Gold (Bronze < Silver < Gold).';
+      setConfigModalError(err);
+      onToast?.({ type: 'error', message: '❌ Invalid Tier Order: Bronze (< Silver) must be strictly less than Silver (< Gold).' });
+      return;
+    }
+
+    const bronze = rewardRules.find((r) => r.reward_name?.toLowerCase() === 'bronze');
+    const silver = rewardRules.find((r) => r.reward_name?.toLowerCase() === 'silver');
+    const gold   = rewardRules.find((r) => r.reward_name?.toLowerCase() === 'gold');
+
+    const payload = [
+      { id: bronze?.id ?? 1, min_referrals: b },
+      { id: silver?.id ?? 2, min_referrals: s },
+      { id: gold?.id ?? 3, min_referrals: g },
+    ];
+
+    setConfigSubmitting(true);
+    try {
+      await api.put('/dashboard/config', payload);
+      setConfigModalOpen(false);
+
+      // Refresh config data
+      const refreshed = await api.get('/dashboard/config');
+      setConfigData(refreshed.data);
+      onToast?.({ type: 'success', message: '✅ System reward thresholds updated successfully.' });
+    } catch (err) {
+      const msg = err.response?.data?.error ?? 'Failed to update system configuration.';
+      setConfigModalError(msg);
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+    } finally {
+      setConfigSubmitting(false);
+    }
+  }
+
   function handleMarkAsPaid(agentName) {
     onToast?.({ type: 'success', message: `✅ Payout for ${agentName} marked as paid.` });
   }
 
-  const agentsList = financeData?.agents ?? [];
+  const agentsList     = financeData?.agents ?? [];
   const totalLiability = financeData?.total_payout ?? financeData?.totalLiability ?? 0;
-  const rewardRules = configData?.reward_rules ?? [];
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto" style={{ background: IVORY, minHeight: '100%' }}>
@@ -626,11 +699,12 @@ export default function SettingsPage({ user: propUser, onToast }) {
                 </p>
               </div>
 
+              {/* Functional Edit Configuration Button */}
               <Button
-                disabled
-                className="opacity-60 cursor-not-allowed text-xs font-semibold px-4 py-2 rounded-lg text-white flex items-center gap-1.5"
+                type="button"
+                onClick={handleOpenConfigModal}
+                className="text-xs font-semibold px-4 py-2 rounded-lg text-white flex items-center gap-1.5 transition-all shadow-sm hover:opacity-90 active:scale-95 cursor-pointer"
                 style={{ background: BRAND }}
-                title="Configuration editing will be enabled in next release"
               >
                 <Sliders size={14} />
                 <span>Edit Configuration</span>
@@ -672,7 +746,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
                     </div>
 
                     <h4 className="text-lg font-bold" style={{ color: CHOCOLATE }}>
-                      {rewardRules.find(r => r.reward_name?.toLowerCase() === 'bronze')?.reward_name ?? 'Bronze Tier'}
+                      {rewardRules.find((r) => r.reward_name?.toLowerCase() === 'bronze')?.reward_name ?? 'Bronze Tier'}
                     </h4>
 
                     <div className="my-4 p-3 rounded-xl bg-[#FAF8F5] border" style={{ borderColor: '#E8E1DC' }}>
@@ -680,7 +754,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
                         Qualification Milestone
                       </p>
                       <p className="text-xl font-extrabold tabular-nums mt-0.5" style={{ color: BRAND }}>
-                        {rewardRules.find(r => r.reward_name?.toLowerCase() === 'bronze')?.min_referrals ?? 3}+ Referrals
+                        {rewardRules.find((r) => r.reward_name?.toLowerCase() === 'bronze')?.min_referrals ?? 3}+ Referrals
                       </p>
                     </div>
 
@@ -722,7 +796,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
                     </div>
 
                     <h4 className="text-lg font-bold" style={{ color: CHOCOLATE }}>
-                      {rewardRules.find(r => r.reward_name?.toLowerCase() === 'silver')?.reward_name ?? 'Silver Tier'}
+                      {rewardRules.find((r) => r.reward_name?.toLowerCase() === 'silver')?.reward_name ?? 'Silver Tier'}
                     </h4>
 
                     <div className="my-4 p-3 rounded-xl bg-[#FAF8F5] border" style={{ borderColor: '#E8E1DC' }}>
@@ -730,7 +804,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
                         Qualification Milestone
                       </p>
                       <p className="text-xl font-extrabold tabular-nums mt-0.5" style={{ color: '#475569' }}>
-                        {rewardRules.find(r => r.reward_name?.toLowerCase() === 'silver')?.min_referrals ?? 5}+ Referrals
+                        {rewardRules.find((r) => r.reward_name?.toLowerCase() === 'silver')?.min_referrals ?? 5}+ Referrals
                       </p>
                     </div>
 
@@ -775,7 +849,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
                     </div>
 
                     <h4 className="text-lg font-bold" style={{ color: CHOCOLATE }}>
-                      {rewardRules.find(r => r.reward_name?.toLowerCase() === 'gold')?.reward_name ?? 'Gold Tier'}
+                      {rewardRules.find((r) => r.reward_name?.toLowerCase() === 'gold')?.reward_name ?? 'Gold Tier'}
                     </h4>
 
                     <div className="my-4 p-3 rounded-xl bg-[#FFFDF8] border" style={{ borderColor: 'rgba(212,175,55,0.30)' }}>
@@ -783,7 +857,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
                         Qualification Milestone
                       </p>
                       <p className="text-xl font-extrabold tabular-nums mt-0.5" style={{ color: '#B8860B' }}>
-                        {rewardRules.find(r => r.reward_name?.toLowerCase() === 'gold')?.min_referrals ?? 10}+ Referrals
+                        {rewardRules.find((r) => r.reward_name?.toLowerCase() === 'gold')?.min_referrals ?? 10}+ Referrals
                       </p>
                     </div>
 
@@ -806,7 +880,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
 
       </Tabs>
 
-      {/* ── Update Password Dialog (shadcn Modal) ─────────────────────────── */}
+      {/* ── 3. Update Password Dialog (shadcn Modal) ─────────────────────────── */}
       <Dialog open={modalOpen} onOpenChange={setModalOpen}>
         <DialogContent
           className="bg-white border border-[#D6CCC5]/60 text-[#3E2723] sm:max-w-md p-6 rounded-2xl shadow-xl"
@@ -964,6 +1038,160 @@ export default function SettingsPage({ user: propUser, onToast }) {
                 style={{ background: BRAND }}
               >
                 {submitting ? 'Updating…' : 'Confirm & Update'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 4. Edit Configuration Dialog (shadcn Modal) ──────────────────────── */}
+      <Dialog open={configModalOpen} onOpenChange={setConfigModalOpen}>
+        <DialogContent
+          className="bg-white border border-[#D6CCC5]/60 text-[#3E2723] sm:max-w-md p-6 rounded-2xl shadow-xl"
+        >
+          <DialogHeader className="gap-1.5">
+            <div className="flex items-center gap-2">
+              <div
+                className="w-8 h-8 rounded-lg flex items-center justify-center"
+                style={{ background: 'rgba(138,77,31,0.10)', color: BRAND }}
+              >
+                <Sliders size={17} />
+              </div>
+              <DialogTitle className="text-lg font-bold" style={{ color: CHOCOLATE }}>
+                Edit Reward Milestone Tiers
+              </DialogTitle>
+            </div>
+            <DialogDescription className="text-xs" style={{ color: MUTED }}>
+              Set minimum required successful referrals for each milestone level. Rules must satisfy: Bronze &lt; Silver &lt; Gold.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleConfigSubmit} className="space-y-4 my-2">
+            {/* Modal Error Banner */}
+            {configModalError && (
+              <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2 animate-in fade-in-50">
+                <AlertCircle size={15} className="flex-shrink-0" />
+                <span>{configModalError}</span>
+              </div>
+            )}
+
+            {/* Bronze Tier Input */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold flex items-center gap-1.5" style={{ color: CHOCOLATE }}>
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#CD7F32]" />
+                  <span>Bronze Tier (Min Referrals)</span>
+                </label>
+                <span className="text-[10px] font-bold text-[#8A4D1F] bg-[#FAF8F5] px-2 py-0.5 rounded border border-[#E5DED6]">
+                  Level 1
+                </span>
+              </div>
+              <Input
+                type="number"
+                min="0"
+                step="1"
+                value={bronzeVal}
+                onChange={(e) => setBronzeVal(e.target.value)}
+                placeholder="e.g. 3"
+                className="h-10 text-sm font-semibold tabular-nums border-[#D6CCC5] bg-[#FAF8F5] text-[#3E2723] focus-visible:border-[#8A4D1F]"
+              />
+            </div>
+
+            {/* Silver Tier Input */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold flex items-center gap-1.5" style={{ color: CHOCOLATE }}>
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#64748B]" />
+                  <span>Silver Tier (Min Referrals)</span>
+                </label>
+                <span className="text-[10px] font-bold text-[#475569] bg-[#FAF8F5] px-2 py-0.5 rounded border border-[#E5DED6]">
+                  Level 2
+                </span>
+              </div>
+              <Input
+                type="number"
+                min="0"
+                step="1"
+                value={silverVal}
+                onChange={(e) => setSilverVal(e.target.value)}
+                placeholder="e.g. 5"
+                className="h-10 text-sm font-semibold tabular-nums border-[#D6CCC5] bg-[#FAF8F5] text-[#3E2723] focus-visible:border-[#8A4D1F]"
+              />
+            </div>
+
+            {/* Gold Tier Input */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold flex items-center gap-1.5" style={{ color: CHOCOLATE }}>
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#D4AF37]" />
+                  <span>Gold Tier (Min Referrals)</span>
+                </label>
+                <span className="text-[10px] font-bold text-[#B8860B] bg-[#FAF8F5] px-2 py-0.5 rounded border border-[#E5DED6]">
+                  Level 3 · Elite
+                </span>
+              </div>
+              <Input
+                type="number"
+                min="0"
+                step="1"
+                value={goldVal}
+                onChange={(e) => setGoldVal(e.target.value)}
+                placeholder="e.g. 10"
+                className="h-10 text-sm font-semibold tabular-nums border-[#D6CCC5] bg-[#FAF8F5] text-[#3E2723] focus-visible:border-[#8A4D1F]"
+              />
+            </div>
+
+            {/* Live Hierarchy Check Display */}
+            {(() => {
+              const b = parseInt(bronzeVal, 10);
+              const s = parseInt(silverVal, 10);
+              const g = parseInt(goldVal, 10);
+              const isValid = !isNaN(b) && !isNaN(s) && !isNaN(g) && b < s && s < g;
+
+              return (
+                <div
+                  className="p-3 rounded-xl border text-xs flex items-center justify-between transition-colors"
+                  style={{
+                    background: isValid ? 'rgba(26,92,52,0.06)' : 'rgba(230,81,0,0.06)',
+                    borderColor: isValid ? 'rgba(26,92,52,0.25)' : 'rgba(230,81,0,0.25)',
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    {isValid ? (
+                      <CheckCircle2 size={16} className="text-emerald-700 flex-shrink-0" />
+                    ) : (
+                      <AlertCircle size={16} className="text-amber-700 flex-shrink-0" />
+                    )}
+                    <span className="font-medium" style={{ color: CHOCOLATE }}>
+                      Current: {b || 0} &lt; {s || 0} &lt; {g || 0} Referrals
+                    </span>
+                  </div>
+                  <span
+                    className="text-[10px] font-bold uppercase tracking-wider"
+                    style={{ color: isValid ? '#1A5C34' : '#E65100' }}
+                  >
+                    {isValid ? 'Valid Order' : 'Rule Violation'}
+                  </span>
+                </div>
+              );
+            })()}
+
+            <DialogFooter className="pt-3 gap-2 flex-col sm:flex-row">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setConfigModalOpen(false)}
+                className="border-stone-300 text-stone-700 hover:bg-stone-100 text-xs py-2 px-4 rounded-lg"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={configSubmitting}
+                className="text-white text-xs py-2 px-5 rounded-lg font-semibold transition"
+                style={{ background: BRAND }}
+              >
+                {configSubmitting ? 'Saving…' : 'Save Thresholds'}
               </Button>
             </DialogFooter>
           </form>

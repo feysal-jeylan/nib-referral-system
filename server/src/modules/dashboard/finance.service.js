@@ -70,7 +70,37 @@ async function getSystemConfig() {
   };
 }
 
+/**
+ * Updates reward rules thresholds atomically within a transaction.
+ * @param {Array<{ id: number, min_referrals: number }>} rulesArray
+ */
+async function updateSystemConfig(rulesArray) {
+  return await prisma.$transaction(async (tx) => {
+    for (const rule of rulesArray) {
+      await tx.$executeRaw`
+        UPDATE reward_rules
+        SET min_referrals = ${Number(rule.min_referrals)}
+        WHERE id = ${Number(rule.id)}
+      `;
+    }
+
+    const updated = await tx.$queryRaw`
+      SELECT id, min_referrals, reward_name, created_at
+      FROM reward_rules
+      ORDER BY min_referrals ASC
+    `;
+
+    return updated.map((r) => ({
+      id: r.id,
+      min_referrals: Number(r.min_referrals),
+      reward_name: r.reward_name,
+      created_at: r.created_at,
+    }));
+  });
+}
+
 module.exports = {
   getFinanceOverview,
   getSystemConfig,
+  updateSystemConfig,
 };
