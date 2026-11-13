@@ -3,11 +3,14 @@
  * ──────────────────────────────────────
  * Enterprise Agent Management interface for Admins:
  *   - Page header with "+ Register Agent" modal trigger
- *   - Modal (shadcn Dialog) hosting the AgentForm
+ *   - Register Agent Dialog (shadcn Dialog) hosting AgentForm
  *   - Search and status filtering with debounce and pagination
  *   - Data table with inline Approve / Reject for PENDING applications
- *   - Three-dot DropdownMenu actions on each row (View Details, Edit Profile, Delete Agent)
- *   - "Agent Details" modal skeleton displaying core profile credentials
+ *   - Three-dot DropdownMenu actions on each row:
+ *       • View Details (expanded modal with Date Joined, Referrals, Tier)
+ *       • Edit Profile (opens EditAgentModal with PUT /api/agents/:id)
+ *       • Suspend / Activate Agent (PATCH /suspend or /activate)
+ *       • Delete Agent (Confirmation modal with 409 referral protection)
  *
  * Props: user, isAdmin, onToast
  */
@@ -17,6 +20,7 @@ import { Plus, MoreVertical } from 'lucide-react';
 import api from '@/services/api';
 
 import AgentForm           from '@/features/agents/AgentForm';
+import EditAgentModal      from '@/features/agents/EditAgentModal';
 import TableFilters        from '@/components/common/TableFilters';
 import DataTablePagination from '@/components/common/DataTablePagination';
 import Spinner             from '@/components/ui/Spinner';
@@ -45,10 +49,11 @@ const BORDER    = 'rgba(138,77,31,0.10)';
 const IVORY     = '#FAF8F5';
 
 const STATUS_OPTIONS = [
-  { value: '',         label: 'All Statuses' },
-  { value: 'APPROVED', label: 'Approved'     },
-  { value: 'PENDING',  label: 'Pending'      },
-  { value: 'REJECTED', label: 'Rejected'     },
+  { value: '',          label: 'All Statuses' },
+  { value: 'APPROVED',  label: 'Approved'     },
+  { value: 'PENDING',   label: 'Pending'      },
+  { value: 'SUSPENDED', label: 'Suspended'    },
+  { value: 'REJECTED',  label: 'Rejected'     },
 ];
 
 export default function AgentsPage({ _user, isAdmin, onToast }) {
@@ -61,6 +66,10 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
   const [isFormOpen,     setIsFormOpen]     = useState(false);
   const [isDetailsOpen,  setIsDetailsOpen]  = useState(false);
   const [selectedAgent,  setSelectedAgent]  = useState(null);
+  const [isEditOpen,     setIsEditOpen]     = useState(false);
+  const [agentToEdit,    setAgentToEdit]    = useState(null);
+  const [deleteTarget,   setDeleteTarget]   = useState(null);
+  const [deleting,       setDeleting]       = useState(false);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -150,19 +159,70 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
     setPage(1);
   }
 
-  // ── Dropdown Actions ──────────────────────────────────────────────────────
+  // ── Action 1: View Details ────────────────────────────────────────────────
   function handleViewDetails(agent) {
     setSelectedAgent(agent);
     setIsDetailsOpen(true);
-    onToast?.({ type: 'info', message: 'View Details clicked' });
   }
 
+  // ── Action 2: Edit Profile ────────────────────────────────────────────────
   function handleEditProfile(agent) {
-    onToast?.({ type: 'info', message: `Edit Profile clicked for ${agent.name}` });
+    setAgentToEdit(agent);
+    setIsEditOpen(true);
   }
 
-  function handleDeleteAgent(agent) {
-    onToast?.({ type: 'error', message: `Delete Agent clicked for ${agent.name}` });
+  function handleEditSuccess() {
+    fetchAgents(page, search, status);
+  }
+
+  // ── Action 3: Suspend / Activate ──────────────────────────────────────────
+  async function handleToggleSuspend(agent) {
+    const isApproved = agent.status === 'APPROVED';
+    const endpoint   = isApproved ? `/agents/${agent.id}/suspend` : `/agents/${agent.id}/activate`;
+    const actionName = isApproved ? 'suspended' : 'activated';
+    setActioning(prev => new Set(prev).add(agent.id));
+    try {
+      await api.patch(endpoint);
+      fetchAgents(page, search, status);
+      onToast?.({
+        type: 'success',
+        message: `✅ Agent "${agent.name}" has been ${actionName}.`,
+      });
+    } catch (err) {
+      onToast?.({
+        type: 'error',
+        message: err.response?.data?.error ?? `Failed to ${isApproved ? 'suspend' : 'activate'} agent.`,
+      });
+    } finally {
+      setActioning(prev => { const s = new Set(prev); s.delete(agent.id); return s; });
+    }
+  }
+
+  // ── Action 4: Delete Agent (with 409 referral guard) ───────────────────────
+  function handleDeleteRequest(agent) {
+    setDeleteTarget(agent);
+  }
+
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/agents/${deleteTarget.id}`);
+      onToast?.({
+        type: 'success',
+        message: `🗑️ Agent "${deleteTarget.name}" deleted successfully.`,
+      });
+      setDeleteTarget(null);
+      fetchAgents(page, search, status);
+    } catch (err) {
+      const msg = err.response?.status === 409
+        ? 'Cannot delete agent with existing referrals'
+        : (err.response?.data?.error ?? 'Failed to delete agent.');
+      onToast?.({ type: 'error', message: msg });
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
@@ -209,34 +269,88 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
         </Dialog>
       )}
 
-      {/* ── 3. Modal Dialog for Agent Details (Skeleton) ─────────────────── */}
+      {/* ── 3. Edit Agent Modal ───────────────────────────────────────────── */}
+      {isAdmin && (
+        <EditAgentModal
+          agent={agentToEdit}
+          isOpen={isEditOpen}
+          onClose={() => setIsEditOpen(false)}
+          onSuccess={handleEditSuccess}
+          onToast={onToast}
+        />
+      )}
+
+      {/* ── 4. Delete Confirmation Dialog ─────────────────────────────────── */}
+      <Dialog open={Boolean(deleteTarget)} onOpenChange={open => { if (!open && !deleting) setDeleteTarget(null); }}>
+        <DialogContent className="max-w-sm bg-white p-6 rounded-xl border border-[#E5DED6] shadow-xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-[#3E2723]">
+              Delete Agent?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-[#9C8577]">
+              Are you sure you want to delete <span className="font-semibold text-[#1C0F05]">"{deleteTarget?.name}"</span>?
+              This action will permanently delete the agent and their linked user account. Agents with existing referrals cannot be deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-4 flex items-center justify-end gap-3">
+            <Button
+              variant="outline"
+              disabled={deleting}
+              onClick={() => setDeleteTarget(null)}
+              className="border-[#E5DED6] text-[#3E2723] hover:bg-[#FAF8F5]"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleting}
+              onClick={handleDeleteConfirm}
+              className="bg-[#C0392B] hover:bg-[#a93226] text-white font-semibold"
+            >
+              {deleting && <Spinner small />}
+              {deleting ? 'Deleting…' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 5. Expanded Modal Dialog for Agent Details ───────────────────── */}
       <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
         <DialogContent className="max-w-md bg-white p-6 rounded-xl border border-border shadow-xl">
           <DialogHeader className="mb-3">
             <DialogTitle className="text-base font-bold text-text-1">Agent Details</DialogTitle>
             <DialogDescription className="text-xs text-text-3">
-              Profile information and referral credentials for this agent.
+              Full profile information and referral performance for this agent.
             </DialogDescription>
           </DialogHeader>
 
           {selectedAgent && (
             <div className="space-y-3 py-2 text-sm">
+              {/* Name */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Name</span>
                 <span className="font-semibold text-text-1">{selectedAgent.name}</span>
               </div>
+
+              {/* Phone */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Phone</span>
                 <span className="font-mono text-text-2">{selectedAgent.phone || '—'}</span>
               </div>
+
+              {/* Email */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Email</span>
                 <span className="text-text-2">{selectedAgent.email || '—'}</span>
               </div>
+
+              {/* Status */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Status</span>
                 <AgentStatusPill status={selectedAgent.status} />
               </div>
+
+              {/* Referral Code */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Referral Code</span>
                 {selectedAgent.referral_code ? (
@@ -247,12 +361,32 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
                   <span className="text-xs text-text-3">—</span>
                 )}
               </div>
+
+              {/* Date Joined */}
+              <div className="flex justify-between items-center py-2 border-b border-border">
+                <span className="text-xs font-semibold text-text-3 uppercase">Date Joined</span>
+                <span className="font-medium text-text-2">
+                  {selectedAgent.created_at ? new Date(selectedAgent.created_at).toLocaleDateString() : '—'}
+                </span>
+              </div>
+
+              {/* Total Referrals */}
+              <div className="flex justify-between items-center py-2 border-b border-border">
+                <span className="text-xs font-semibold text-text-3 uppercase">Total Referrals</span>
+                <span className="font-semibold text-text-1">
+                  {selectedAgent.total_referrals ?? selectedAgent.successful_referrals ?? 0}
+                </span>
+              </div>
+
+              {/* Successful Referrals */}
               {selectedAgent.successful_referrals !== undefined && (
                 <div className="flex justify-between items-center py-2 border-b border-border">
                   <span className="text-xs font-semibold text-text-3 uppercase">Successful Referrals</span>
                   <span className="font-semibold text-text-1">{selectedAgent.successful_referrals}</span>
                 </div>
               )}
+
+              {/* Reward Tier */}
               {selectedAgent.current_reward && (
                 <div className="flex justify-between items-center py-2">
                   <span className="text-xs font-semibold text-text-3 uppercase">Reward Tier</span>
@@ -274,7 +408,7 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
         </DialogContent>
       </Dialog>
 
-      {/* ── 4. Agent Table Card ───────────────────────────────────────────── */}
+      {/* ── 6. Agent Table Card ───────────────────────────────────────────── */}
       <section
         className="bg-white rounded-xl shadow-sm overflow-hidden"
         style={{ border: `1px solid ${BORDER}` }}
@@ -433,7 +567,7 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
                                     <MoreVertical className="h-4 w-4" />
                                   </Button>
                                 </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-40 bg-white border border-[#E5DED6] shadow-md z-50">
+                                <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
                                   <DropdownMenuItem
                                     onClick={() => handleViewDetails(a)}
                                     className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
@@ -446,9 +580,28 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
                                   >
                                     Edit Profile
                                   </DropdownMenuItem>
+
+                                  {a.status === 'APPROVED' && (
+                                    <DropdownMenuItem
+                                      onClick={() => handleToggleSuspend(a)}
+                                      className="cursor-pointer text-[#7A2518] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#7A2518]"
+                                    >
+                                      Suspend Agent
+                                    </DropdownMenuItem>
+                                  )}
+
+                                  {a.status === 'SUSPENDED' && (
+                                    <DropdownMenuItem
+                                      onClick={() => handleToggleSuspend(a)}
+                                      className="cursor-pointer text-[#1A5C34] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#1A5C34]"
+                                    >
+                                      Activate Agent
+                                    </DropdownMenuItem>
+                                  )}
+
                                   <DropdownMenuItem
                                     variant="destructive"
-                                    onClick={() => handleDeleteAgent(a)}
+                                    onClick={() => handleDeleteRequest(a)}
                                     className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
                                   >
                                     Delete Agent

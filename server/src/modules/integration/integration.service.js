@@ -97,16 +97,25 @@ async function processWebhook({
 
       // 3b: Look up the agent by referral_code
       const agent = await tx.agent.findFirst({
-        where:  { referral_code, status: 'APPROVED' },
-        select: { id: true, name: true, referral_code: true },
+        where:  { referral_code },
+        select: { id: true, name: true, referral_code: true, status: true },
       });
 
       if (!agent) {
         await tx.integrationLog.update({
           where: { id: log.id },
-          data:  { status: 'FAILED', error_message: 'Invalid referral code: no approved agent found.' },
+          data:  { status: 'FAILED', error_message: 'Invalid referral code: agent not found.' },
         });
         return { outcome: 'AGENT_404' };
+      }
+
+      if (agent.status !== 'APPROVED') {
+        const error_message = `Agent with referral code '${referral_code}' is not approved (status: ${agent.status}). Referrals are rejected.`;
+        await tx.integrationLog.update({
+          where: { id: log.id },
+          data:  { status: 'FAILED', error_message },
+        });
+        return { outcome: 'AGENT_NOT_APPROVED', status: agent.status };
       }
 
       // 3c: Look up campaign by campaign_code (explicit attribution)

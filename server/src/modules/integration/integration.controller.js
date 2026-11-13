@@ -71,8 +71,14 @@ async function accountOpened(req, res, next) {
 
     case 'AGENT_404':
       return res.status(404).json({
-        error: `No approved agent found with referral_code '${referral_code}'.`,
+        error: `No agent found with referral_code '${referral_code}'.`,
         code:  'AGENT_NOT_FOUND',
+      });
+
+    case 'AGENT_NOT_APPROVED':
+      return res.status(403).json({
+        error: `Agent with referral code '${referral_code}' is not approved (status: ${txResult.status}). Referrals are rejected.`,
+        code:  'AGENT_NOT_APPROVED',
       });
 
     case 'NO_CAMPAIGN':

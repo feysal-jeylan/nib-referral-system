@@ -27,9 +27,13 @@ router.get('/',  authenticateToken, ctrl.listAgents);
 router.post('/', ...adminOnly,      ctrl.createAgent);
 
 // Parameterised — must be after literal paths
-router.patch('/:id/approve', ...adminOnly,      ctrl.approveAgent);
-router.patch('/:id/reject',  ...adminOnly,      ctrl.rejectAgent);
-router.get('/:id/stats',     authenticateToken, ctrl.getAgentStats);
+router.patch('/:id/approve',  ...adminOnly,      ctrl.approveAgent);
+router.patch('/:id/reject',   ...adminOnly,      ctrl.rejectAgent);
+router.patch('/:id/suspend',  ...adminOnly,      ctrl.suspendAgent);
+router.patch('/:id/activate', ...adminOnly,      ctrl.activateAgent);
+router.put('/:id',            ...adminOnly,      ctrl.updateAgent);
+router.delete('/:id',         ...adminOnly,      ctrl.deleteAgent);
+router.get('/:id/stats',      authenticateToken, ctrl.getAgentStats);
 
 module.exports = router;
 

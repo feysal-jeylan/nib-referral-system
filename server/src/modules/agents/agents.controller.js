@@ -43,7 +43,7 @@ async function listAgents(req, res, next) {
     const search = (req.query.search ?? '').trim();
     const status = (req.query.status ?? '').trim().toUpperCase();
 
-    const VALID_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'];
+    const VALID_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED'];
     const safeStatus = VALID_STATUSES.includes(status) ? status : '';
 
     const result = await svc.listAgents(req.user.role, req.user.agent_id, {
@@ -180,5 +180,130 @@ async function getAgentStats(req, res, next) {
   }
 }
 
-module.exports = { applyAsAgent, listAgents, createAgent, approveAgent, rejectAgent, getAgentStats };
+// ── PUT /api/agents/:id  (ADMIN) ─────────────────────────────────────────────
+async function updateAgent(req, res, next) {
+  const agentId = parseInt(req.params.id, 10);
+  if (isNaN(agentId)) {
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  const name  = req.body.name?.trim();
+  const phone = req.body.phone?.trim();
+  const email = req.body.email?.trim()?.toLowerCase();
+
+  if (!name || !phone || !email) {
+    return res.status(400).json({ error: 'All fields are required: name, phone, email.', code: 'MISSING_FIELDS' });
+  }
+  if (!email.includes('@')) {
+    return res.status(400).json({ error: 'A valid email address is required.', code: 'INVALID_EMAIL' });
+  }
+
+  try {
+    const updated = await svc.updateAgent(agentId, { name, phone, email });
+    return res.status(200).json({
+      ...updated,
+      message: `Agent "${updated.name}" updated successfully.`,
+    });
+  } catch (err) {
+    if (err.status === 404 || err.code === 'AGENT_NOT_FOUND') {
+      return res.status(404).json({ error: err.message, code: 'AGENT_NOT_FOUND' });
+    }
+    if (err.code === 'P2002') {
+      let field = 'phone or email';
+      const target = err.meta?.target ?? '';
+      if (String(target).includes('phone'))    field = 'phone number';
+      if (String(target).includes('email'))    field = 'email address';
+      if (String(target).includes('username')) field = 'email address';
+      return res.status(409).json({ error: `An agent with this ${field} already exists.`, code: 'DUPLICATE_ENTRY' });
+    }
+    console.error('[PUT /api/agents/:id] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+// ── PATCH /api/agents/:id/suspend  (ADMIN) ───────────────────────────────────
+async function suspendAgent(req, res, next) {
+  const agentId = parseInt(req.params.id, 10);
+  if (isNaN(agentId)) {
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  try {
+    const updated = await svc.suspendAgent(agentId);
+    return res.status(200).json({
+      id:      updated.id,
+      name:    updated.name,
+      status:  updated.status,
+      message: `Agent "${updated.name}" has been suspended.`,
+    });
+  } catch (err) {
+    if (err.code === 'P2025') {
+      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
+    }
+    console.error('[PATCH /api/agents/:id/suspend] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+// ── PATCH /api/agents/:id/activate  (ADMIN) ──────────────────────────────────
+async function activateAgent(req, res, next) {
+  const agentId = parseInt(req.params.id, 10);
+  if (isNaN(agentId)) {
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  try {
+    const updated = await svc.activateAgent(agentId);
+    return res.status(200).json({
+      id:      updated.id,
+      name:    updated.name,
+      status:  updated.status,
+      message: `Agent "${updated.name}" has been activated.`,
+    });
+  } catch (err) {
+    if (err.code === 'P2025') {
+      return res.status(404).json({ error: `Agent with id ${agentId} not found.`, code: 'AGENT_NOT_FOUND' });
+    }
+    console.error('[PATCH /api/agents/:id/activate] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+// ── DELETE /api/agents/:id  (ADMIN) ──────────────────────────────────────────
+async function deleteAgent(req, res, next) {
+  const agentId = parseInt(req.params.id, 10);
+  if (isNaN(agentId)) {
+    return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  try {
+    const result = await svc.deleteAgent(agentId);
+    return res.status(200).json({
+      id:      result.id,
+      message: `Agent "${result.name}" deleted successfully.`,
+    });
+  } catch (err) {
+    if (err.status === 404 || err.code === 'AGENT_NOT_FOUND') {
+      return res.status(404).json({ error: err.message, code: 'AGENT_NOT_FOUND' });
+    }
+    if (err.status === 409 || err.code === 'EXISTING_REFERRALS') {
+      return res.status(409).json({ error: err.message, code: 'EXISTING_REFERRALS' });
+    }
+    console.error('[DELETE /api/agents/:id] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+module.exports = {
+  applyAsAgent,
+  listAgents,
+  createAgent,
+  approveAgent,
+  rejectAgent,
+  updateAgent,
+  suspendAgent,
+  activateAgent,
+  deleteAgent,
+  getAgentStats,
+};
 

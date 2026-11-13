@@ -1,21 +1,25 @@
 /**
  * features/agents/AgentTable.jsx
  * ───────────────────────────────
- * Displays agents. Pure display — no fetch calls.
- * Phase 2 & Enterprise UI:
- *   - Inline Approve / Reject for PENDING agents
- *   - Three-dot DropdownMenu actions on each row (View Details, Edit Profile, Delete Agent)
+ * Displays agents table with:
+ *   - Inline Approve / Reject for PENDING applications
+ *   - Three-dot DropdownMenu actions on each row:
+ *       • View Details
+ *       • Edit Profile
+ *       • Suspend Agent (when APPROVED) / Activate Agent (when SUSPENDED)
+ *       • Delete Agent (with 409 referral protection)
  *
  * Props:
- *   agents        {object[]}
- *   loading       {boolean}
- *   isAdmin       {boolean}
- *   actioning     {Set<number>}        — IDs currently being acted on
- *   onApprove     {(id, name) => void} — admin only
- *   onReject      {(id, name) => void} — admin only
- *   onViewDetails {(agent) => void}
- *   onEditProfile {(agent) => void}
- *   onDeleteAgent {(agent) => void}
+ *   agents          {object[]}
+ *   loading         {boolean}
+ *   isAdmin         {boolean}
+ *   actioning       {Set<number>}
+ *   onApprove       {(id, name) => void}
+ *   onReject        {(id, name) => void}
+ *   onViewDetails   {(agent) => void}
+ *   onEditProfile   {(agent) => void}
+ *   onToggleSuspend {(agent) => void}
+ *   onDeleteAgent   {(agent) => void}
  */
 import { MoreVertical } from 'lucide-react';
 import Spinner from '@/components/ui/Spinner';
@@ -44,6 +48,7 @@ export default function AgentTable({
   onReject,
   onViewDetails,
   onEditProfile,
+  onToggleSuspend,
   onDeleteAgent,
 }) {
   if (loading) {
@@ -103,10 +108,16 @@ export default function AgentTable({
                 <td className="px-6 py-4 font-medium" style={{ color: CHOCOLATE }}>{a.name}</td>
 
                 <td className="px-6 py-4">
-                  {a.referral_code
-                    ? <code className="font-mono text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(138,77,31,0.08)', color: BRAND }}>{a.referral_code}</code>
-                    : <span className="text-xs" style={{ color: MUTED }}>—</span>
-                  }
+                  {a.referral_code ? (
+                    <code
+                      className="font-mono text-xs px-2 py-0.5 rounded"
+                      style={{ background: 'rgba(138,77,31,0.08)', color: BRAND }}
+                    >
+                      {a.referral_code}
+                    </code>
+                  ) : (
+                    <span className="text-xs" style={{ color: MUTED }}>—</span>
+                  )}
                 </td>
 
                 <td className="px-6 py-4">
@@ -160,7 +171,7 @@ export default function AgentTable({
                             <MoreVertical className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-40 bg-white border border-[#E5DED6] shadow-md z-50">
+                        <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
                           <DropdownMenuItem
                             onClick={() => onViewDetails?.(a)}
                             className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
@@ -173,6 +184,25 @@ export default function AgentTable({
                           >
                             Edit Profile
                           </DropdownMenuItem>
+
+                          {a.status === 'APPROVED' && (
+                            <DropdownMenuItem
+                              onClick={() => onToggleSuspend?.(a)}
+                              className="cursor-pointer text-[#7A2518] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#7A2518]"
+                            >
+                              Suspend Agent
+                            </DropdownMenuItem>
+                          )}
+
+                          {a.status === 'SUSPENDED' && (
+                            <DropdownMenuItem
+                              onClick={() => onToggleSuspend?.(a)}
+                              className="cursor-pointer text-[#1A5C34] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#1A5C34]"
+                            >
+                              Activate Agent
+                            </DropdownMenuItem>
+                          )}
+
                           <DropdownMenuItem
                             variant="destructive"
                             onClick={() => onDeleteAgent?.(a)}
