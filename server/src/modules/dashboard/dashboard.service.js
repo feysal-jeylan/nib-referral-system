@@ -1,7 +1,7 @@
 /**
  * src/modules/dashboard/dashboard.service.js
  * ─────────────────────────────────────────────
- * Data-access layer for the executive dashboard metrics.
+ * Data-access layer for the operational dashboard metrics.
  * Uses Prisma aggregate queries — never fetches full record sets into JS.
  */
 
@@ -10,7 +10,7 @@
 const prisma = require('@/config/db');
 
 /**
- * Returns all KPI stats for the Overview page in a single call.
+ * Returns operational KPI stats for the Overview page in a single call.
  * Uses Promise.all so all queries run in parallel.
  */
 async function getDashboardStats() {
@@ -29,17 +29,16 @@ async function getDashboardStats() {
     successfulReferrals,
     pendingApprovals,
     activeCampaigns,
-    payoutRaw,
     topAgentsRaw,
     referralsRaw,       // last 7 days, grouped by date in SQL
     campaignDist,       // per-campaign successful referral counts
     recentActivity,     // 5 most recent referrals
   ] = await Promise.all([
 
-    // 1. Total agent count
-    prisma.agent.count(),
+    // 1. Total APPROVED agent count
+    prisma.agent.count({ where: { status: 'APPROVED' } }),
 
-    // 2. Total referral count
+    // 2. Total referral count (ALL referrals: PENDING, SUCCESSFUL, REJECTED)
     prisma.referral.count(),
 
     // 3. Successful referral count
@@ -51,32 +50,21 @@ async function getDashboardStats() {
     // 5. Active campaign count
     prisma.campaign.count({ where: { status: 'ACTIVE' } }),
 
-    // 6. Total payout for SUCCESSFUL referrals (parsed numeric reward_value from campaigns)
-    prisma.$queryRaw`
-      SELECT 
-        COALESCE(SUM(COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0)), 0)::numeric AS total_payout
-      FROM referrals r
-      LEFT JOIN campaigns c ON r.campaign_id = c.id
-      WHERE r.status = 'SUCCESSFUL'
-    `,
-
-    // 7. Top 5 agents by successful referral count & their total earnings
+    // 6. Top 5 agents by successful referral count
     prisma.$queryRaw`
       SELECT 
         a.id,
         a.name,
-        COUNT(r.id)::int AS successful_count,
-        COALESCE(SUM(COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0)), 0)::numeric AS total_earned
+        COUNT(r.id)::int AS successful_count
       FROM referrals r
       JOIN agents a ON r.agent_id = a.id
-      LEFT JOIN campaigns c ON r.campaign_id = c.id
       WHERE r.status = 'SUCCESSFUL'
       GROUP BY a.id, a.name
-      ORDER BY successful_count DESC, total_earned DESC
+      ORDER BY successful_count DESC
       LIMIT 5
     `,
 
-    // 8. Referrals over last 7 days — grouped by calendar date using raw SQL
+    // 7. Referrals over last 7 days — grouped by calendar date using raw SQL
     //    DATE(created_at) is timezone-agnostic relative to the DB server.
     prisma.$queryRaw`
       SELECT
@@ -88,7 +76,7 @@ async function getDashboardStats() {
       ORDER BY created_at::date ASC
     `,
 
-    // 9. Campaign distribution — successful referrals per campaign (top 8)
+    // 8. Campaign distribution — successful referrals per campaign (top 8)
     prisma.$queryRaw`
       SELECT
         c.name,
@@ -101,7 +89,7 @@ async function getDashboardStats() {
       LIMIT 8
     `,
 
-    // 10. Recent activity — 5 latest referrals with agent name
+    // 9. Recent activity — 5 latest referrals with agent name
     prisma.referral.findMany({
       take:    5,
       orderBy: { created_at: 'desc' },
@@ -117,10 +105,10 @@ async function getDashboardStats() {
     }),
   ]);
 
-  // ── Conversion Rate: (SUCCESSFUL / Total) * 100 rounded to 1 decimal ───────
+  // ── Conversion Rate: (SUCCESSFUL / Total) * 100, returns 0 if total is 0 ──
   const conversionRate = totalReferrals > 0
     ? Number(((successfulReferrals / totalReferrals) * 100).toFixed(1))
-    : 0.0;
+    : 0;
 
   // ── Build the 7-day series (fill in missing days with count: 0) ──────────
   const dateMap = new Map(referralsRaw.map(r => [r.date, r.count]));
@@ -139,15 +127,12 @@ async function getDashboardStats() {
     successfulReferrals:  Number(successfulReferrals),
     pendingApprovals:     Number(pendingApprovals),
     activeCampaigns:      Number(activeCampaigns),
-    totalPayout:          Number(payoutRaw[0]?.total_payout ?? 0),
     conversionRate,
     topAgents: topAgentsRaw.map(a => ({
       id:               a.id,
       name:             a.name,
       successful_count: Number(a.successful_count ?? 0),
       successfulCount:  Number(a.successful_count ?? 0),
-      total_earned:     Number(a.total_earned ?? 0),
-      totalEarned:      Number(a.total_earned ?? 0),
     })),
     referralsOverTime,
     campaignDistribution: campaignDist.map(r => ({

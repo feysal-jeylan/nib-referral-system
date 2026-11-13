@@ -1,22 +1,22 @@
 /**
  * features/dashboard/pages/Overview.jsx
  * ──────────────────────────────────────
- * Executive Advanced Analytics Dashboard.
+ * Enterprise Operational Overview Dashboard.
  *
  * Sections:
  *  1. Row 1: KPI Metric Cards
- *     - Total Agents (Brand Brown)
- *     - Total Payout (Gold, formatted as X,XXX ETB, Wallet icon)
- *     - Conversion Rate (Sage Green, XX.X%, TrendingUp icon)
- *     - Active Campaigns (Muted Brown)
- *  2. Row 2: Analytics Charts
+ *     - Total Agents (Count of APPROVED agents)
+ *     - Total Referrals (Count of ALL referrals)
+ *     - Conversion Rate (Percentage of successful referrals out of total referrals)
+ *     - Active Campaigns (Count of ACTIVE campaigns)
+ *  2. Row 2: Operational Analytics Charts
  *     - Referrals Over Time (Line Chart)
  *     - Campaign Distribution (Bar Chart)
  *  3. Row 3: Split Widgets
- *     - Column A: Top Performing Agents (Rank badges #1, #2..., Trophy icon for #1, Agent Name, Successful Referrals, Total Earned)
+ *     - Column A: Top Performing Agents (Rank #1, #2..., Agent Name, Successful Referral Count)
  *     - Column B: Recent Activity (5 most recent referrals with status pills)
  *
- * Props: user, isAdmin, onToast
+ * Props: onToast
  */
 
 import { useEffect, useState } from 'react';
@@ -26,7 +26,7 @@ import {
   BarChart, Bar, Cell,
 } from 'recharts';
 import {
-  Users, Wallet, TrendingUp, Megaphone, Trophy, BarChart2,
+  Users, CheckCircle2, TrendingUp, Megaphone, Trophy, BarChart2,
 } from 'lucide-react';
 import api from '@/services/api';
 import Spinner from '@/components/ui/Spinner';
@@ -247,33 +247,32 @@ export default function Overview({ onToast }) {
   const ra  = stats?.recentActivity       ?? [];
   const ta  = stats?.topAgents            ?? [];
 
-  // Payout formatted as "X,XXX ETB"
-  const formattedPayout = `${Number(stats?.totalPayout ?? 0).toLocaleString()} ETB`;
-
-  // Conversion rate formatted as "XX.X%"
-  const formattedConversionRate = `${Number(stats?.conversionRate ?? 0).toFixed(1)}%`;
+  // Conversion rate safe formatting (strictly 0% if no referrals, never NaN)
+  const displayConversionRate = (!stats || !stats.totalReferrals || stats.totalReferrals === 0)
+    ? '0%'
+    : `${Number(stats.conversionRate ?? 0).toFixed(1)}%`;
 
   return (
     <div className="p-6 space-y-6" style={{ background: IVORY, minHeight: '100%' }}>
 
-      {/* ── Row 1: KPI Cards ──────────────────────────────────────────────── */}
+      {/* ── Row 1: Top 4 KPI Cards ────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {/* Total Agents */}
+        {/* Total Agents (Approved) */}
         <MetricCard
           icon={Users}
           label="Total Agents"
           value={stats?.totalAgents}
-          subtitle="Registered agent network"
+          subtitle="Approved active agents"
           accent={BRAND}
           loading={loading}
         />
 
-        {/* Total Payout */}
+        {/* Total Referrals (All) */}
         <MetricCard
-          icon={Wallet}
-          label="Total Payout"
-          value={formattedPayout}
-          subtitle="Earned reward liability"
+          icon={CheckCircle2}
+          label="Total Referrals"
+          value={stats?.totalReferrals}
+          subtitle="All submitted referrals"
           accent={GOLD}
           loading={loading}
         />
@@ -282,7 +281,7 @@ export default function Overview({ onToast }) {
         <MetricCard
           icon={TrendingUp}
           label="Conversion Rate"
-          value={formattedConversionRate}
+          value={displayConversionRate}
           subtitle="Successful referral ratio"
           accent={SUCCESS}
           loading={loading}
@@ -413,7 +412,7 @@ export default function Overview({ onToast }) {
         {/* Column A: Top Performing Agents */}
         <Section
           title="Top Performing Agents"
-          subtitle="Ranked by successful referral volume & earned rewards"
+          subtitle="Ranked by successful referral volume"
           action={<Trophy size={16} style={{ color: GOLD }} />}
         >
           {loading ? (
@@ -428,7 +427,6 @@ export default function Overview({ onToast }) {
               {ta.map((agent, i) => {
                 const rank = i + 1;
                 const count = agent.successful_count ?? agent.successfulCount ?? 0;
-                const earned = agent.total_earned ?? agent.totalEarned ?? 0;
 
                 return (
                   <li
@@ -438,28 +436,25 @@ export default function Overview({ onToast }) {
                     onMouseEnter={e => { e.currentTarget.style.background = IVORY; }}
                     onMouseLeave={e => { e.currentTarget.style.background = ''; }}
                   >
-                    {/* Rank Badge + Agent Name & Referral Count */}
+                    {/* Rank Badge + Agent Name */}
                     <div className="flex items-center gap-3.5 min-w-0">
                       <RankBadge rank={rank} />
                       <div className="min-w-0">
                         <p className="text-sm font-semibold truncate" style={{ color: CHOCOLATE }}>
                           {agent.name}
                         </p>
-                        <p className="text-xs font-medium truncate mt-0.5" style={{ color: MUTED }}>
-                          <span className="font-semibold" style={{ color: BRAND }}>{count}</span>
-                          {' '}successful referral{count !== 1 ? 's' : ''}
-                        </p>
                       </div>
                     </div>
 
-                    {/* Total Earned Payout */}
+                    {/* Successful Referral Count Badge */}
                     <div className="flex-shrink-0 text-right">
-                      <p className="text-sm font-bold tabular-nums" style={{ color: CHOCOLATE }}>
-                        {Number(earned).toLocaleString()} ETB
-                      </p>
-                      <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: GOLD }}>
-                        Total Earned
-                      </p>
+                      <span
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold"
+                        style={{ background: 'rgba(138,77,31,0.08)', color: BRAND }}
+                      >
+                        <span className="font-bold tabular-nums text-sm">{count}</span>
+                        <span>referral{count !== 1 ? 's' : ''}</span>
+                      </span>
                     </div>
                   </li>
                 );
