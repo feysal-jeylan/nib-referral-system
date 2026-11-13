@@ -13,8 +13,9 @@ const ctrl = require('./finance.controller');
 const router = express.Router();
 const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 
-router.get('/finance', ...adminOnly, ctrl.getFinance);
-router.get('/config',  ...adminOnly, ctrl.getConfig);
-router.put('/config',  ...adminOnly, ctrl.updateConfig);
+router.get('/finance',               ...adminOnly, ctrl.getFinance);
+router.patch('/finance/pay/:agentId', ...adminOnly, ctrl.payAgent);
+router.get('/config',                ...adminOnly, ctrl.getConfig);
+router.put('/config',                ...adminOnly, ctrl.updateConfig);
 
 module.exports = router;

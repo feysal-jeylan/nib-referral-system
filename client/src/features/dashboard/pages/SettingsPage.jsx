@@ -240,8 +240,22 @@ export default function SettingsPage({ user: propUser, onToast }) {
     }
   }
 
-  function handleMarkAsPaid(agentName) {
-    onToast?.({ type: 'success', message: `✅ Payout for ${agentName} marked as paid.` });
+  // ── Payout Action State ─────────────────────────────────────────────────────
+  const [payingAgentId, setPayingAgentId] = useState(null);
+
+  async function handleMarkAsPaid(agent) {
+    setPayingAgentId(agent.id);
+    try {
+      await api.patch(`/dashboard/finance/pay/${agent.id}`);
+      const res = await api.get('/dashboard/finance');
+      setFinanceData(res.data);
+      onToast?.({ type: 'success', message: `✅ Payout for ${agent.name} marked as paid.` });
+    } catch (err) {
+      const msg = err.response?.data?.error ?? 'Failed to mark payout as paid.';
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+    } finally {
+      setPayingAgentId(null);
+    }
   }
 
   const agentsList     = financeData?.agents ?? [];
@@ -594,8 +608,8 @@ export default function SettingsPage({ user: propUser, onToast }) {
                         <th className="py-3.5 px-6">Agent</th>
                         <th className="py-3.5 px-6">Referral Code</th>
                         <th className="py-3.5 px-6 text-center">Successful Referrals</th>
-                        <th className="py-3.5 px-6 text-right">Total Earned</th>
-                        <th className="py-3.5 px-6 text-center">Payout Status</th>
+                        <th className="py-3.5 px-6 text-right">Available Balance</th>
+                        <th className="py-3.5 px-6 text-right">Total Paid</th>
                         <th className="py-3.5 px-6 text-right">Action</th>
                       </tr>
                     </thead>
@@ -636,37 +650,44 @@ export default function SettingsPage({ user: propUser, onToast }) {
                             </span>
                           </td>
 
-                          {/* Total Earned */}
+                          {/* Available Balance */}
                           <td className="py-4 px-6 text-right">
-                            <span className="font-bold text-sm tabular-nums" style={{ color: CHOCOLATE }}>
-                              {Number(agent.total_earned ?? 0).toLocaleString()} ETB
-                            </span>
-                          </td>
-
-                          {/* Payout Status */}
-                          <td className="py-4 px-6 text-center">
                             <span
-                              className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wider"
-                              style={{
-                                background: 'rgba(230,81,0,0.12)',
-                                color: '#E65100',
-                              }}
+                              className="font-bold text-sm tabular-nums"
+                              style={{ color: Number(agent.available_balance ?? 0) > 0 ? '#1A5C34' : CHOCOLATE }}
                             >
-                              {agent.payout_status ?? 'PENDING'}
+                              {Number(agent.available_balance ?? 0).toLocaleString()} ETB
                             </span>
                           </td>
 
-                          {/* Action Button */}
+                          {/* Total Paid */}
                           <td className="py-4 px-6 text-right">
-                            <Button
-                              type="button"
-                              onClick={() => handleMarkAsPaid(agent.name)}
-                              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition shadow-2xs"
-                              style={{ background: BRAND }}
-                            >
-                              <Check size={13} className="mr-1" />
-                              <span>Mark as Paid</span>
-                            </Button>
+                            <span className="font-semibold text-sm tabular-nums" style={{ color: MUTED }}>
+                              {Number(agent.total_paid ?? 0).toLocaleString()} ETB
+                            </span>
+                          </td>
+
+                          {/* Action Button or Paid Badge */}
+                          <td className="py-4 px-6 text-right">
+                            {Number(agent.available_balance ?? 0) > 0 ? (
+                              <Button
+                                type="button"
+                                disabled={payingAgentId === agent.id}
+                                onClick={() => handleMarkAsPaid(agent)}
+                                className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition shadow-2xs cursor-pointer hover:opacity-90 active:scale-95"
+                                style={{ background: BRAND }}
+                              >
+                                <Check size={13} className="mr-1" />
+                                <span>{payingAgentId === agent.id ? 'Processing…' : 'Mark as Paid'}</span>
+                              </Button>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wider bg-emerald-50 text-emerald-800 border border-emerald-200"
+                              >
+                                <CheckCircle2 size={12} className="text-emerald-700" />
+                                <span>Paid</span>
+                              </span>
+                            )}
                           </td>
                         </tr>
                       ))}

@@ -10,7 +10,7 @@ const prisma = require('@/config/db');
 
 /**
  * Returns finance overview: all approved agents with successful referral count,
- * calculated total earned, mock pending payout status, and total liability sum.
+ * total earned, available balance (unpaid), and total paid.
  */
 async function getFinanceOverview() {
   const agentsRaw = await prisma.$queryRaw`
@@ -21,32 +21,70 @@ async function getFinanceOverview() {
       a.phone,
       a.referral_code,
       COUNT(r.id)::int AS successful_referrals,
-      COALESCE(SUM(COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0)), 0)::numeric AS total_earned
+      COALESCE(SUM(COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0)), 0)::numeric AS total_earned,
+      COALESCE(SUM(CASE WHEN r.payout_status = 'PENDING' THEN COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0) ELSE 0 END), 0)::numeric AS available_balance,
+      COALESCE(SUM(CASE WHEN r.payout_status = 'PAID' THEN COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0) ELSE 0 END), 0)::numeric AS total_paid
     FROM agents a
     LEFT JOIN referrals r ON r.agent_id = a.id AND r.status = 'SUCCESSFUL'
     LEFT JOIN campaigns c ON r.campaign_id = c.id
     WHERE a.status = 'APPROVED'
     GROUP BY a.id, a.name, a.email, a.phone, a.referral_code
-    ORDER BY total_earned DESC, successful_referrals DESC, a.name ASC
+    ORDER BY available_balance DESC, total_earned DESC, a.name ASC
   `;
 
-  const agents = agentsRaw.map((a) => ({
-    id: a.id,
-    name: a.name,
-    email: a.email,
-    phone: a.phone,
-    referral_code: a.referral_code,
-    successful_referrals: Number(a.successful_referrals ?? 0),
-    total_earned: Number(a.total_earned ?? 0),
-    payout_status: 'PENDING',
-  }));
+  const agents = agentsRaw.map((a) => {
+    const availableBalance = Number(a.available_balance ?? 0);
+    const totalPaid        = Number(a.total_paid ?? 0);
+    const totalEarned      = Number(a.total_earned ?? 0);
 
-  const totalPayout = agents.reduce((sum, a) => sum + a.total_earned, 0);
+    return {
+      id:                   a.id,
+      name:                 a.name,
+      email:                a.email,
+      phone:                a.phone,
+      referral_code:        a.referral_code,
+      successful_referrals: Number(a.successful_referrals ?? 0),
+      total_earned:         totalEarned,
+      available_balance:    availableBalance,
+      total_paid:           totalPaid,
+      payout_status:        availableBalance > 0 ? 'PENDING' : 'PAID',
+    };
+  });
+
+  const totalOutstanding = agents.reduce((sum, a) => sum + a.available_balance, 0);
+  const totalPaidAll     = agents.reduce((sum, a) => sum + a.total_paid, 0);
+  const totalEarnedAll   = agents.reduce((sum, a) => sum + a.total_earned, 0);
 
   return {
     agents,
-    total_payout: totalPayout,
-    totalLiability: totalPayout,
+    total_payout:   totalOutstanding,
+    totalLiability: totalOutstanding,
+    total_paid:     totalPaidAll,
+    totalPaid:      totalPaidAll,
+    total_earned:   totalEarnedAll,
+  };
+}
+
+/**
+ * Updates all PENDING successful referrals for an agent to PAID.
+ * @param {number} agentId
+ */
+async function markAgentPayoutPaid(agentId) {
+  const result = await prisma.referral.updateMany({
+    where: {
+      agent_id:      Number(agentId),
+      status:        'SUCCESSFUL',
+      payout_status: 'PENDING',
+    },
+    data: {
+      payout_status: 'PAID',
+    },
+  });
+
+  return {
+    agent_id:      Number(agentId),
+    updated_count: result.count,
+    message:       `Successfully marked ${result.count} referral payout(s) as PAID.`,
   };
 }
 
@@ -62,10 +100,10 @@ async function getSystemConfig() {
 
   return {
     reward_rules: rules.map((r) => ({
-      id: r.id,
+      id:            r.id,
       min_referrals: Number(r.min_referrals),
-      reward_name: r.reward_name,
-      created_at: r.created_at,
+      reward_name:   r.reward_name,
+      created_at:    r.created_at,
     })),
   };
 }
@@ -91,16 +129,17 @@ async function updateSystemConfig(rulesArray) {
     `;
 
     return updated.map((r) => ({
-      id: r.id,
+      id:            r.id,
       min_referrals: Number(r.min_referrals),
-      reward_name: r.reward_name,
-      created_at: r.created_at,
+      reward_name:   r.reward_name,
+      created_at:    r.created_at,
     }));
   });
 }
 
 module.exports = {
   getFinanceOverview,
+  markAgentPayoutPaid,
   getSystemConfig,
   updateSystemConfig,
 };

@@ -214,18 +214,24 @@ async function getAgentStats(agentId) {
     `,
     prisma.$queryRaw`
       SELECT 
-        COALESCE(SUM(COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0)), 0)::numeric AS total_earned
+        COALESCE(SUM(COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0)), 0)::numeric AS total_earned,
+        COALESCE(SUM(CASE WHEN r.payout_status = 'PENDING' THEN COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0) ELSE 0 END), 0)::numeric AS available_balance,
+        COALESCE(SUM(CASE WHEN r.payout_status = 'PAID' THEN COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0) ELSE 0 END), 0)::numeric AS total_paid
       FROM referrals r
       LEFT JOIN campaigns c ON r.campaign_id = c.id
       WHERE r.agent_id = ${agentId} AND r.status = 'SUCCESSFUL'
     `,
   ]);
 
+  const earnings = earningsRows[0] || {};
+
   return {
     agent_id:             agentId,
     successful_referrals: successfulCount,
     current_reward:       tierRows.length > 0 ? tierRows[0].reward_name : null,
-    total_earned:         Number(earningsRows[0]?.total_earned ?? 0),
+    total_earned:         Number(earnings.total_earned ?? 0),
+    available_balance:    Number(earnings.available_balance ?? 0),
+    total_paid:           Number(earnings.total_paid ?? 0),
   };
 }
 

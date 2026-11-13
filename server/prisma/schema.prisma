@@ -59,6 +59,7 @@ model Referral {
   customer_phone String?  @db.VarChar(20)
   campaign_id    Int?
   status         String   @default("PENDING") @db.VarChar(20)
+  payout_status  String   @default("PENDING") @db.VarChar(20)
   created_at     DateTime @default(now()) @db.Timestamp(6)
 
   agent    Agent     @relation(fields: [agent_id], references: [id], onDelete: Restrict)

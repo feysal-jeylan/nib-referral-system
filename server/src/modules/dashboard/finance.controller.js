@@ -19,6 +19,25 @@ async function getFinance(req, res, next) {
   }
 }
 
+// ── PATCH /api/dashboard/finance/pay/:agentId (Admin only) ───────────────────
+async function payAgent(req, res, next) {
+  try {
+    const agentId = parseInt(req.params.agentId, 10);
+    if (isNaN(agentId)) {
+      return res.status(400).json({
+        error: 'Invalid agent ID parameter.',
+        code: 'INVALID_ID',
+      });
+    }
+
+    const result = await svc.markAgentPayoutPaid(agentId);
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error(`[PATCH /api/dashboard/finance/pay/${req.params.agentId}] Error:`, err.message);
+    next(err);
+  }
+}
+
 // ── GET /api/dashboard/config (Admin only) ───────────────────────────────────
 async function getConfig(req, res, next) {
   try {
@@ -70,6 +89,7 @@ async function updateConfig(req, res, next) {
 
 module.exports = {
   getFinance,
+  payAgent,
   getConfig,
   updateConfig,
 };

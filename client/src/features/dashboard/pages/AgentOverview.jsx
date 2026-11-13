@@ -5,8 +5,12 @@
  *
  * Sections:
  *  1. Referral Code Hero Card — prominent with one-click copy button
- *  2. Stats Row              — Successful Referrals & Reward Tier (None, Bronze, Silver, Gold)
- *  3. Recent Activity List   — Last 5 referrals with status pills and proper empty state
+ *  2. Stats Row (4 cards):
+ *     - Total Earned (Gold)
+ *     - Available Balance (Green - claimable earnings)
+ *     - Total Paid (Muted Brown - disbursed)
+ *     - Reward Tier (Bronze/Silver/Gold)
+ *  3. Recent Activity List — Last 5 referrals with status pills and empty state
  *
  * Props: user, onToast
  */
@@ -16,24 +20,27 @@ import {
   Copy,
   CheckCircle2,
   Award,
-  TrendingUp,
   Clock,
   XCircle,
   FileText,
   Sparkles,
   Wallet,
+  Coins,
+  Landmark,
 } from 'lucide-react';
 import useAppStore from '@/store/useAppStore';
 import api from '@/services/api';
 import Spinner from '@/components/ui/Spinner';
 
 // ── Brand palette ─────────────────────────────────────────────────────────────
-const BRAND     = '#8A4D1F';
-const CHOCOLATE = '#3E2723';
-const GOLD      = '#D4AF37';
-const MUTED     = '#9C8577';
-const IVORY     = '#FAF8F5';
-const BORDER    = 'rgba(138,77,31,0.10)';
+const BRAND       = '#8A4D1F';
+const CHOCOLATE   = '#3E2723';
+const GOLD        = '#D4AF37';
+const MUTED       = '#9C8577';
+const MUTED_BROWN = '#7F483B';
+const SUCCESS     = '#1A5C34';
+const IVORY       = '#FAF8F5';
+const BORDER      = 'rgba(138,77,31,0.10)';
 
 // ── Status pill helpers ───────────────────────────────────────────────────────
 function statusColor(s) {
@@ -80,25 +87,30 @@ function tierAccent(tier) {
 }
 
 // ── Stat Card Component ───────────────────────────────────────────────────────
-function StatCard({ icon: Icon, label, value, accent = BRAND, loading }) {
+function StatCard({ icon: Icon, label, value, subtitle, accent = BRAND, loading }) {
   return (
     <div
-      className="bg-white rounded-xl p-6 flex items-start gap-4 shadow-sm"
+      className="bg-white rounded-xl p-5 flex items-start gap-4 shadow-sm transition-all duration-200 hover:shadow-md"
       style={{ border: `1px solid ${BORDER}` }}
     >
       <div
-        className="rounded-lg p-2.5 flex-shrink-0"
+        className="rounded-xl p-3 flex-shrink-0 shadow-2xs"
         style={{ background: `${accent}18` }}
       >
-        <Icon size={22} style={{ color: accent }} strokeWidth={1.8} />
+        <Icon size={22} style={{ color: accent }} strokeWidth={2} />
       </div>
-      <div className="min-w-0">
-        <p className="text-xs font-medium mb-1" style={{ color: MUTED }}>{label}</p>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-medium mb-1 truncate" style={{ color: MUTED }}>{label}</p>
         {loading ? (
           <div className="h-7 w-20 rounded bg-stone-100 animate-pulse mt-0.5" />
         ) : (
-          <p className="text-2xl font-bold leading-none" style={{ color: CHOCOLATE }}>
-            {value ?? '—'}
+          <p className="text-2xl font-bold leading-none tabular-nums" style={{ color: CHOCOLATE }}>
+            {value ?? '0 ETB'}
+          </p>
+        )}
+        {subtitle && !loading && (
+          <p className="text-[11px] mt-1.5 font-medium truncate" style={{ color: MUTED }}>
+            {subtitle}
           </p>
         )}
       </div>
@@ -142,16 +154,20 @@ export default function AgentOverview({ user: propUser, onToast }) {
           if (agentRecord) {
             setStats({
               successful_referrals: agentRecord.successful_referrals ?? 0,
-              current_reward: agentRecord.current_reward ?? null,
-              total_earned: agentRecord.total_earned ?? 0,
+              current_reward:       agentRecord.current_reward ?? null,
+              total_earned:         agentRecord.total_earned ?? 0,
+              available_balance:    agentRecord.available_balance ?? 0,
+              total_paid:           agentRecord.total_paid ?? 0,
             });
           }
         }
       } else if (agentRecord) {
         setStats({
           successful_referrals: agentRecord.successful_referrals ?? 0,
-          current_reward: agentRecord.current_reward ?? null,
-          total_earned: agentRecord.total_earned ?? 0,
+          current_reward:       agentRecord.current_reward ?? null,
+          total_earned:         agentRecord.total_earned ?? 0,
+          available_balance:    agentRecord.available_balance ?? 0,
+          total_paid:           agentRecord.total_paid ?? 0,
         });
       }
 
@@ -195,11 +211,17 @@ export default function AgentOverview({ user: propUser, onToast }) {
   }
 
   // Derive stats values
-  const successfulCount = stats?.successful_referrals ?? 0;
-  const currentTier     = calculateTier(successfulCount, stats?.current_reward);
-  const tierColor       = tierAccent(currentTier);
-  const totalEarned     = stats?.total_earned != null ? Number(stats.total_earned) : 0;
-  const formattedEarned = `${(!isNaN(totalEarned) ? totalEarned : 0).toLocaleString('en-US')} ETB`;
+  const successfulCount    = stats?.successful_referrals ?? 0;
+  const currentTier        = calculateTier(successfulCount, stats?.current_reward);
+  const tierColor          = tierAccent(currentTier);
+
+  const totalEarned        = stats?.total_earned != null ? Number(stats.total_earned) : 0;
+  const availableBalance   = stats?.available_balance != null ? Number(stats.available_balance) : 0;
+  const totalPaid          = stats?.total_paid != null ? Number(stats.total_paid) : 0;
+
+  const formattedEarned    = `${(!isNaN(totalEarned) ? totalEarned : 0).toLocaleString('en-US')} ETB`;
+  const formattedAvailable = `${(!isNaN(availableBalance) ? availableBalance : 0).toLocaleString('en-US')} ETB`;
+  const formattedPaid      = `${(!isNaN(totalPaid) ? totalPaid : 0).toLocaleString('en-US')} ETB`;
 
   return (
     <div className="p-6 space-y-6" style={{ background: IVORY }}>
@@ -268,26 +290,44 @@ export default function AgentOverview({ user: propUser, onToast }) {
         </div>
       </div>
 
-      {/* ── 2. Metric Cards ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard
-          icon={TrendingUp}
-          label="Total Successful Referrals"
-          value={loading ? null : successfulCount}
-          accent={BRAND}
-          loading={loading}
-        />
+      {/* ── 2. Metric Cards (4 Cards) ───────────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        {/* Card 1: Total Earned */}
         <StatCard
           icon={Wallet}
           label="Total Earned"
           value={loading ? null : formattedEarned}
+          subtitle="Cumulative reward earnings"
           accent={GOLD}
           loading={loading}
         />
+
+        {/* Card 2: Available Balance */}
+        <StatCard
+          icon={Coins}
+          label="Available Balance"
+          value={loading ? null : formattedAvailable}
+          subtitle="Pending payout settlement"
+          accent={SUCCESS}
+          loading={loading}
+        />
+
+        {/* Card 3: Total Paid */}
+        <StatCard
+          icon={Landmark}
+          label="Total Paid"
+          value={loading ? null : formattedPaid}
+          subtitle="Disbursed to bank account"
+          accent={MUTED_BROWN}
+          loading={loading}
+        />
+
+        {/* Card 4: Current Reward Tier */}
         <StatCard
           icon={Award}
           label="Current Reward Tier"
           value={loading ? null : currentTier}
+          subtitle={`${successfulCount} successful referral${successfulCount !== 1 ? 's' : ''}`}
           accent={tierColor}
           loading={loading}
         />
