@@ -132,5 +132,60 @@ async function getLogs(req, res, next) {
   }
 }
 
-module.exports = { accountOpened, getLogs };
+// ── POST /api/integration/logs/:id/retry (ADMIN) ─────────────────────────────
+async function retryLog(req, res, next) {
+  try {
+    const { id } = req.params;
+    const result = await svc.retryIntegrationLog(id);
+
+    if (result.outcome === 'LOG_NOT_FOUND') {
+      return res.status(404).json({ error: 'Integration log not found.', code: 'LOG_NOT_FOUND' });
+    }
+
+    if (result.outcome === 'SUCCESS') {
+      return res.status(200).json({
+        message:     'Webhook retried successfully and referral qualified.',
+        outcome:     'SUCCESS',
+        referral_id: result.referral.id,
+        agent:       result.agent.name,
+        campaign:    result.campaign.name,
+      });
+    }
+
+    // Business rule or qualification failure on retry
+    return res.status(400).json({
+      error:   result.error_message || result.failedRule || 'Retry failed: event did not qualify.',
+      outcome: result.outcome,
+      code:    result.outcome,
+    });
+  } catch (err) {
+    console.error(`[POST /api/integration/logs/${req.params.id}/retry] Error:`, err.message);
+    next(err);
+  }
+}
+
+// ── DELETE /api/integration/logs/:id (ADMIN) ─────────────────────────────────
+async function deleteLog(req, res, next) {
+  try {
+    const { id } = req.params;
+    const deleted = await svc.deleteIntegrationLog(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Integration log not found.', code: 'LOG_NOT_FOUND' });
+    }
+    return res.status(200).json({
+      message: 'Integration log deleted successfully.',
+      id:      deleted.id,
+    });
+  } catch (err) {
+    console.error(`[DELETE /api/integration/logs/${req.params.id}] Error:`, err.message);
+    next(err);
+  }
+}
+
+module.exports = {
+  accountOpened,
+  getLogs,
+  retryLog,
+  deleteLog,
+};
 

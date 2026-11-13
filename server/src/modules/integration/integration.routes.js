@@ -19,13 +19,11 @@ const svc  = require('./integration.service');
 const router  = express.Router();
 const API_KEY = process.env.MOCK_TEMENOS_API_KEY;
 
-// ── API-key guard (POST routes only) ─────────────────────────────────────────
-router.use(async (req, res, next) => {
-  if (req.method === 'GET') return next();
-
+// ── Webhook API-key guard (for external Temenos webhook ingestion) ───────────
+async function requireApiKey(req, res, next) {
   const providedKey = req.headers['x-api-key'];
   if (providedKey !== API_KEY) {
-    const ip  = req.ip || req.connection.remoteAddress;
+    const ip  = req.ip || req.connection?.remoteAddress;
     const tid = typeof req.body?.transaction_id === 'string' && req.body.transaction_id.trim()
       ? req.body.transaction_id.trim() : null;
 
@@ -38,11 +36,18 @@ router.use(async (req, res, next) => {
     return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
   }
   next();
-});
+}
+
+const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-router.post('/account-opened', ctrl.accountOpened);
-router.get('/logs', authenticateToken, authorizeRole(['ADMIN']), ctrl.getLogs);
+// Temenos webhook ingestion (protected by API key)
+router.post('/account-opened', requireApiKey, ctrl.accountOpened);
+
+// Admin audit log management (protected by JWT + ADMIN role)
+router.get('/logs',            ...adminOnly, ctrl.getLogs);
+router.post('/logs/:id/retry', ...adminOnly, ctrl.retryLog);
+router.delete('/logs/:id',     ...adminOnly, ctrl.deleteLog);
 
 module.exports = router;
 

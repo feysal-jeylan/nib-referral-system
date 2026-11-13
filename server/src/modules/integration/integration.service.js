@@ -291,6 +291,161 @@ async function listIntegrationLogs(page, limit, { status = '', search = '' } = {
   return { total: Number(total), page, limit, logs: rows };
 }
 
+/**
+ * Retries a failed or received webhook integration log.
+ * Re-runs the validation and qualification logic on the existing payload
+ * and updates the log's status to 'PROCESSED' or 'FAILED' without inserting a new log.
+ *
+ * @param {number|string} id - The ID of the integration log
+ */
+async function retryIntegrationLog(id) {
+  const logId = Number(id);
+  const log = await prisma.integrationLog.findUnique({ where: { id: logId } });
+  if (!log) {
+    return { outcome: 'LOG_NOT_FOUND' };
+  }
+
+  const payload = (log.payload && typeof log.payload === 'object') ? log.payload : {};
+  const {
+    customer_name, customer_phone, referral_code,
+    account_type, deposit_amount, campaign_code,
+  } = payload;
+  const transaction_id = log.transaction_id;
+
+  // Validate required payload fields for referral processing
+  if (!referral_code || !customer_phone || !campaign_code) {
+    const error_message = 'Cannot retry webhook: log payload is missing required referral fields (referral_code, customer_phone, or campaign_code).';
+    await prisma.integrationLog.update({
+      where: { id: logId },
+      data:  { status: 'FAILED', error_message },
+    });
+    return { outcome: 'INVALID_PAYLOAD', error_message };
+  }
+
+  return await prisma.$transaction(async (tx) => {
+    // 1. Look up agent by referral_code
+    const agent = await tx.agent.findFirst({
+      where:  { referral_code },
+      select: { id: true, name: true, referral_code: true, status: true },
+    });
+
+    if (!agent) {
+      const error_message = `Invalid referral code '${referral_code}': agent not found.`;
+      await tx.integrationLog.update({
+        where: { id: logId },
+        data:  { status: 'FAILED', error_message },
+      });
+      return { outcome: 'AGENT_404', error_message };
+    }
+
+    if (agent.status !== 'APPROVED') {
+      const error_message = `Agent with referral code '${referral_code}' is not approved (status: ${agent.status}). Referrals are rejected.`;
+      await tx.integrationLog.update({
+        where: { id: logId },
+        data:  { status: 'FAILED', error_message },
+      });
+      return { outcome: 'AGENT_NOT_APPROVED', status: agent.status, error_message };
+    }
+
+    // 2. Look up campaign by campaign_code
+    const normalizedCode = campaign_code ? campaign_code.trim().toUpperCase() : null;
+    if (!normalizedCode) {
+      const error_message = 'Missing required field: campaign_code in payload.';
+      await tx.integrationLog.update({
+        where: { id: logId },
+        data:  { status: 'FAILED', error_message },
+      });
+      return { outcome: 'NO_CAMPAIGN', error_message };
+    }
+
+    const campaign = await tx.campaign.findUnique({
+      where:  { campaign_code: normalizedCode },
+      select: { id: true, name: true, status: true, is_active: true, reward_type: true, reward_value: true },
+    });
+
+    if (!campaign || campaign.status !== 'ACTIVE' || !campaign.is_active) {
+      const error_message = campaign
+        ? `Campaign '${normalizedCode}' exists but is not ACTIVE (current status: ${campaign.status}).`
+        : `No campaign found with campaign_code '${normalizedCode}'.`;
+      await tx.integrationLog.update({
+        where: { id: logId },
+        data:  { status: 'FAILED', error_message },
+      });
+      return { outcome: 'NO_CAMPAIGN', error_message };
+    }
+
+    // 3. Evaluate rules
+    const campaignRules = await tx.campaignRule.findMany({
+      where:   { campaign_id: campaign.id },
+      orderBy: { id: 'asc' },
+    });
+    const customer_data = { account_type, deposit_amount, customer_name, customer_phone };
+    const ruleResult = evaluateRules(customer_data, campaignRules);
+
+    if (!ruleResult.passed) {
+      const error_message = `Customer did not meet campaign rules: ${ruleResult.failedRule}`;
+      await tx.integrationLog.update({
+        where: { id: logId },
+        data:  { status: 'FAILED', error_message },
+      });
+      return { outcome: 'RULE_FAILED', failedRule: ruleResult.failedRule, error_message };
+    }
+
+    // 4. Duplicate customer check
+    const duplicateReferral = await tx.referral.findFirst({
+      where: {
+        customer_phone,
+        campaign_id: campaign.id,
+        status: { in: ['PENDING', 'SUCCESSFUL'] },
+      },
+      select: { id: true },
+    });
+
+    if (duplicateReferral) {
+      const error_message = 'This customer has already been referred for this campaign.';
+      await tx.integrationLog.update({
+        where: { id: logId },
+        data:  { status: 'FAILED', error_message },
+      });
+      return { outcome: 'DUPLICATE_CUSTOMER', error_message };
+    }
+
+    // 5. Create referral
+    const referral = await tx.referral.create({
+      data: {
+        agent_id: agent.id, customer_name, customer_phone,
+        campaign_id: campaign.id, status: 'SUCCESSFUL',
+      },
+      select: {
+        id: true, agent_id: true, customer_name: true,
+        customer_phone: true, campaign_id: true, status: true, created_at: true,
+      },
+    });
+
+    // 6. Update existing log to PROCESSED and clear error_message
+    await tx.integrationLog.update({
+      where: { id: logId },
+      data:  { status: 'PROCESSED', error_message: null },
+    });
+
+    console.log(`[integration] Retry SUCCESSFUL for log #${logId} txn=${transaction_id}: referral_id=${referral.id}`);
+    return { outcome: 'SUCCESS', referral, agent, campaign };
+  });
+}
+
+/**
+ * Deletes a specific integration log by ID.
+ * @param {number|string} id
+ */
+async function deleteIntegrationLog(id) {
+  const logId = Number(id);
+  const existing = await prisma.integrationLog.findUnique({ where: { id: logId } });
+  if (!existing) return null;
+
+  await prisma.integrationLog.delete({ where: { id: logId } });
+  return existing;
+}
+
 module.exports = {
   ALLOWED_FIELDS,
   findExistingLog,
@@ -298,5 +453,7 @@ module.exports = {
   logWhitelistFailure,
   processWebhook,
   listIntegrationLogs,
+  retryIntegrationLog,
+  deleteIntegrationLog,
 };
 
