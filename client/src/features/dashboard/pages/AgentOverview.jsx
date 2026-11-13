@@ -21,6 +21,7 @@ import {
   XCircle,
   FileText,
   Sparkles,
+  Wallet,
 } from 'lucide-react';
 import useAppStore from '@/store/useAppStore';
 import api from '@/services/api';
@@ -118,7 +119,6 @@ export default function AgentOverview({ user: propUser, onToast }) {
 
   // ── Fetch Agent Profile, Stats, and Recent Referrals ───────────────────────
   const fetchData = useCallback(async () => {
-    setLoading(true);
     try {
       // 1. Fetch Agent profile (/api/agents filters by authenticated JWT agent_id)
       const { data: agentRes } = await api.get('/agents');
@@ -143,6 +143,7 @@ export default function AgentOverview({ user: propUser, onToast }) {
             setStats({
               successful_referrals: agentRecord.successful_referrals ?? 0,
               current_reward: agentRecord.current_reward ?? null,
+              total_earned: agentRecord.total_earned ?? 0,
             });
           }
         }
@@ -150,6 +151,7 @@ export default function AgentOverview({ user: propUser, onToast }) {
         setStats({
           successful_referrals: agentRecord.successful_referrals ?? 0,
           current_reward: agentRecord.current_reward ?? null,
+          total_earned: agentRecord.total_earned ?? 0,
         });
       }
 
@@ -173,7 +175,7 @@ export default function AgentOverview({ user: propUser, onToast }) {
     } finally {
       setLoading(false);
     }
-  }, [user?.agent_id, onToast]);
+  }, [user, onToast]);
 
   useEffect(() => {
     fetchData();
@@ -196,6 +198,8 @@ export default function AgentOverview({ user: propUser, onToast }) {
   const successfulCount = stats?.successful_referrals ?? 0;
   const currentTier     = calculateTier(successfulCount, stats?.current_reward);
   const tierColor       = tierAccent(currentTier);
+  const totalEarned     = stats?.total_earned != null ? Number(stats.total_earned) : 0;
+  const formattedEarned = `${(!isNaN(totalEarned) ? totalEarned : 0).toLocaleString('en-US')} ETB`;
 
   return (
     <div className="p-6 space-y-6" style={{ background: IVORY }}>
@@ -235,7 +239,7 @@ export default function AgentOverview({ user: propUser, onToast }) {
               onClick={handleCopy}
               disabled={!referralCode || loading}
               className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg text-sm font-bold
-                         transition-all duration-150 shadow-sm disabled:opacity-40"
+                         transition-all duration-150 shadow-sm disabled:opacity-40 cursor-pointer"
               style={{
                 background: copied ? 'rgba(255,255,255,0.30)' : 'rgba(255,255,255,0.18)',
                 color: '#FFFFFF',
@@ -265,12 +269,19 @@ export default function AgentOverview({ user: propUser, onToast }) {
       </div>
 
       {/* ── 2. Metric Cards ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard
           icon={TrendingUp}
           label="Total Successful Referrals"
           value={loading ? null : successfulCount}
           accent={BRAND}
+          loading={loading}
+        />
+        <StatCard
+          icon={Wallet}
+          label="Total Earned"
+          value={loading ? null : formattedEarned}
+          accent={GOLD}
           loading={loading}
         />
         <StatCard

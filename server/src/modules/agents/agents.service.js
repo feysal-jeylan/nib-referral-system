@@ -201,21 +201,31 @@ async function getAgentStats(agentId) {
     where: { agent_id: agentId, status: 'SUCCESSFUL' },
   });
 
-  const tierRows = await prisma.$queryRaw`
-    SELECT reward_name
-    FROM   reward_rules
-    WHERE  min_referrals = (
-      SELECT MAX(min_referrals)
+  const [tierRows, earningsRows] = await Promise.all([
+    prisma.$queryRaw`
+      SELECT reward_name
       FROM   reward_rules
-      WHERE  min_referrals <= ${successfulCount}
-    )
-    LIMIT 1
-  `;
+      WHERE  min_referrals = (
+        SELECT MAX(min_referrals)
+        FROM   reward_rules
+        WHERE  min_referrals <= ${successfulCount}
+      )
+      LIMIT 1
+    `,
+    prisma.$queryRaw`
+      SELECT 
+        COALESCE(SUM(COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0)), 0)::numeric AS total_earned
+      FROM referrals r
+      LEFT JOIN campaigns c ON r.campaign_id = c.id
+      WHERE r.agent_id = ${agentId} AND r.status = 'SUCCESSFUL'
+    `,
+  ]);
 
   return {
     agent_id:             agentId,
     successful_referrals: successfulCount,
     current_reward:       tierRows.length > 0 ? tierRows[0].reward_name : null,
+    total_earned:         Number(earningsRows[0]?.total_earned ?? 0),
   };
 }
 
