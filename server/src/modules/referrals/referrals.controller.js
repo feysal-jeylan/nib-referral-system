@@ -64,5 +64,29 @@ async function updateStatus(req, res, next) {
   }
 }
 
-module.exports = { listReferrals, updateStatus };
+// ── DELETE /api/referrals/:id  (ADMIN) ───────────────────────────────────────
+async function deleteReferral(req, res, next) {
+  const referralId = parseInt(req.params.id, 10);
+  if (isNaN(referralId)) {
+    return res.status(400).json({ error: 'Referral ID must be a valid integer.', code: 'INVALID_ID' });
+  }
 
+  try {
+    const result = await svc.deleteReferral(referralId);
+    return res.status(200).json({
+      message: `Referral #${result.id} deleted successfully.`,
+      id: result.id,
+    });
+  } catch (err) {
+    if (err.status === 404 || err.code === 'REFERRAL_NOT_FOUND') {
+      return res.status(404).json({ error: err.message, code: 'REFERRAL_NOT_FOUND' });
+    }
+    if (err.status === 403 || err.code === 'FORBIDDEN_DELETE') {
+      return res.status(403).json({ error: err.message, code: 'FORBIDDEN_DELETE' });
+    }
+    console.error('[DELETE /api/referrals/:id] Prisma error:', err.message);
+    next(err);
+  }
+}
+
+module.exports = { listReferrals, updateStatus, deleteReferral };

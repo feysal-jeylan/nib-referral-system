@@ -12,9 +12,10 @@ const { authenticateToken, authorizeRole } = require('@/middleware/auth');
 const ctrl = require('./referrals.controller');
 
 const router = express.Router();
+const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
 
-router.get('/',             authenticateToken,                            ctrl.listReferrals);
-router.patch('/:id/status', authenticateToken, authorizeRole(['ADMIN']), ctrl.updateStatus);
+router.get('/',             authenticateToken, ctrl.listReferrals);
+router.patch('/:id/status', ...adminOnly,      ctrl.updateStatus);
+router.delete('/:id',       ...adminOnly,      ctrl.deleteReferral);
 
 module.exports = router;
-

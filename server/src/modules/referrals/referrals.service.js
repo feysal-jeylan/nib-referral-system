@@ -22,7 +22,10 @@ async function listReferrals(role, agentId, page, limit, { status = '', search =
         OR: [
           { customer_name:  { contains: search, mode: 'insensitive' } },
           { customer_phone: { contains: search, mode: 'insensitive' } },
-          { agent: { referral_code: { contains: search, mode: 'insensitive' } } },
+          { agent:    { referral_code: { contains: search, mode: 'insensitive' } } },
+          { agent:    { name:          { contains: search, mode: 'insensitive' } } },
+          { campaign: { campaign_code: { contains: search, mode: 'insensitive' } } },
+          { campaign: { name:          { contains: search, mode: 'insensitive' } } },
         ],
       }
     : {};
@@ -35,7 +38,10 @@ async function listReferrals(role, agentId, page, limit, { status = '', search =
       skip,
       take:    limit,
       orderBy: { created_at: 'desc' },
-      include: { agent: { select: { name: true, referral_code: true } } },
+      include: {
+        agent:    { select: { name: true, referral_code: true } },
+        campaign: { select: { name: true, campaign_code: true } },
+      },
     }),
   ]);
 
@@ -45,6 +51,8 @@ async function listReferrals(role, agentId, page, limit, { status = '', search =
     customer_phone: r.customer_phone,
     agent_name:     r.agent?.name ?? null,
     referral_code:  r.agent?.referral_code ?? null,
+    campaign_name:  r.campaign?.name ?? null,
+    campaign_code:  r.campaign?.campaign_code ?? null,
     status:         r.status,
     created_at:     r.created_at,
   }));
@@ -71,5 +79,37 @@ async function updateReferralStatus(referralId, status) {
   });
 }
 
-module.exports = { ALLOWED_STATUSES, listReferrals, updateReferralStatus };
+// ── Delete referral (Admin only; blocked if SUCCESSFUL) ───────────────────────
+async function deleteReferral(referralId) {
+  const referral = await prisma.referral.findUnique({
+    where:  { id: referralId },
+    select: { id: true, status: true, customer_name: true },
+  });
 
+  if (!referral) {
+    const err = new Error(`Referral with id ${referralId} not found.`);
+    err.code = 'REFERRAL_NOT_FOUND';
+    err.status = 404;
+    throw err;
+  }
+
+  if (referral.status === 'SUCCESSFUL') {
+    const err = new Error('Cannot delete successful financial records.');
+    err.code = 'FORBIDDEN_DELETE';
+    err.status = 403;
+    throw err;
+  }
+
+  await prisma.referral.delete({
+    where: { id: referralId },
+  });
+
+  return { id: referralId, customer_name: referral.customer_name };
+}
+
+module.exports = {
+  ALLOWED_STATUSES,
+  listReferrals,
+  updateReferralStatus,
+  deleteReferral,
+};
