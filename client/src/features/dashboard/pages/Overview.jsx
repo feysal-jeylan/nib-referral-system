@@ -99,12 +99,28 @@ function MetricCard({ icon: Icon, label, value, subtitle, accent, loading }) {
 // ── Custom Line tooltip ───────────────────────────────────────────────────────
 function LineTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
+  const pointData = payload[0]?.payload;
+
+  // Format the actual calendar date (e.g., "Nov 13, 2026 (Today)" or "Nov 10, 2026")
+  let displayDate = label;
+  if (pointData?.fullDate) {
+    const d = new Date(pointData.fullDate + 'T00:00:00');
+    const formatted = d.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    displayDate = (pointData.date === 'Today' || label === 'Today')
+      ? `${formatted} (Today)`
+      : formatted;
+  }
+
   return (
     <div
       className="rounded-lg px-3 py-2 text-xs shadow-lg"
       style={{ background: '#fff', border: `1px solid ${BORDER}`, color: CHOCOLATE }}
     >
-      <p className="font-semibold mb-0.5">{label}</p>
+      <p className="font-semibold mb-0.5">{displayDate}</p>
       <p style={{ color: BRAND }}>
         {payload[0].value} referral{payload[0].value !== 1 ? 's' : ''}
       </p>
@@ -325,6 +341,7 @@ export default function Overview({ onToast }) {
                   />
                   <XAxis
                     dataKey="date"
+                    tickFormatter={(val, idx) => (val === 'Today' || idx === rot.length - 1 ? 'Today' : val)}
                     tick={{ fill: MUTED, fontSize: 11 }}
                     axisLine={false}
                     tickLine={false}

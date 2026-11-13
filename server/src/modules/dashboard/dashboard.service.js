@@ -14,14 +14,6 @@ const prisma = require('@/config/db');
  * Uses Promise.all so all queries run in parallel.
  */
 async function getDashboardStats() {
-  // ── Date range for "last 7 days" ──────────────────────────────────────────
-  const now   = new Date();
-  const day0  = new Date(now);
-  day0.setHours(0, 0, 0, 0);
-
-  const sevenDaysAgo = new Date(day0);
-  sevenDaysAgo.setDate(day0.getDate() - 6); // inclusive: today + 6 previous days
-
   // ── Parallel aggregate queries ────────────────────────────────────────────
   const [
     totalAgents,
@@ -30,7 +22,7 @@ async function getDashboardStats() {
     pendingApprovals,
     activeCampaigns,
     topAgentsRaw,
-    referralsRaw,       // last 7 days, grouped by date in SQL
+    referralsRaw,       // guaranteed 7-day timeline ending TODAY via generate_series
     campaignDist,       // per-campaign successful referral counts
     recentActivity,     // 5 most recent referrals
   ] = await Promise.all([
@@ -64,16 +56,22 @@ async function getDashboardStats() {
       LIMIT 5
     `,
 
-    // 7. Referrals over last 7 days — grouped by calendar date using raw SQL
-    //    DATE(created_at) is timezone-agnostic relative to the DB server.
+    // 7. Referrals over last 7 days — guaranteed 7-day timeline ending TODAY
+    //    Uses CURRENT_DATE and generate_series to fill missing dates with 0
     prisma.$queryRaw`
       SELECT
-        TO_CHAR(created_at::date, 'YYYY-MM-DD') AS date,
-        COUNT(*)::int                            AS count
-      FROM referrals
-      WHERE created_at >= ${sevenDaysAgo}
-      GROUP BY created_at::date
-      ORDER BY created_at::date ASC
+        TO_CHAR(day::date, 'YYYY-MM-DD') AS full_date,
+        TRIM(TO_CHAR(day::date, 'Dy'))   AS day_name,
+        COUNT(r.id)::int                 AS count
+      FROM generate_series(
+        CURRENT_DATE - INTERVAL '6 days',
+        CURRENT_DATE,
+        INTERVAL '1 day'
+      ) AS day
+      LEFT JOIN referrals r
+        ON r.created_at::date = day::date
+      GROUP BY day::date
+      ORDER BY day::date ASC
     `,
 
     // 8. Campaign distribution — successful referrals per campaign (top 8)
@@ -110,15 +108,15 @@ async function getDashboardStats() {
     ? Number(((successfulReferrals / totalReferrals) * 100).toFixed(1))
     : 0;
 
-  // ── Build the 7-day series (fill in missing days with count: 0) ──────────
-  const dateMap = new Map(referralsRaw.map(r => [r.date, r.count]));
-  const referralsOverTime = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(sevenDaysAgo);
-    d.setDate(sevenDaysAgo.getDate() + i);
-    const key = d.toISOString().slice(0, 10);
-    // Abbreviated day label: "Mon", "Tue", …
-    const label = d.toLocaleDateString('en-US', { weekday: 'short' });
-    return { date: label, fullDate: key, count: dateMap.get(key) ?? 0 };
+  // ── Build the 7-day series with "Today" as the final point ───────────────
+  const referralsOverTime = referralsRaw.map((r, idx, arr) => {
+    const isToday = idx === arr.length - 1;
+    return {
+      date:     isToday ? 'Today' : r.day_name,
+      day:      r.day_name,
+      fullDate: r.full_date,
+      count:    Number(r.count ?? 0),
+    };
   });
 
   return {
