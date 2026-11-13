@@ -3,23 +3,24 @@
  * ────────────────────────────────────
  * Shown at /activate?token=RAW_TOKEN
  * Lets the agent set their own password to activate their account.
- * No React Router — reads window.location.search directly.
+ * Immediately logs the agent in and renders the Agent Dashboard upon success.
  */
 
 import { useState } from 'react';
 import api from '@/services/api';
-
-// ── Brand palette ─────────────────────────────────────────────────────────────
-// #8A4D1F  brand brown
-// #3E2723  chocolate dark
-// #9C8577  muted brown
-// #FAF8F5  warm ivory
-// #D4AF37  honey gold
+import useAppStore from '@/store/useAppStore';
+import { useAuth } from '@/features/auth/AuthContext';
+import Dashboard from '@/features/dashboard/Dashboard';
 
 export default function ActivateAccount() {
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token') ?? '';
 
+  const setUser = useAppStore(s => s.setUser);
+  const setActivePage = useAppStore(s => s.setActivePage);
+  const { logout } = useAuth();
+
+  const [activeUser, setActiveUser] = useState(null);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [status, setStatus] = useState('idle'); // idle | loading | success | error | expired
@@ -30,7 +31,7 @@ export default function ActivateAccount() {
   const [showPass, setShowPass] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  // ── Set password ─────────────────────────────────────────────────────────────
+  // ── Set password & Activate ──────────────────────────────────────────────────
   async function handleSubmit(e) {
     e.preventDefault();
     setMessage('');
@@ -44,12 +45,20 @@ export default function ActivateAccount() {
 
     setStatus('loading');
     try {
-      await api.post('/auth/activate', { token, newPassword: password });
+      const { data } = await api.post('/auth/activate', { token, newPassword: password });
+      const newAgentUser = data.user;
+
+      // COMPLETELY overwrite Zustand store with new Agent state
+      setUser(newAgentUser);
+      setActivePage('overview');
+
+      // Clean the URL from /activate?token=... to / without full reload
+      if (window.history?.replaceState) {
+        window.history.replaceState({}, document.title, '/');
+      }
+
+      setActiveUser(newAgentUser);
       setStatus('success');
-      setMessage('Account activated! Redirecting to login…');
-      setTimeout(() => {
-        window.location.href = '/';
-      }, 2500);
     } catch (err) {
       const code = err.response?.data?.code;
       if (code === 'INVALID_OR_EXPIRED_TOKEN') {
@@ -59,6 +68,11 @@ export default function ActivateAccount() {
       }
       setMessage(err.response?.data?.error ?? 'Activation failed. Please try again.');
     }
+  }
+
+  // ── Transition immediately to Dashboard upon success ─────────────────────────
+  if (status === 'success' && activeUser) {
+    return <Dashboard user={activeUser} logout={logout} />;
   }
 
   // ── Resend activation email ───────────────────────────────────────────────────
@@ -94,27 +108,6 @@ export default function ActivateAccount() {
           <p className="text-sm" style={{ color: '#9C8577' }}>
             This link appears to be incomplete or corrupted. Please use the full link from the email.
           </p>
-        </div>
-      </PageShell>
-    );
-  }
-
-  // ── Success ───────────────────────────────────────────────────────────────────
-  if (status === 'success') {
-    return (
-      <PageShell>
-        <div className="text-center space-y-4">
-          <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto"
-            style={{ backgroundColor: '#F0FDF4' }}>
-            <svg className="w-8 h-8" style={{ color: '#16A34A' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-          <h2 className="text-xl font-bold" style={{ color: '#3E2723' }}>Account Activated!</h2>
-          <p className="text-sm" style={{ color: '#9C8577' }}>{message}</p>
-          <div className="w-full h-1 rounded-full overflow-hidden" style={{ backgroundColor: '#EDE9E6' }}>
-            <div className="h-full animate-pulse rounded-full" style={{ backgroundColor: '#D4AF37', width: '100%' }} />
-          </div>
         </div>
       </PageShell>
     );
@@ -299,6 +292,8 @@ export default function ActivateAccount() {
   );
 }
 
+const CURRENT_YEAR = new Date().getFullYear();
+
 // ── Shared page shell (centered card on ivory background) ─────────────────────
 function PageShell({ children }) {
   return (
@@ -328,9 +323,8 @@ function PageShell({ children }) {
       </div>
 
       <p className="mt-6 text-xs" style={{ color: '#9C8577' }}>
-        © {new Date().getFullYear()} Nib International Bank — Referral System
+        © {CURRENT_YEAR} Nib International Bank — Referral System
       </p>
     </div>
   );
 }
-

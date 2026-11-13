@@ -154,7 +154,28 @@ async function activateAccount(req, res, next) {
     }
 
     await svc.activateUser(user.id, newPassword);
-    return res.status(200).json({ message: 'Account activated successfully. You can now log in.' });
+
+    // Generate fresh JWT strictly reflecting the newly activated Agent identity
+    const jwtToken = svc.signToken({
+      id:                   user.id,
+      role:                 'AGENT',
+      agent_id:             user.agent_id,
+      must_change_password: false,
+    });
+
+    // Overwrite existing HttpOnly cookie in the browser
+    res.cookie(svc.COOKIE_NAME, jwtToken, svc.COOKIE_OPTIONS);
+
+    return res.status(200).json({
+      message: 'Account activated',
+      user: {
+        id:                   user.id,
+        username:             user.username,
+        role:                 'AGENT',
+        agent_id:             user.agent_id,
+        must_change_password: false,
+      },
+    });
   } catch (err) {
     console.error('[POST /api/auth/activate] Error:', err.message);
     next(err);

@@ -25,16 +25,16 @@ import Dashboard          from '@/features/dashboard/Dashboard';
 import ActivateAccount    from '@/features/auth/ActivateAccount';
 
 export default function App() {
-  // ── Activation route — no auth needed, render before the session check ───────
-  if (window.location.pathname === '/activate') {
-    return <ActivateAccount />;
-  }
-
   // Session-check lifecycle lives in AuthContext
   const { loading, logout } = useAuth();
 
   // User object lives in Zustand (pushed there by AuthContext on resolve)
   const user = useAppStore(s => s.user);
+
+  // ── Activation route — render before normal auth gates ───────────────────────
+  if (window.location.pathname === '/activate') {
+    return <ActivateAccount />;
+  }
 
   if (loading) {
     return (
