@@ -26,26 +26,57 @@ async function getDashboardStats() {
   const [
     totalAgents,
     totalReferrals,
+    successfulReferrals,
     pendingApprovals,
     activeCampaigns,
+    payoutRaw,
+    topAgentsRaw,
     referralsRaw,       // last 7 days, grouped by date in SQL
     campaignDist,       // per-campaign successful referral counts
     recentActivity,     // 5 most recent referrals
   ] = await Promise.all([
 
-    // 1. Approved agent count
-    prisma.agent.count({ where: { status: 'APPROVED' } }),
+    // 1. Total agent count
+    prisma.agent.count(),
 
-    // 2. Successful referral count
+    // 2. Total referral count
+    prisma.referral.count(),
+
+    // 3. Successful referral count
     prisma.referral.count({ where: { status: 'SUCCESSFUL' } }),
 
-    // 3. Pending referral count
+    // 4. Pending referral count
     prisma.referral.count({ where: { status: 'PENDING' } }),
 
-    // 4. Active campaign count
+    // 5. Active campaign count
     prisma.campaign.count({ where: { status: 'ACTIVE' } }),
 
-    // 5. Referrals over last 7 days — grouped by calendar date using raw SQL
+    // 6. Total payout for SUCCESSFUL referrals (parsed numeric reward_value from campaigns)
+    prisma.$queryRaw`
+      SELECT 
+        COALESCE(SUM(COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0)), 0)::numeric AS total_payout
+      FROM referrals r
+      LEFT JOIN campaigns c ON r.campaign_id = c.id
+      WHERE r.status = 'SUCCESSFUL'
+    `,
+
+    // 7. Top 5 agents by successful referral count & their total earnings
+    prisma.$queryRaw`
+      SELECT 
+        a.id,
+        a.name,
+        COUNT(r.id)::int AS successful_count,
+        COALESCE(SUM(COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(c.reward_value, ''), '[^0-9.]', '', 'g'), '')::numeric, 0)), 0)::numeric AS total_earned
+      FROM referrals r
+      JOIN agents a ON r.agent_id = a.id
+      LEFT JOIN campaigns c ON r.campaign_id = c.id
+      WHERE r.status = 'SUCCESSFUL'
+      GROUP BY a.id, a.name
+      ORDER BY successful_count DESC, total_earned DESC
+      LIMIT 5
+    `,
+
+    // 8. Referrals over last 7 days — grouped by calendar date using raw SQL
     //    DATE(created_at) is timezone-agnostic relative to the DB server.
     prisma.$queryRaw`
       SELECT
@@ -57,7 +88,7 @@ async function getDashboardStats() {
       ORDER BY created_at::date ASC
     `,
 
-    // 6. Campaign distribution — successful referrals per campaign (top 8)
+    // 9. Campaign distribution — successful referrals per campaign (top 8)
     prisma.$queryRaw`
       SELECT
         c.name,
@@ -70,7 +101,7 @@ async function getDashboardStats() {
       LIMIT 8
     `,
 
-    // 7. Recent activity — 5 latest referrals with agent name
+    // 10. Recent activity — 5 latest referrals with agent name
     prisma.referral.findMany({
       take:    5,
       orderBy: { created_at: 'desc' },
@@ -86,6 +117,11 @@ async function getDashboardStats() {
     }),
   ]);
 
+  // ── Conversion Rate: (SUCCESSFUL / Total) * 100 rounded to 1 decimal ───────
+  const conversionRate = totalReferrals > 0
+    ? Number(((successfulReferrals / totalReferrals) * 100).toFixed(1))
+    : 0.0;
+
   // ── Build the 7-day series (fill in missing days with count: 0) ──────────
   const dateMap = new Map(referralsRaw.map(r => [r.date, r.count]));
   const referralsOverTime = Array.from({ length: 7 }, (_, i) => {
@@ -100,8 +136,19 @@ async function getDashboardStats() {
   return {
     totalAgents:          Number(totalAgents),
     totalReferrals:       Number(totalReferrals),
+    successfulReferrals:  Number(successfulReferrals),
     pendingApprovals:     Number(pendingApprovals),
     activeCampaigns:      Number(activeCampaigns),
+    totalPayout:          Number(payoutRaw[0]?.total_payout ?? 0),
+    conversionRate,
+    topAgents: topAgentsRaw.map(a => ({
+      id:               a.id,
+      name:             a.name,
+      successful_count: Number(a.successful_count ?? 0),
+      successfulCount:  Number(a.successful_count ?? 0),
+      total_earned:     Number(a.total_earned ?? 0),
+      totalEarned:      Number(a.total_earned ?? 0),
+    })),
     referralsOverTime,
     campaignDistribution: campaignDist.map(r => ({
       name:  r.name,
@@ -119,4 +166,3 @@ async function getDashboardStats() {
 }
 
 module.exports = { getDashboardStats };
-
