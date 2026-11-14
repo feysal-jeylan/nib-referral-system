@@ -58,6 +58,15 @@ async function authenticateToken(req, res, next) {
       });
     }
 
+    // ── Session Invalidation (Token Version Check) ───────────────────────────
+    const tokenVersion = decoded.token_version ?? 0;
+    if (tokenVersion !== user.tokenVersion) {
+      return res.status(401).json({
+        error: 'Session has been invalidated due to a password reset. Please log in again.',
+        code:  'SESSION_INVALIDATED',
+      });
+    }
+
     req.user = decoded; // { id, role, agent_id }
     next();
   } catch (err) {

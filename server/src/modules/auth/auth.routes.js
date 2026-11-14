@@ -26,6 +26,18 @@ const authLimiter = rateLimit({
   },
 });
 
+// ── Rate Limiter: Max 5 requests per 15 minutes for password recovery
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many password recovery attempts from this IP, please try again after 15 minutes.',
+    code: 'RATE_LIMIT_EXCEEDED',
+  },
+});
+
 router.post('/login',              authLimiter, ctrl.login);
 router.get('/me',                  ctrl.me);
 router.post('/logout',             ctrl.logout);
@@ -34,6 +46,8 @@ router.post('/change-password',    authenticateToken, ctrl.changePassword);
 // ── Pre-login flows (no auth required) ───────────────────────────────────────
 router.post('/activate',           ctrl.activateAccount);
 router.post('/resend-activation',  authLimiter, ctrl.resendActivation);
+router.post('/forgot-password',    passwordResetLimiter, ctrl.forgotPassword);
+router.post('/reset-password',     passwordResetLimiter, ctrl.resetPassword);
 
 module.exports = router;
 

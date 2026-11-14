@@ -34,6 +34,7 @@ async function login(req, res, next) {
       role:                 user.role,
       agent_id:             user.agent_id,
       must_change_password: user.must_change_password,
+      token_version:        user.tokenVersion ?? 0,
     });
 
     res.cookie(svc.COOKIE_NAME, token, svc.COOKIE_OPTIONS);
@@ -67,6 +68,11 @@ async function me(req, res, next) {
 
     if (!user) {
       return res.status(401).json({ error: 'User account no longer exists.', code: 'USER_NOT_FOUND' });
+    }
+
+    const tokenVersion = decoded.token_version ?? 0;
+    if (tokenVersion !== user.tokenVersion) {
+      return res.status(401).json({ error: 'Session invalidated. Please log in again.', code: 'SESSION_INVALIDATED' });
     }
 
     return res.status(200).json({
@@ -106,7 +112,7 @@ async function changePassword(req, res, next) {
       return res.status(404).json({ error: 'User account not found.', code: 'USER_NOT_FOUND' });
     }
 
-    await svc.updatePassword(user.id, newPassword);
+    const updatedUser = await svc.updatePassword(user.id, newPassword);
 
     // Issue a fresh JWT with must_change_password = false
     const newToken = svc.signToken({
@@ -114,6 +120,7 @@ async function changePassword(req, res, next) {
       role:                 user.role,
       agent_id:             user.agent_id,
       must_change_password: false,
+      token_version:        updatedUser.tokenVersion ?? 0,
     });
 
     res.cookie(svc.COOKIE_NAME, newToken, svc.COOKIE_OPTIONS);
@@ -153,7 +160,7 @@ async function activateAccount(req, res, next) {
       });
     }
 
-    await svc.activateUser(user.id, newPassword);
+    const activatedUser = await svc.activateUser(user.id, newPassword);
 
     // Generate fresh JWT strictly reflecting the newly activated Agent identity
     const jwtToken = svc.signToken({
@@ -161,6 +168,7 @@ async function activateAccount(req, res, next) {
       role:                 'AGENT',
       agent_id:             user.agent_id,
       must_change_password: false,
+      token_version:        activatedUser.tokenVersion ?? 0,
     });
 
     // Overwrite existing HttpOnly cookie in the browser
@@ -217,5 +225,98 @@ async function resendActivation(req, res, next) {
   }
 }
 
-module.exports = { login, me, logout, changePassword, activateAccount, resendActivation };
+// ── POST /api/auth/forgot-password ───────────────────────────────────────────
+async function forgotPassword(req, res, next) {
+  const emailInput = req.body.email?.trim()?.toLowerCase();
+
+  if (!emailInput) {
+    return res.status(400).json({ error: 'Email address is required.', code: 'MISSING_EMAIL' });
+  }
+
+  try {
+    const user = await svc.findUserForPasswordReset(emailInput);
+
+    if (user) {
+      const rawToken = await svc.createPasswordResetToken(user.id);
+      const targetEmail = user.email || user.agent?.email || (user.username.includes('@') ? user.username : null);
+      const displayName = user.agent?.name || user.username;
+
+      if (targetEmail) {
+        // Send email safely (catches internally if SMTP unavailable)
+        await email.sendPasswordResetEmail(targetEmail, displayName, rawToken);
+      }
+    } else {
+      // Artificial delay to prevent timing analysis enumeration
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+
+    // Always return identical generic message (anti-enumeration)
+    return res.status(200).json({
+      message: 'If an account exists with that email, a password reset link has been sent.',
+    });
+  } catch (err) {
+    console.error('[POST /api/auth/forgot-password] Error:', err.message);
+    // Even on error, do not expose account or system state
+    return res.status(200).json({
+      message: 'If an account exists with that email, a password reset link has been sent.',
+    });
+  }
+}
+
+// ── POST /api/auth/reset-password ────────────────────────────────────────────
+async function resetPassword(req, res, next) {
+  const { token, newPassword } = req.body;
+
+  if (!token) {
+    return res.status(400).json({
+      error: 'Invalid or expired reset link. Please request a new one.',
+      code:  'MISSING_TOKEN',
+    });
+  }
+
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({
+      error: 'Password must be at least 8 characters long.',
+      code:  'WEAK_PASSWORD',
+    });
+  }
+
+  try {
+    const result = await svc.resetPasswordWithToken(token, newPassword);
+
+    if (!result.success) {
+      return res.status(400).json({
+        error: 'Invalid or expired reset link. Please request a new one.',
+        code:  'INVALID_OR_EXPIRED_TOKEN',
+      });
+    }
+
+    // Asynchronously dispatch security notification email
+    if (result.user.email) {
+      email.sendPasswordResetSuccessEmail(result.user.email, result.user.displayName).catch(err => {
+        console.warn('[POST /api/auth/reset-password] Confirmation email warning:', err.message);
+      });
+    }
+
+    // Single-use token consumed, session tokenVersion incremented.
+    // Do NOT automatically log the user in.
+    return res.status(200).json({
+      message: 'Password has been reset successfully. You can now log in with your new password.',
+    });
+  } catch (err) {
+    console.error('[POST /api/auth/reset-password] Error:', err.message);
+    next(err);
+  }
+}
+
+module.exports = {
+  login,
+  me,
+  logout,
+  changePassword,
+  activateAccount,
+  resendActivation,
+  forgotPassword,
+  resetPassword,
+};
 

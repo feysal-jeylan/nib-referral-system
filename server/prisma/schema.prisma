@@ -20,6 +20,7 @@ datasource db {
 model User {
   id                   Int       @id @default(autoincrement())
   username             String    @unique @db.VarChar(50)
+  email                String?   @unique @db.VarChar(100)
   password_hash        String    @db.VarChar(100)
   role                 String    @db.VarChar(10)
   agent_id             Int?
@@ -30,8 +31,13 @@ model User {
   activationExpires    DateTime? @map("activation_expires") @db.Timestamp(6)
   isActivated          Boolean   @default(false) @map("is_activated")
 
+  passwordResetToken   String?   @map("password_reset_token") @db.VarChar(255)
+  passwordResetExpires DateTime? @map("password_reset_expires") @db.Timestamp(6)
+  tokenVersion         Int       @default(0) @map("token_version")
+
   agent Agent? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
 
+  @@index([passwordResetToken], map: "idx_users_reset_token")
   @@map("users")
 }
 

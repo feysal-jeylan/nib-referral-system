@@ -13,10 +13,19 @@
  */
 
 import { useState } from 'react';
+import { CheckCircle2, Mail, KeyRound } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import api from '@/services/api';
 import { Input }  from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 
 // ─── Brand tokens ──────────────────────────────────────────────────────────────
 const C = {
@@ -322,10 +331,11 @@ function IconEye({ off = false }) {
 }
 
 // ─── Agent apply form ──────────────────────────────────────────────────────────
-function AgentApplyForm({ onBack, onSuccess }) {
-  const [form, setForm]             = useState({ name: '', phone: '', email: '' });
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError]           = useState('');
+function AgentApplyForm({ onBack }) {
+  const [form, setForm]               = useState({ name: '', phone: '', email: '' });
+  const [submitting, setSubmitting]   = useState(false);
+  const [error, setError]             = useState('');
+  const [isSubmitted, setIsSubmitted] = useState(false);
 
   function handleChange(e) {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -342,7 +352,7 @@ function AgentApplyForm({ onBack, onSuccess }) {
     setSubmitting(true); setError('');
     try {
       await api.post('/agents/apply', { name, phone, email });
-      onSuccess();
+      setIsSubmitted(true);
     } catch (err) {
       setError(
         err.response?.status === 409
@@ -350,6 +360,62 @@ function AgentApplyForm({ onBack, onSuccess }) {
           : (err.response?.data?.error ?? 'Something went wrong. Please try again.')
       );
     } finally { setSubmitting(false); }
+  }
+
+  // ── Success State View ────────────────────────────────────────────────────
+  if (isSubmitted) {
+    return (
+      <div className="text-center py-2 animate-in fade-in duration-300">
+        {/* Large, elegant checkmark circle icon */}
+        <div
+          className="mx-auto w-16 h-16 rounded-full flex items-center justify-center mb-5 shadow-sm"
+          style={{
+            background: '#FAF5EE',
+            border: `1.5px solid ${C.gold}`,
+            boxShadow: '0 4px 14px rgba(212,175,55,0.18)',
+          }}
+        >
+          <div
+            className="w-12 h-12 rounded-full flex items-center justify-center"
+            style={{ background: 'rgba(212,175,55,0.18)' }}
+          >
+            <CheckCircle2 size={28} style={{ color: '#D4AF37' }} strokeWidth={2.5} />
+          </div>
+        </div>
+
+        {/* Heading: Bold, Dark Chocolate #3E2723 */}
+        <h2
+          className="font-bold text-2xl tracking-tight mb-3"
+          style={{ color: '#3E2723' }}
+        >
+          Application Received
+        </h2>
+
+        {/* Body Text: Muted brown #9C8577 */}
+        <p
+          className="text-sm leading-relaxed mb-7"
+          style={{ color: '#9C8577' }}
+        >
+          Your application has been submitted successfully. Once the bank reviews and approves your profile, a secure activation link will be sent to your email address. Please check your inbox.
+        </p>
+
+        {/* Return to Login button */}
+        <Button
+          type="button"
+          onClick={() => {
+            setIsSubmitted(false);
+            setForm({ name: '', phone: '', email: '' });
+            onBack();
+          }}
+          className="w-full flex items-center justify-center gap-2 py-3 h-auto rounded-lg text-sm font-bold text-white transition-all duration-200"
+          style={{ background: C.brown }}
+          onMouseEnter={e => { e.currentTarget.style.background = C.brownDark; }}
+          onMouseLeave={e => { e.currentTarget.style.background = C.brown; }}
+        >
+          Return to Login
+        </Button>
+      </div>
+    );
   }
 
   return (
@@ -419,6 +485,123 @@ function AgentApplyForm({ onBack, onSuccess }) {
   );
 }
 
+// ─── Forgot Password Dialog ──────────────────────────────────────────────────
+function ForgotPasswordDialog({ open, onOpenChange }) {
+  const [email, setEmail]           = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [isSuccess, setIsSuccess]   = useState(false);
+  const [error, setError]           = useState('');
+
+  function handleClose(nextOpen) {
+    if (!nextOpen) {
+      setTimeout(() => {
+        setEmail('');
+        setIsSuccess(false);
+        setError('');
+      }, 200);
+    }
+    onOpenChange(nextOpen);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!email.trim()) {
+      return setError('Please enter your email address.');
+    }
+    setError('');
+    setSubmitting(true);
+    try {
+      await api.post('/auth/forgot-password', { email: email.trim() });
+      setIsSuccess(true);
+    } catch {
+      // Anti-enumeration: consistent response even on error
+      setIsSuccess(true);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="sm:max-w-md bg-white border border-[#E8DDD2] p-6 rounded-2xl shadow-xl">
+        <DialogHeader className="gap-1.5">
+          <DialogTitle className="text-xl font-bold tracking-tight" style={{ color: C.text1 }}>
+            Password Recovery
+          </DialogTitle>
+          <DialogDescription className="text-xs leading-relaxed" style={{ color: C.text2 }}>
+            Enter your account email. If registered, we will send you a secure link to reset your password.
+          </DialogDescription>
+        </DialogHeader>
+
+        {isSuccess ? (
+          <div className="py-3 text-center space-y-4">
+            <div
+              className="w-12 h-12 mx-auto rounded-full flex items-center justify-center"
+              style={{ background: '#FAF5EE', border: `1.5px solid ${C.gold}` }}
+            >
+              <Mail className="w-5 h-5" style={{ color: C.gold }} />
+            </div>
+            <div className="space-y-1">
+              <h4 className="font-bold text-base" style={{ color: C.text1 }}>
+                Reset Link Sent
+              </h4>
+              <p className="text-xs leading-relaxed" style={{ color: C.text2 }}>
+                If an account exists with that email, a password reset link has been sent. The link expires in 15 minutes.
+              </p>
+            </div>
+            <Button
+              type="button"
+              onClick={() => handleClose(false)}
+              className="w-full text-white font-semibold py-2.5 rounded-lg text-xs"
+              style={{ background: C.brown }}
+            >
+              Return to Login
+            </Button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+            <div>
+              <label className="block text-xs font-semibold mb-1" style={{ color: C.text2 }}>
+                Email Address
+              </label>
+              <Input
+                type="email"
+                placeholder="name@nibbank.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                autoFocus
+                required
+                className="w-full bg-[#FAF8F5] border border-[#E8DDD2] rounded-xl px-3.5 py-2 text-sm focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37]"
+              />
+              {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0 mt-4">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => handleClose(false)}
+                className="text-xs"
+                style={{ color: C.text3 }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={submitting}
+                className="text-white text-xs font-bold px-4 py-2 rounded-lg"
+                style={{ background: C.brown }}
+              >
+                {submitting ? 'Sending Link…' : 'Send Reset Link'}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Main Login component ──────────────────────────────────────────────────────
 export default function Login() {
   const { login } = useAuth();
@@ -428,7 +611,7 @@ export default function Login() {
   const [submitting, setSubmitting]     = useState(false);
   const [showPw, setShowPw]             = useState(false);
   const [view, setView]                 = useState('login');   // 'login' | 'apply'
-  const [applySuccess, setApplySuccess] = useState('');
+  const [forgotOpen, setForgotOpen]     = useState(false);
 
   function handleChange(e) {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -451,12 +634,6 @@ export default function Login() {
     } catch (err) {
       setError(err.response?.data?.error ?? 'Invalid username or password. Please try again.');
     } finally { setSubmitting(false); }
-  }
-
-  function handleApplySuccess() {
-    setView('login');
-    setApplySuccess('Application submitted! An Admin will review and send your login credentials.');
-    setTimeout(() => setApplySuccess(''), 9000);
   }
 
   return (
@@ -500,7 +677,7 @@ export default function Login() {
         {/* ── Auth form card ── */}
         <div className="relative z-10 w-full max-w-[400px]">
           {view === 'apply' ? (
-            <AgentApplyForm onBack={() => setView('login')} onSuccess={handleApplySuccess} />
+            <AgentApplyForm onBack={() => setView('login')} />
           ) : (
             <div>
               {/* Heading */}
@@ -512,8 +689,6 @@ export default function Login() {
                   Sign in to continue
                 </p>
               </div>
-
-              {applySuccess && <div className="mb-5"><SuccessBanner message={applySuccess} /></div>}
 
               <form
                 id="login-form"
@@ -576,6 +751,20 @@ export default function Login() {
                   </button>
                 </div>
 
+                {/* Subtle Forgot Password link */}
+                <div className="flex justify-end -mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setForgotOpen(true)}
+                    className="text-xs transition-colors duration-150 cursor-pointer"
+                    style={{ color: C.text3 }}
+                    onMouseEnter={e => { e.currentTarget.style.color = C.brown; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = C.text3; }}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+
                 {error && <ErrorBanner message={error} />}
 
                 {/* Sign in button */}
@@ -618,13 +807,15 @@ export default function Login() {
                   style={{ color: C.text3 }}
                   onMouseEnter={e => { e.currentTarget.style.color = C.brown; }}
                   onMouseLeave={e => { e.currentTarget.style.color = C.text3; }}
-                  onClick={() => { setError(''); setApplySuccess(''); setView('apply'); }}
+                  onClick={() => { setError(''); setView('apply'); }}
                 >
                   Apply to become an agent →
                 </button>
               </div>
             </div>
           )}
+
+          <ForgotPasswordDialog open={forgotOpen} onOpenChange={setForgotOpen} />
         </div>
       </div>
     </div>

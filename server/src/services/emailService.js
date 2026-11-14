@@ -188,5 +188,240 @@ async function sendActivationEmail(toEmail, agentName, rawToken) {
 // ── sendResendEmail (alias — same template, same function) ────────────────────
 const sendResendActivationEmail = sendActivationEmail;
 
-module.exports = { sendActivationEmail, sendResendActivationEmail };
+// ── sendPasswordResetEmail ───────────────────────────────────────────────────
+/**
+ * @param {string} toEmail      - User's email address
+ * @param {string} userName     - User's display name or username
+ * @param {string} rawToken     - The un-hashed reset token
+ */
+async function sendPasswordResetEmail(toEmail, userName, rawToken) {
+  const clientUrl = (process.env.CLIENT_URL ?? 'http://localhost:5173').replace(/\/$/, '');
+  const resetLink = `${clientUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
+
+  const transporter = await createTransporter();
+
+  try {
+    const info = await transporter.sendMail({
+      from:    `"NIB Referral System" <no-reply@nib.et>`,
+      to:      toEmail,
+      subject: 'Reset Your Password – NIB Referral Management System',
+      text: [
+        `Hello ${userName},`,
+        '',
+        'We received a request to reset your password for the NIB Referral Management System.',
+        'Click the link below to set a new password. This link is single-use and expires in 15 minutes.',
+        '',
+        resetLink,
+        '',
+        'If you did not request this password reset, please ignore this email or contact bank security immediately.',
+        '',
+        '— NIB International Bank Security Team',
+      ].join('\n'),
+      html: `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body style="margin:0;padding:0;background:#FAF8F5;font-family:'Segoe UI',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#FAF8F5;padding:40px 0;">
+    <tr><td align="center">
+      <table width="580" cellpadding="0" cellspacing="0"
+             style="background:#ffffff;border-radius:12px;overflow:hidden;
+                    border:1px solid rgba(138,77,31,0.12);
+                    box-shadow:0 2px 16px rgba(62,39,35,0.08);">
+
+        <!-- Header -->
+        <tr>
+          <td style="background:#8A4D1F;padding:28px 40px;text-align:center;">
+            <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:3px;
+                       color:rgba(255,255,255,0.65);text-transform:uppercase;">
+              NIB International Bank
+            </p>
+            <h1 style="margin:8px 0 0;font-size:22px;font-weight:800;color:#ffffff;">
+              Password Reset Request 🔐
+            </h1>
+          </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+          <td style="padding:36px 40px;">
+            <p style="margin:0 0 8px;font-size:15px;color:#3E2723;font-weight:600;">
+              Hello ${userName},
+            </p>
+            <p style="margin:0 0 20px;font-size:14px;color:#5C3A2E;line-height:1.6;">
+              We received a request to reset the password for your account on the <strong>NIB Referral Management System</strong>. 
+              Please click the button below to securely choose your new password:
+            </p>
+
+            <!-- CTA Button -->
+            <table cellpadding="0" cellspacing="0" style="margin:28px 0;">
+              <tr>
+                <td style="border-radius:8px;background:#8A4D1F;">
+                  <a href="${resetLink}"
+                     style="display:inline-block;padding:14px 32px;
+                            font-size:14px;font-weight:700;color:#ffffff;
+                            text-decoration:none;border-radius:8px;
+                            letter-spacing:0.3px;">
+                    Reset My Password
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Expiry & Security Warning -->
+            <div style="margin:0 0 20px;font-size:12px;color:#7A4B1A;
+                        background:#FFF8E7;border-radius:6px;padding:12px 16px;
+                        border-left:3px solid #D4AF37;line-height:1.5;">
+              <p style="margin:0 0 6px;">
+                ⏱ <strong>Single-use link:</strong> This secure link expires in <strong>15 minutes</strong>.
+              </p>
+              <p style="margin:0;">
+                🛡️ If you did not request this password change, no action is needed. Your password will remain unchanged.
+              </p>
+            </div>
+
+            <!-- Fallback URL -->
+            <p style="margin:0;font-size:11px;color:#9C8577;line-height:1.5;">
+              Can't click the button? Copy and paste this URL into your browser:<br/>
+              <span style="color:#8A4D1F;word-break:break-all;">${resetLink}</span>
+            </p>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background:#FAF8F5;padding:18px 40px;text-align:center;
+                      border-top:1px solid rgba(138,77,31,0.10);">
+            <p style="margin:0;font-size:11px;color:#9C8577;">
+              NIB International Bank · Information Security Department<br/>
+              This is an automated system notification. Please do not reply directly.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>
+      `.trim(),
+    });
+
+    console.log(`[emailService] 📧 Password reset email dispatched to: ${toEmail}`);
+    return info;
+  } catch (emailErr) {
+    console.warn(`[emailService] ⚠️ Password reset email delivery failed: ${emailErr.message}`);
+    // Security constraint: Do NOT log the raw token or unredacted reset URL
+    console.warn(`[emailService] ℹ️ Token was securely generated for user (token redacted in logs)`);
+    return null;
+  }
+}
+
+// ── sendPasswordResetSuccessEmail ────────────────────────────────────────────
+/**
+ * @param {string} toEmail      - User's email address
+ * @param {string} userName     - User's display name or username
+ */
+async function sendPasswordResetSuccessEmail(toEmail, userName) {
+  const transporter = await createTransporter();
+
+  try {
+    const info = await transporter.sendMail({
+      from:    `"NIB Referral System" <no-reply@nib.et>`,
+      to:      toEmail,
+      subject: 'Security Alert: Password Changed Successfully – NIB Referral System',
+      text: [
+        `Hello ${userName},`,
+        '',
+        'This is a confirmation that your password for the NIB Referral Management System was successfully changed.',
+        '',
+        'If you performed this action, no further steps are needed.',
+        'If you did NOT change your password, please contact NIB IT Security immediately as your account may be compromised.',
+        '',
+        '— NIB International Bank Security Team',
+      ].join('\n'),
+      html: `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body style="margin:0;padding:0;background:#FAF8F5;font-family:'Segoe UI',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#FAF8F5;padding:40px 0;">
+    <tr><td align="center">
+      <table width="580" cellpadding="0" cellspacing="0"
+             style="background:#ffffff;border-radius:12px;overflow:hidden;
+                    border:1px solid rgba(138,77,31,0.12);
+                    box-shadow:0 2px 16px rgba(62,39,35,0.08);">
+
+        <!-- Header -->
+        <tr>
+          <td style="background:#3E2723;padding:28px 40px;text-align:center;">
+            <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:3px;
+                       color:rgba(255,255,255,0.65);text-transform:uppercase;">
+              NIB International Bank
+            </p>
+            <h1 style="margin:8px 0 0;font-size:20px;font-weight:800;color:#ffffff;">
+              Security Notice: Password Updated
+            </h1>
+          </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+          <td style="padding:36px 40px;">
+            <p style="margin:0 0 8px;font-size:15px;color:#3E2723;font-weight:600;">
+              Hello ${userName},
+            </p>
+            <p style="margin:0 0 16px;font-size:14px;color:#5C3A2E;line-height:1.6;">
+              Your password for the <strong>NIB Referral Management System</strong> was recently changed.
+            </p>
+            <p style="margin:0 0 20px;font-size:14px;color:#5C3A2E;line-height:1.6;">
+              All previous active sessions have been securely terminated. You can now log in using your new credentials.
+            </p>
+
+            <div style="margin:20px 0;font-size:12px;color:#7A2518;
+                        background:#FDF2F0;border-radius:6px;padding:12px 16px;
+                        border-left:3px solid #E8A090;line-height:1.5;">
+              ⚠️ <strong>Did not request this change?</strong><br/>
+              If you did not change your password, someone else may have accessed your account. Please contact the NIB IT Security team immediately.
+            </div>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background:#FAF8F5;padding:18px 40px;text-align:center;
+                      border-top:1px solid rgba(138,77,31,0.10);">
+            <p style="margin:0;font-size:11px;color:#9C8577;">
+              NIB International Bank · Information Security Department
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>
+      `.trim(),
+    });
+
+    console.log(`[emailService] 📧 Password reset success notification dispatched to: ${toEmail}`);
+    return info;
+  } catch (emailErr) {
+    console.warn(`[emailService] ⚠️ Password reset notification email failed: ${emailErr.message}`);
+    return null;
+  }
+}
+
+module.exports = {
+  sendActivationEmail,
+  sendResendActivationEmail,
+  sendPasswordResetEmail,
+  sendPasswordResetSuccessEmail,
+};
+
 

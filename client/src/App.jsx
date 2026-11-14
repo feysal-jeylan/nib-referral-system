@@ -23,6 +23,7 @@ import Login              from '@/features/auth/Login';
 import ChangePassword     from '@/features/auth/ChangePassword';
 import Dashboard          from '@/features/dashboard/Dashboard';
 import ActivateAccount    from '@/features/auth/ActivateAccount';
+import ResetPassword      from '@/features/auth/ResetPassword';
 
 export default function App() {
   // Session-check lifecycle lives in AuthContext
@@ -31,9 +32,12 @@ export default function App() {
   // User object lives in Zustand (pushed there by AuthContext on resolve)
   const user = useAppStore(s => s.user);
 
-  // ── Activation route — render before normal auth gates ───────────────────────
+  // ── Pre-auth public routes ──────────────────────────────────────────────────
   if (window.location.pathname === '/activate') {
     return <ActivateAccount />;
+  }
+  if (window.location.pathname === '/reset-password') {
+    return <ResetPassword />;
   }
 
   if (loading) {

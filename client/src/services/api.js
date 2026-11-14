@@ -43,8 +43,13 @@ const SKIP_INTERCEPT = new Set([
   '/auth/login',
   '/auth/logout',
   '/auth/me',
+  '/auth/forgot-password',
+  '/auth/reset-password',
   '/agents/apply',
 ]);
+
+// Public pre-auth paths exempt from forced redirects to /login
+const PUBLIC_PATHS = new Set(['/login', '/activate', '/reset-password']);
 
 // ── Response interceptor ──────────────────────────────────────────────────────
 api.interceptors.response.use(
@@ -57,7 +62,12 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const code   = error.response?.data?.code;
 
-    // Auto-logout on 401/403 with ACCOUNT_SUSPENDED or NO_TOKEN
+    // If this URL is explicitly configured to skip intercept, do not auto-logout/redirect
+    if (SKIP_INTERCEPT.has(url)) {
+      return Promise.reject(error);
+    }
+
+    // Auto-logout on 401/403 with ACCOUNT_SUSPENDED or NO_TOKEN on protected routes
     if (
       (status === 401 || status === 403) &&
       (code === 'ACCOUNT_SUSPENDED' || code === 'NO_TOKEN')
@@ -66,16 +76,19 @@ api.interceptors.response.use(
       window.dispatchEvent(
         new CustomEvent('auth:unauthorized', { detail: { url, code } })
       );
-      if (window.location.pathname !== '/login' && window.location.pathname !== '/activate') {
+      if (!PUBLIC_PATHS.has(window.location.pathname)) {
         window.location.href = '/login';
       }
-    } else if (status === 401 && !SKIP_INTERCEPT.has(url)) {
-      // Mid-session expiry: notify AuthContext via DOM event.
-      // AuthContext's listener will call setUser(null) → <Login /> renders.
+    } else if (status === 401) {
+      // Mid-session expiry / session invalidated: notify AuthContext via DOM event.
+      // AuthContext's listener will call clearUser() → <Login /> renders.
       useAppStore.getState().clearUser();
       window.dispatchEvent(
         new CustomEvent('auth:unauthorized', { detail: { url } })
       );
+      if (!PUBLIC_PATHS.has(window.location.pathname)) {
+        window.location.href = '/login';
+      }
     }
 
     // Always re-throw so the calling code's catch block still runs.
