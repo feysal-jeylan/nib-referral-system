@@ -46,7 +46,15 @@ async function listAgents(req, res, next) {
     const VALID_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED'];
     const safeStatus = VALID_STATUSES.includes(status) ? status : '';
 
-    const result = await svc.listAgents(req.user.role, req.user.agent_id, {
+    // Ownership scoping: Super Admins, Admin users, or users with manage_agents permission
+    // must always see all agents (role: 'ADMIN'). Only an Agent user (with agent_id and without manage_agents)
+    // is scoped to their own record.
+    const isAdmin = req.userRoles?.includes('ADMIN') ||
+                    req.user?.role === 'ADMIN' ||
+                    req.userPermissions?.has('manage_agents') ||
+                    !req.user.agent_id;
+    const effectiveRole = isAdmin ? 'ADMIN' : 'AGENT';
+    const result = await svc.listAgents(effectiveRole, req.user.agent_id, {
       page, limit, search, status: safeStatus,
     });
     return res.status(200).json(result);
@@ -163,8 +171,10 @@ async function getAgentStats(req, res, next) {
     return res.status(400).json({ error: 'Agent ID must be a valid integer.', code: 'INVALID_ID' });
   }
 
-  // RBAC: agents can only view their own stats
-  if (req.user.role === 'AGENT' && req.user.agent_id !== agentId) {
+  // Ownership: users with manage_agents (Admins) can view any agent's stats;
+  // view_agents-only users (Agents) can only view their own.
+  const canManage = req.userPermissions?.has('manage_agents');
+  if (!canManage && req.user.agent_id !== agentId) {
     return res.status(403).json({ error: 'Access denied. Agents can only view their own stats.', code: 'FORBIDDEN' });
   }
 

@@ -11,6 +11,7 @@
 const svc   = require('./auth.service');
 const email = require('@/services/emailService');
 const prisma = require('@/config/db');
+const rbacSvc = require('../rbac/rbac.service');
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
 async function login(req, res, next) {
@@ -29,9 +30,19 @@ async function login(req, res, next) {
       return res.status(401).json({ error: 'Invalid username or password.', code: 'INVALID_CREDENTIALS' });
     }
 
+    if (user.status === 'SUSPENDED') {
+      return res.status(403).json({
+        error: 'Account suspended. Please contact the administrator.',
+        code:  'ACCOUNT_SUSPENDED',
+      });
+    }
+
+    const { roles, permissions } = await rbacSvc.resolveUserRolesAndPermissions(user.id);
+    const primaryRole = roles[0] || user.role;
+
     const token = svc.signToken({
       id:                   user.id,
-      role:                 user.role,
+      role:                 primaryRole,
       agent_id:             user.agent_id,
       must_change_password: user.must_change_password,
       token_version:        user.tokenVersion ?? 0,
@@ -44,7 +55,10 @@ async function login(req, res, next) {
       user: {
         id:                   user.id,
         username:             user.username,
-        role:                 user.role,
+        role:                 primaryRole,
+        roles,
+        permissions,
+        agent_id:             user.agent_id,
         must_change_password: user.must_change_password,
       },
     });
@@ -70,15 +84,25 @@ async function me(req, res, next) {
       return res.status(401).json({ error: 'User account no longer exists.', code: 'USER_NOT_FOUND' });
     }
 
+    if (user.status === 'SUSPENDED') {
+      return res.status(403).json({ error: 'Account suspended. Please contact the administrator.', code: 'ACCOUNT_SUSPENDED' });
+    }
+
     const tokenVersion = decoded.token_version ?? 0;
     if (tokenVersion !== user.tokenVersion) {
       return res.status(401).json({ error: 'Session invalidated. Please log in again.', code: 'SESSION_INVALIDATED' });
     }
 
+    const { roles, permissions } = await rbacSvc.resolveUserRolesAndPermissions(user.id);
+    const primaryRole = roles[0] || user.role;
+
     return res.status(200).json({
       id:                   user.id,
       username:             user.username,
-      role:                 user.role,
+      role:                 primaryRole,
+      roles,
+      permissions,
+      agent_id:             user.agent_id,
       must_change_password: user.must_change_password,
     });
   } catch (err) {
@@ -114,10 +138,13 @@ async function changePassword(req, res, next) {
 
     const updatedUser = await svc.updatePassword(user.id, newPassword);
 
+    const { roles, permissions } = await rbacSvc.resolveUserRolesAndPermissions(user.id);
+    const primaryRole = roles[0] || user.role;
+
     // Issue a fresh JWT with must_change_password = false
     const newToken = svc.signToken({
       id:                   user.id,
-      role:                 user.role,
+      role:                 primaryRole,
       agent_id:             user.agent_id,
       must_change_password: false,
       token_version:        updatedUser.tokenVersion ?? 0,
@@ -130,7 +157,10 @@ async function changePassword(req, res, next) {
       user: {
         id:                   user.id,
         username:             user.username,
-        role:                 user.role,
+        role:                 primaryRole,
+        roles,
+        permissions,
+        agent_id:             user.agent_id,
         must_change_password: false,
       },
     });
@@ -162,10 +192,19 @@ async function activateAccount(req, res, next) {
 
     const activatedUser = await svc.activateUser(user.id, newPassword);
 
+    try {
+      await rbacSvc.assignRoleToUser(user.id, 'AGENT');
+    } catch (rbacErr) {
+      console.warn('[activateAccount] Warning assigning AGENT role:', rbacErr.message);
+    }
+
+    const { roles, permissions } = await rbacSvc.resolveUserRolesAndPermissions(user.id);
+    const primaryRole = roles[0] || 'AGENT';
+
     // Generate fresh JWT strictly reflecting the newly activated Agent identity
     const jwtToken = svc.signToken({
       id:                   user.id,
-      role:                 'AGENT',
+      role:                 primaryRole,
       agent_id:             user.agent_id,
       must_change_password: false,
       token_version:        activatedUser.tokenVersion ?? 0,
@@ -179,7 +218,9 @@ async function activateAccount(req, res, next) {
       user: {
         id:                   user.id,
         username:             user.username,
-        role:                 'AGENT',
+        role:                 primaryRole,
+        roles,
+        permissions,
         agent_id:             user.agent_id,
         must_change_password: false,
       },

@@ -27,13 +27,13 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
-  Wallet,
   Award,
   Sliders,
   Sparkles,
   Check,
 } from 'lucide-react';
 import useAppStore from '@/store/useAppStore';
+import usePermissions, { isAdminUser } from '@/features/auth/usePermissions';
 import api from '@/services/api';
 import {
   Tabs,
@@ -64,7 +64,12 @@ const BORDER    = 'rgba(138,77,31,0.12)';
 export default function SettingsPage({ user: propUser, onToast }) {
   const storeUser = useAppStore((s) => s.user);
   const user      = storeUser || propUser;
-  const isAdmin   = user?.role === 'ADMIN';
+
+  // ── Permission helpers (UI-only; backend enforces security) ──────────────────
+  const { hasPermission } = usePermissions();
+  const isAdmin = isAdminUser(user);
+  const canManageSystem = hasPermission('manage_system') || isAdmin;
+  const isAgent = Boolean(user?.agent_id || user?.role === 'AGENT');
 
   // Active Tab state
   const [activeTab, setActiveTab] = useState('profile');
@@ -83,29 +88,13 @@ export default function SettingsPage({ user: propUser, onToast }) {
     }
   }, [user, agentId]);
 
-  // ── Tab 2: Finance Data State (Admin Only) ───────────────────────────────────
-  const [financeData,  setFinanceData]  = useState(null);
-  const [financeError, setFinanceError] = useState(false);
-  const financeLoading = isAdmin && activeTab === 'finance' && !financeData && !financeError;
-
-  useEffect(() => {
-    if (isAdmin && activeTab === 'finance' && !financeData) {
-      api.get('/dashboard/finance')
-        .then((res) => setFinanceData(res.data))
-        .catch(() => {
-          setFinanceError(true);
-          onToast?.({ type: 'error', message: '🔴 Failed to load finance data.' });
-        });
-    }
-  }, [isAdmin, activeTab, financeData]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Tab 3: System Config State (Admin Only) ──────────────────────────────────
+  // ── Tab 2: System Config State (manage_system or Admin) ──────────────────────
   const [configData,  setConfigData]  = useState(null);
   const [configError, setConfigError] = useState(false);
-  const configLoading = isAdmin && activeTab === 'system' && !configData && !configError;
+  const configLoading = canManageSystem && activeTab === 'system' && !configData && !configError;
 
   useEffect(() => {
-    if (isAdmin && activeTab === 'system' && !configData) {
+    if (canManageSystem && activeTab === 'system' && !configData) {
       api.get('/dashboard/config')
         .then((res) => setConfigData(res.data))
         .catch(() => {
@@ -113,7 +102,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
           onToast?.({ type: 'error', message: '🔴 Failed to load system configuration.' });
         });
     }
-  }, [isAdmin, activeTab, configData]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canManageSystem, activeTab, configData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Modal State for Change Password ─────────────────────────────────────────
   const [modalOpen,       setModalOpen]       = useState(false);
@@ -240,27 +229,6 @@ export default function SettingsPage({ user: propUser, onToast }) {
     }
   }
 
-  // ── Payout Action State ─────────────────────────────────────────────────────
-  const [payingAgentId, setPayingAgentId] = useState(null);
-
-  async function handleMarkAsPaid(agent) {
-    setPayingAgentId(agent.id);
-    try {
-      await api.patch(`/dashboard/finance/pay/${agent.id}`);
-      const res = await api.get('/dashboard/finance');
-      setFinanceData(res.data);
-      onToast?.({ type: 'success', message: `✅ Payout for ${agent.name} marked as paid.` });
-    } catch (err) {
-      const msg = err.response?.data?.error ?? 'Failed to mark payout as paid.';
-      onToast?.({ type: 'error', message: `❌ ${msg}` });
-    } finally {
-      setPayingAgentId(null);
-    }
-  }
-
-  const agentsList     = financeData?.agents ?? [];
-  const totalLiability = financeData?.total_payout ?? financeData?.totalLiability ?? 0;
-
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto" style={{ background: IVORY, minHeight: '100%' }}>
 
@@ -275,19 +243,19 @@ export default function SettingsPage({ user: propUser, onToast }) {
               Enterprise Control &amp; Settings
             </h1>
             <p className="text-xs" style={{ color: MUTED }}>
-              Manage authentication credentials, financial liabilities, and core reward tiers.
+              Manage authentication credentials, personal account details, and core reward tiers.
             </p>
           </div>
           <div className="flex items-center gap-2">
             <span
               className="text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full border shadow-2xs"
               style={{
-                background: isAdmin ? 'rgba(138,77,31,0.10)' : 'rgba(212,175,55,0.18)',
-                borderColor: isAdmin ? 'rgba(138,77,31,0.25)' : 'rgba(212,175,55,0.35)',
-                color: isAdmin ? BRAND : '#8A5D00',
+                background: isAgent ? 'rgba(212,175,55,0.18)' : (isAdmin ? 'rgba(138,77,31,0.10)' : 'rgba(100,116,139,0.12)'),
+                borderColor: isAgent ? 'rgba(212,175,55,0.35)' : (isAdmin ? 'rgba(138,77,31,0.25)' : 'rgba(100,116,139,0.25)'),
+                color: isAgent ? '#8A5D00' : (isAdmin ? BRAND : '#334155'),
               }}
             >
-              {isAdmin ? '🛡️ Administrator Access' : '👤 Agent Session'}
+              {isAgent ? '👤 Agent Session' : (isAdmin ? '🛡️ Administrator Access' : `💼 ${user?.role || 'Staff'} Session`)}
             </span>
           </div>
         </div>
@@ -308,19 +276,8 @@ export default function SettingsPage({ user: propUser, onToast }) {
             <span>My Profile</span>
           </TabsTrigger>
 
-          {/* Tab 2 Trigger: Finance & Payouts (Admin Only) */}
-          {isAdmin && (
-            <TabsTrigger
-              value="finance"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all data-[state=active]:bg-[#8A4D1F] data-[state=active]:text-white data-[state=active]:shadow-sm text-[#5D4037] hover:text-[#3E2723]"
-            >
-              <Wallet size={15} />
-              <span>Finance &amp; Payouts</span>
-            </TabsTrigger>
-          )}
-
-          {/* Tab 3 Trigger: System Configuration (Admin Only) */}
-          {isAdmin && (
+          {/* Tab 2 Trigger: System Configuration (manage_system or Admin) */}
+          {canManageSystem && (
             <TabsTrigger
               value="system"
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all data-[state=active]:bg-[#8A4D1F] data-[state=active]:text-white data-[state=active]:shadow-sm text-[#5D4037] hover:text-[#3E2723]"
@@ -394,22 +351,22 @@ export default function SettingsPage({ user: propUser, onToast }) {
                       }}
                     >
                       <span className="font-medium" style={{ color: CHOCOLATE }}>
-                        {isAdmin ? 'System Administrator' : 'Referral Agent'}
+                        {isAgent ? 'Referral Agent' : (isAdmin ? 'System Administrator' : (user?.role || 'Staff Member'))}
                       </span>
                       <span
                         className="px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider"
                         style={{
-                          background: isAdmin ? 'rgba(138,77,31,0.12)' : 'rgba(212,175,55,0.20)',
-                          color: isAdmin ? BRAND : '#8A5D00',
+                          background: isAgent ? 'rgba(212,175,55,0.20)' : (isAdmin ? 'rgba(138,77,31,0.12)' : 'rgba(100,116,139,0.15)'),
+                          color: isAgent ? '#8A5D00' : (isAdmin ? BRAND : '#334155'),
                         }}
                       >
-                        {user?.role ?? (isAdmin ? 'ADMIN' : 'AGENT')}
+                        {user?.role ?? (isAgent ? 'AGENT' : (isAdmin ? 'ADMIN' : 'STAFF'))}
                       </span>
                     </div>
                   </div>
 
-                  {/* Agent ID (only if applicable) */}
-                  {!isAdmin && (
+                  {/* Agent ID (only if agent) */}
+                  {isAgent && (
                     <div>
                       <label className="block text-xs font-semibold mb-1" style={{ color: MUTED }}>
                         Agent Profile ID
@@ -516,194 +473,84 @@ export default function SettingsPage({ user: propUser, onToast }) {
             </section>
 
           </div>
-        </TabsContent>
 
-        {/* ═════════════════════════════════════════════════════════════════════ */}
-        {/* TAB 2: FINANCE & PAYOUTS (Admin Only)                                */}
-        {/* ═════════════════════════════════════════════════════════════════════ */}
-        {isAdmin && (
-          <TabsContent value="finance" className="space-y-6 focus-visible:outline-none">
-
-            {/* Top Liability Summary Card */}
-            <div
-              className="bg-white rounded-xl p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 border"
-              style={{
-                borderColor: 'rgba(212,175,55,0.40)',
-                background: 'linear-gradient(135deg, #FFFFFF 0%, #FFFDF9 100%)',
-              }}
-            >
-              <div className="flex items-center gap-4">
-                <div
-                  className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-2xs"
-                  style={{ background: 'rgba(212,175,55,0.18)', color: '#B8860B' }}
-                >
-                  <Wallet size={28} strokeWidth={2} />
-                </div>
-                <div>
-                  <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: MUTED }}>
-                    Total Outstanding Liability
-                  </p>
-                  <h3 className="text-3xl font-extrabold tracking-tight tabular-nums mt-0.5" style={{ color: CHOCOLATE }}>
-                    {Number(totalLiability).toLocaleString()} ETB
-                  </h3>
-                  <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-                    Cumulative commission rewards accrued across approved agents.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex-shrink-0">
-                <span
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200"
-                >
-                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                  <span>Pending Payout Batch</span>
-                </span>
-              </div>
-            </div>
-
-            {/* Payouts Data Table */}
-            <div
+          {/* ════ RBAC Roles & Permissions (shown when user has roles[]) ════ */}
+          {Array.isArray(user?.roles) && user.roles.length > 0 && (
+            <section
               className="bg-white rounded-xl shadow-sm overflow-hidden"
               style={{ border: `1px solid ${BORDER}` }}
             >
               <div
-                className="px-6 py-4 flex items-center justify-between border-b"
-                style={{ borderColor: BORDER }}
+                className="flex items-center gap-3 px-6 py-4"
+                style={{ borderBottom: `1px solid ${BORDER}` }}
               >
+                <div
+                  className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+                  style={{ background: 'rgba(138,77,31,0.10)', color: BRAND }}
+                >
+                  <ShieldCheck size={20} strokeWidth={2} />
+                </div>
                 <div>
-                  <h3 className="font-bold text-sm tracking-wide" style={{ color: CHOCOLATE }}>
-                    Agent Earnings &amp; Payout Ledger
-                  </h3>
+                  <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>
+                    Assigned Roles &amp; Permissions
+                  </h2>
                   <p className="text-xs" style={{ color: MUTED }}>
-                    Individual performance earnings eligible for settlement.
+                    Current access level granted by your administrator
                   </p>
                 </div>
-                <span className="text-xs font-medium" style={{ color: MUTED }}>
-                  {agentsList.length} approved agent{agentsList.length !== 1 ? 's' : ''}
-                </span>
               </div>
-
-              {financeLoading ? (
-                <div className="flex items-center justify-center py-16">
-                  <Spinner />
-                </div>
-              ) : agentsList.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-2">
-                  <Wallet size={32} style={{ color: MUTED }} strokeWidth={1.5} />
-                  <p className="text-xs" style={{ color: MUTED }}>No approved agents found.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr
-                        className="border-b uppercase font-semibold tracking-wider text-[11px]"
+              <div className="p-6 space-y-4">
+                {/* Roles */}
+                <div>
+                  <p className="text-xs font-semibold mb-2" style={{ color: MUTED }}>Roles</p>
+                  <div className="flex flex-wrap gap-2">
+                    {user.roles.map(r => (
+                      <span
+                        key={r}
+                        className="px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide border"
                         style={{
-                          background: '#FAF8F5',
-                          borderColor: BORDER,
-                          color: MUTED,
+                          background: 'rgba(138,77,31,0.09)',
+                          borderColor: 'rgba(138,77,31,0.22)',
+                          color: BRAND,
                         }}
                       >
-                        <th className="py-3.5 px-6">Agent</th>
-                        <th className="py-3.5 px-6">Referral Code</th>
-                        <th className="py-3.5 px-6 text-center">Successful Referrals</th>
-                        <th className="py-3.5 px-6 text-right">Available Balance</th>
-                        <th className="py-3.5 px-6 text-right">Total Paid</th>
-                        <th className="py-3.5 px-6 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y" style={{ borderColor: BORDER }}>
-                      {agentsList.map((agent) => (
-                        <tr
-                          key={agent.id}
-                          className="hover:bg-[#FAF8F5]/60 transition-colors"
-                        >
-                          {/* Agent Name + Phone */}
-                          <td className="py-4 px-6">
-                            <p className="font-bold text-sm" style={{ color: CHOCOLATE }}>
-                              {agent.name}
-                            </p>
-                            <p className="text-[11px]" style={{ color: MUTED }}>
-                              {agent.phone || agent.email}
-                            </p>
-                          </td>
-
-                          {/* Referral Code */}
-                          <td className="py-4 px-6">
-                            <span
-                              className="font-mono text-xs font-semibold px-2.5 py-1 rounded-md border"
-                              style={{
-                                background: '#FAF8F5',
-                                borderColor: '#E5DED6',
-                                color: BRAND,
-                              }}
-                            >
-                              {agent.referral_code ?? '—'}
-                            </span>
-                          </td>
-
-                          {/* Successful Referrals */}
-                          <td className="py-4 px-6 text-center">
-                            <span className="font-bold text-sm tabular-nums" style={{ color: CHOCOLATE }}>
-                              {agent.successful_referrals ?? 0}
-                            </span>
-                          </td>
-
-                          {/* Available Balance */}
-                          <td className="py-4 px-6 text-right">
-                            <span
-                              className="font-bold text-sm tabular-nums"
-                              style={{ color: Number(agent.available_balance ?? 0) > 0 ? '#1A5C34' : CHOCOLATE }}
-                            >
-                              {Number(agent.available_balance ?? 0).toLocaleString()} ETB
-                            </span>
-                          </td>
-
-                          {/* Total Paid */}
-                          <td className="py-4 px-6 text-right">
-                            <span className="font-semibold text-sm tabular-nums" style={{ color: MUTED }}>
-                              {Number(agent.total_paid ?? 0).toLocaleString()} ETB
-                            </span>
-                          </td>
-
-                          {/* Action Button or Paid Badge */}
-                          <td className="py-4 px-6 text-right">
-                            {Number(agent.available_balance ?? 0) > 0 ? (
-                              <Button
-                                type="button"
-                                disabled={payingAgentId === agent.id}
-                                onClick={() => handleMarkAsPaid(agent)}
-                                className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition shadow-2xs cursor-pointer hover:opacity-90 active:scale-95"
-                                style={{ background: BRAND }}
-                              >
-                                <Check size={13} className="mr-1" />
-                                <span>{payingAgentId === agent.id ? 'Processing…' : 'Mark as Paid'}</span>
-                              </Button>
-                            ) : (
-                              <span
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wider bg-emerald-50 text-emerald-800 border border-emerald-200"
-                              >
-                                <CheckCircle2 size={12} className="text-emerald-700" />
-                                <span>Paid</span>
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                        {r}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-              )}
-            </div>
-
-          </TabsContent>
-        )}
+                {/* Permissions */}
+                {Array.isArray(user?.permissions) && user.permissions.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold mb-2" style={{ color: MUTED }}>
+                      Effective Permissions ({user.permissions.length})
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {user.permissions.map(p => (
+                        <span
+                          key={p}
+                          className="px-2 py-0.5 rounded text-[11px] font-mono border"
+                          style={{
+                            background: '#FAF8F5',
+                            borderColor: 'rgba(138,77,31,0.15)',
+                            color: MUTED,
+                          }}
+                        >
+                          {p}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+        </TabsContent>
 
         {/* ═════════════════════════════════════════════════════════════════════ */}
-        {/* TAB 3: SYSTEM CONFIGURATION (Admin Only)                             */}
+        {/* TAB 2: SYSTEM CONFIGURATION (manage_system or Admin)                */}
         {/* ═════════════════════════════════════════════════════════════════════ */}
-        {isAdmin && (
+        {canManageSystem && (
           <TabsContent value="system" className="space-y-6 focus-visible:outline-none">
 
             {/* Config Header Section */}

@@ -18,6 +18,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, MoreVertical } from 'lucide-react';
 import api from '@/services/api';
+import useAppStore from '@/store/useAppStore';
+import usePermissions from '@/features/auth/usePermissions';
 
 import AgentForm           from '@/features/agents/AgentForm';
 import EditAgentModal      from '@/features/agents/EditAgentModal';
@@ -56,7 +58,14 @@ const STATUS_OPTIONS = [
   { value: 'REJECTED',  label: 'Rejected'     },
 ];
 
-export default function AgentsPage({ _user, isAdmin, onToast }) {
+export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToast }) {
+  const storeUser = useAppStore(s => s.user);
+  const user = storeUser || propUser;
+  const { hasPermission, isAdmin: contextIsAdmin } = usePermissions();
+
+  const isAgent = Boolean(user?.agent_id);
+  const canManage = contextIsAdmin || hasPermission('manage_agents') || Boolean(propIsAdmin) || (Array.isArray(user?.permissions) && user.permissions.includes('manage_agents'));
+
   const [data,      setData]      = useState([]);
   const [meta,      setMeta]      = useState(null);
   const [loading,   setLoading]   = useState(true);
@@ -238,7 +247,7 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
             Search, filter, and manage all registered referral agents.
           </p>
         </div>
-        {isAdmin && (
+        {canManage && (
           <Button
             onClick={() => setIsFormOpen(true)}
             className="self-start sm:self-auto inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-brand hover:bg-brand-hover rounded-md shadow-sm transition-colors"
@@ -250,7 +259,7 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
       </div>
 
       {/* ── 2. Modal Dialog for AgentForm ─────────────────────────────────── */}
-      {isAdmin && (
+      {canManage && (
         <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
           <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto bg-white p-6 rounded-xl border border-border shadow-xl">
             <DialogHeader className="mb-2">
@@ -270,7 +279,7 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
       )}
 
       {/* ── 3. Edit Agent Modal ───────────────────────────────────────────── */}
-      {isAdmin && (
+      {canManage && (
         <EditAgentModal
           agent={agentToEdit}
           isOpen={isEditOpen}
@@ -420,10 +429,10 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
         >
           <div>
             <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>
-              {isAdmin ? 'All Agents' : 'My Profile'}
+              {!isAgent ? 'All Agents' : 'My Profile'}
             </h2>
             <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-              {isAdmin
+              {!isAgent
                 ? 'Search, filter, and manage all registered referral agents.'
                 : 'Your agent profile and referral activity.'}
             </p>
@@ -438,8 +447,8 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
           )}
         </div>
 
-        {/* Filters (admin only) */}
-        {isAdmin && (
+        {/* Filters */}
+        {!isAgent && (
           <TableFilters
             search={search}
             onSearchChange={handleSearchChange}
@@ -469,7 +478,7 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
                 <thead>
                   <tr style={{ background: IVORY, borderBottom: `1px solid ${BORDER}` }}>
                     {['#', 'Name', 'Referral Code', 'Referrals', 'Reward Tier', 'Status',
-                      ...(isAdmin ? ['Actions'] : [])
+                      ...(canManage ? ['Actions'] : [])
                     ].map(h => (
                       <th
                         key={h}
@@ -530,7 +539,7 @@ export default function AgentsPage({ _user, isAdmin, onToast }) {
 
                         <td className="px-6 py-4"><AgentStatusPill status={a.status} /></td>
 
-                        {isAdmin && (
+                        {canManage && (
                           <td className="px-6 py-4">
                             <div className="flex items-center justify-end gap-2">
                               {a.status === 'PENDING' && (

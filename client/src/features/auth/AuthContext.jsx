@@ -22,10 +22,11 @@ import api from '@/services/api';
 import useAppStore from '@/store/useAppStore';
 
 const AuthContext = createContext({
-  loading:     true,
-  login:       () => {},
-  logout:      () => Promise.resolve(),
-  refreshUser: () => {},
+  loading:            true,
+  login:              () => {},
+  logout:             () => Promise.resolve(),
+  refreshUser:        () => {},
+  refreshPermissions: () => Promise.resolve(),
 });
 
 export function AuthProvider({ children }) {
@@ -79,8 +80,19 @@ export function AuthProvider({ children }) {
     setUser(userData);
   }, [setUser]);
 
+  // ── refreshPermissions() — re-fetches /api/auth/me and updates Zustand ──
+  // Call this after assigning/removing roles to reflect fresh permissions.
+  const refreshPermissions = useCallback(async () => {
+    try {
+      const { data } = await api.get('/auth/me');
+      setUser(data);
+    } catch {
+      // If session is gone, clearUser will be triggered by the 401 interceptor
+    }
+  }, [setUser]);
+
   return (
-    <AuthContext.Provider value={{ loading, login, logout, refreshUser }}>
+    <AuthContext.Provider value={{ loading, login, logout, refreshUser, refreshPermissions }}>
       {children}
     </AuthContext.Provider>
   );

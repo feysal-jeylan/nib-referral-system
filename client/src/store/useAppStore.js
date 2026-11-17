@@ -9,7 +9,7 @@
  * AuthContext. Once the user is known, AuthContext calls setUser() here
  * so ALL components can read it from Zustand without prop-drilling.
  *
- * Pages: 'overview' | 'agents' | 'campaigns' | 'referrals' | 'logs'
+ * Pages: 'overview' | 'agents' | 'campaigns' | 'referrals' | 'finance' | 'logs' | 'users' | 'roles' | 'settings'
  */
 
 import { create } from 'zustand';

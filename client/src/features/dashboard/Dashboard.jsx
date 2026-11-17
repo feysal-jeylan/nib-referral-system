@@ -1,17 +1,19 @@
 /**
  * features/dashboard/Dashboard.jsx
- * ──────────────────────────────────
- * Role-Based Access Control (RBAC) Dashboard Shell.
+ * ──────────────────────────────────────────────────────────────────────────────
+ * Dynamic Permission-Driven Dashboard Shell.
  *
- * - Admin Experience:
- *   Full access to Overview, Agents, Campaigns, Referrals, Integration Logs, Settings.
- * - Agent Experience:
- *   Restricted to My Dashboard (AgentOverview), My Referrals, Settings.
- *   Security fallback: unauthorized tabs automatically redirect to 'overview'.
+ * Navigation is now driven by user.permissions[] returned from /api/auth/me,
+ * NOT by hardcoded role strings. Each nav item declares the permission key
+ * required to see it. Items without a permission key are always visible.
  *
- * State & Routing:
- *   Zustand (useAppStore) drives user and activePage.
- *   AuthContext logout() is wired through App.jsx and clears Zustand state.
+ * Security fallback: if the user navigates to a page whose permission they
+ * lack, they are automatically redirected to 'overview' and shown AccessDenied.
+ *
+ * Backward compatibility:
+ *   - Admin users still see Admin-labelled portal header.
+ *   - Agent users still see their own labels ("My Dashboard", "My Referrals").
+ *   - SettingsPage and all existing pages receive identical props.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -25,19 +27,27 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
+  UserCog,
+  Shield,
+  Wallet,
 } from 'lucide-react';
 
 import useAppStore from '@/store/useAppStore';
 import Toast from '@/components/ui/Toast';
+import usePermissions from '@/features/auth/usePermissions';
 
 // ── Page imports ──────────────────────────────────────────────────────────────
 import Overview            from './pages/Overview';
 import AgentOverview       from './pages/AgentOverview';
 import SettingsPage        from './pages/SettingsPage';
+import FinancePage         from '@/features/finance/pages/FinancePage';
 import AgentsPage          from '@/features/agents/pages/AgentsPage';
 import CampaignsPage       from '@/features/campaigns/pages/CampaignsPage';
 import ReferralsPage       from '@/features/referrals/pages/ReferralsPage';
 import IntegrationLogsPage from '@/features/integration/pages/IntegrationLogsPage';
+import UsersPage           from '@/features/users/pages/UsersPage';
+import RolesPage           from '@/features/roles/pages/RolesPage';
+import AccessDenied        from '@/components/ui/AccessDenied';
 
 // ── Brand colours ─────────────────────────────────────────────────────────────
 const BRAND      = '#8A4D1F';
@@ -46,39 +56,20 @@ const MUTED      = '#9C8577';
 const IVORY      = '#FAF8F5';
 const BORDER_CLR = 'rgba(138,77,31,0.12)';
 
-// ── Nav definitions ───────────────────────────────────────────────────────────
-// Admin nav: full access
-const ADMIN_NAV = [
-  { key: 'overview',  label: 'Overview',        Icon: LayoutDashboard },
-  { key: 'agents',    label: 'Agents',           Icon: Users           },
-  { key: 'campaigns', label: 'Campaigns',        Icon: Megaphone       },
-  { key: 'referrals', label: 'Referrals',        Icon: FileText        },
-  { key: 'logs',      label: 'Integration Logs', Icon: Terminal        },
-  { key: 'settings',  label: 'Settings',         Icon: Settings        },
+// ── Unified Nav Config ────────────────────────────────────────────────────────
+// permission: null → always visible (e.g. Settings)
+// agentLabel: alternate label for agent-role users
+const NAV_CONFIG = [
+  { key: 'overview',  label: 'Overview',         agentLabel: 'My Dashboard', Icon: LayoutDashboard, permission: 'view_dashboard' },
+  { key: 'agents',    label: 'Agents',            Icon: Users,                permission: 'view_agents'    },
+  { key: 'campaigns', label: 'Campaigns',         Icon: Megaphone,            permission: 'view_campaigns' },
+  { key: 'referrals', label: 'Referrals',         agentLabel: 'My Referrals', Icon: FileText,        permission: 'view_referrals' },
+  { key: 'finance',   label: 'Finance',           Icon: Wallet,               permission: 'view_finance'   },
+  { key: 'logs',      label: 'Integration Logs',  Icon: Terminal,             permission: 'view_logs'      },
+  { key: 'users',     label: 'User Management',   Icon: UserCog,              permission: 'view_users'     },
+  { key: 'roles',     label: 'Role Management',   Icon: Shield,               permission: 'view_roles'     },
+  { key: 'settings',  label: 'Settings',          Icon: Settings,             permission: null             },
 ];
-
-// Agent nav: restricted to agent portal items only
-const AGENT_NAV = [
-  { key: 'overview',  label: 'My Dashboard', Icon: LayoutDashboard },
-  { key: 'referrals', label: 'My Referrals', Icon: FileText        },
-  { key: 'settings',  label: 'Settings',     Icon: Settings        },
-];
-
-// ── Page Titles (Header) ──────────────────────────────────────────────────────
-const ADMIN_PAGE_TITLES = {
-  overview:  'Overview',
-  agents:    'Agents',
-  campaigns: 'Campaigns',
-  referrals: 'Referrals',
-  logs:      'Integration Logs',
-  settings:  'Settings',
-};
-
-const AGENT_PAGE_TITLES = {
-  overview:  'Agent Dashboard',
-  referrals: 'My Referrals',
-  settings:  'Settings',
-};
 
 // ── NavItem Component ─────────────────────────────────────────────────────────
 function NavItem({ item, active, collapsed, onClick }) {
@@ -123,13 +114,14 @@ function NavItem({ item, active, collapsed, onClick }) {
 export default function Dashboard({ user: propUser, logout }) {
   const storeUser     = useAppStore(s => s.user);
   const user          = storeUser || propUser;
-  const isAdmin       = user?.role === 'ADMIN';
 
   const activePage    = useAppStore(s => s.activePage);
   const setActivePage = useAppStore(s => s.setActivePage);
   const collapsed     = useAppStore(s => s.sidebarCollapsed);
   const toggleSidebar = useAppStore(s => s.toggleSidebar);
   const clearUser     = useAppStore(s => s.clearUser);
+
+  const { hasPermission, isAdmin } = usePermissions();
 
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
@@ -145,47 +137,77 @@ export default function Dashboard({ user: propUser, logout }) {
     clearUser();
   }
 
-  // ── Role-aware navigation & headers ─────────────────────────────────────────
-  const visibleNav = isAdmin ? ADMIN_NAV : AGENT_NAV;
-  const pageTitles = isAdmin ? ADMIN_PAGE_TITLES : AGENT_PAGE_TITLES;
+  // ── Build visible nav based on user.permissions[] ────────────────────────────
+  const isAgent = Boolean(user?.agent_id);
 
-  // Security fallback: If an agent somehow navigates to an admin-only page, force back to 'overview'
-  const isAgentAllowed = AGENT_NAV.some(n => n.key === activePage);
-  const safePage       = (!isAdmin && !isAgentAllowed) ? 'overview' : activePage;
+  const visibleNav = NAV_CONFIG.filter(item => {
+    if (!item.permission) return true;                    // always show (Settings)
+    return hasPermission(item.permission);
+  }).map(item => ({
+    ...item,
+    // Apply agentLabel ONLY when user is an Agent (has agent_id)
+    label: (isAgent && item.agentLabel) ? item.agentLabel : item.label,
+  }));
+
+  // ── Page title: derive from visible nav item label ───────────────────────────
+  const currentNavItem = visibleNav.find(n => n.key === activePage);
+  const pageTitle      = currentNavItem?.label ?? 'Dashboard';
+
+  // ── Security fallback: if activePage is not in visibleNav, go to overview ───
+  const isPageAllowed = !activePage ||
+    activePage === 'overview' ||
+    visibleNav.some(n => n.key === activePage);
 
   useEffect(() => {
-    if (!isAdmin && !isAgentAllowed) {
+    if (!isPageAllowed) {
       setActivePage('overview');
     }
-  }, [isAdmin, isAgentAllowed, setActivePage]);
+  }, [isPageAllowed, setActivePage]);
 
-  // ── Content Router ──────────────────────────────────────────────────────────
+  // ── Content Router ────────────────────────────────────────────────────────────
   function renderPage() {
+    const page  = isPageAllowed ? activePage : 'overview';
     const props = { user, isAdmin, onToast: showToast };
 
-    // AGENT content router
-    if (!isAdmin) {
-      switch (safePage) {
-        case 'overview':  return <AgentOverview {...props} />;
-        case 'referrals': return <ReferralsPage  {...props} />;
-        case 'settings':  return <SettingsPage   {...props} />;
-        default:          return <AgentOverview {...props} />;
-      }
+    // Permission guard: if user navigates here but lost access, show AccessDenied
+    const navItem    = NAV_CONFIG.find(n => n.key === page);
+    const needsPerm  = navItem?.permission;
+    if (needsPerm && !hasPermission(needsPerm)) {
+      return <AccessDenied onGoHome={() => setActivePage('overview')} />;
     }
 
-    // ADMIN content router (100% identical to original admin experience)
-    switch (activePage) {
-      case 'overview':  return <Overview             {...props} />;
-      case 'agents':    return <AgentsPage           {...props} />;
-      case 'campaigns': return <CampaignsPage        {...props} />;
-      case 'referrals': return <ReferralsPage        {...props} />;
-      case 'logs':      return <IntegrationLogsPage  {...props} />;
-      case 'settings':  return <SettingsPage         {...props} />;
-      default:          return <Overview             {...props} />;
+    switch (page) {
+      // ── Shared pages (permission-gated by backend, UI handles both roles) ──
+      case 'overview':
+        return isAgent
+          ? <AgentOverview {...props} />
+          : <Overview      {...props} />;
+
+      case 'agents':    return <AgentsPage          {...props} />;
+      case 'campaigns': return <CampaignsPage       {...props} />;
+      case 'referrals': return <ReferralsPage       {...props} />;
+      case 'logs':      return <IntegrationLogsPage {...props} />;
+      case 'settings':  return <SettingsPage        {...props} />;
+
+      // ── Finance: gated by view_finance ───────────────────────────────────
+      case 'finance':
+        return <FinancePage {...props} />;
+
+      // ── New RBAC admin pages ───────────────────────────────────────────────
+      case 'users':     return <UsersPage           {...props} />;
+      case 'roles':     return <RolesPage           {...props} />;
+
+      default:          return isAgent
+        ? <AgentOverview {...props} />
+        : <Overview      {...props} />;
     }
   }
 
   const sidebarW = collapsed ? '72px' : '240px';
+
+  // ── Portal subtitle label ────────────────────────────────────────────────────
+  const portalLabel = isAgent ? 'Agent Portal' : (isAdmin ? 'Admin Portal' : 'Staff Portal');
+  const roleLabel   = isAgent ? 'Agent' : (user?.role || (isAdmin ? 'Administrator' : 'Staff'));
 
   return (
     <div className="flex min-h-screen" style={{ background: IVORY }}>
@@ -218,7 +240,7 @@ export default function Dashboard({ user: propUser, logout }) {
                 NIB Referral
               </p>
               <p className="text-[10px] truncate" style={{ color: MUTED }}>
-                {isAdmin ? 'Admin Portal' : 'Agent Portal'}
+                {portalLabel}
               </p>
             </div>
           )}
@@ -230,7 +252,7 @@ export default function Dashboard({ user: propUser, logout }) {
             <NavItem
               key={item.key}
               item={item}
-              active={(isAdmin ? activePage : safePage) === item.key}
+              active={activePage === item.key}
               collapsed={collapsed}
               onClick={setActivePage}
             />
@@ -248,7 +270,7 @@ export default function Dashboard({ user: propUser, logout }) {
                 {user?.username ?? 'User'}
               </p>
               <p className="text-[10px] mt-0.5" style={{ color: MUTED }}>
-                {isAdmin ? 'Administrator' : 'Agent'}
+                {roleLabel}
               </p>
             </div>
           )}
@@ -311,7 +333,7 @@ export default function Dashboard({ user: propUser, logout }) {
           }}
         >
           <h1 className="font-bold text-base" style={{ color: CHOCOLATE }}>
-            {pageTitles[safePage] ?? (isAdmin ? 'Overview' : 'Agent Dashboard')}
+            {pageTitle}
           </h1>
 
           <div className="flex items-center gap-3">
@@ -320,7 +342,7 @@ export default function Dashboard({ user: propUser, logout }) {
                 {user?.username ?? 'User'}
               </p>
               <p className="text-[10px] mt-0.5" style={{ color: MUTED }}>
-                {isAdmin ? 'Administrator' : 'Agent'}
+                {roleLabel}
               </p>
             </div>
             <div

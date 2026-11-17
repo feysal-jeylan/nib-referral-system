@@ -37,7 +37,7 @@ async function findUserByUsername(username) {
     where:  { username },
     select: {
       id: true, username: true, email: true, password_hash: true,
-      role: true, agent_id: true, must_change_password: true,
+      role: true, status: true, agent_id: true, must_change_password: true,
       tokenVersion: true,
     },
   });
@@ -48,7 +48,7 @@ async function findUserById(id) {
     where:  { id },
     select: {
       id: true, username: true, email: true, role: true,
-      agent_id: true, must_change_password: true,
+      status: true, agent_id: true, must_change_password: true,
       tokenVersion: true,
     },
   });

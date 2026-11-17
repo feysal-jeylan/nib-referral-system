@@ -48,8 +48,9 @@ async function listAgents(role, agentId, { page = 1, limit = 10, search = '', st
     throw err;
   }
   
-  // Base query for AGENT is strictly by id — never filter out by status (even if suspended)
-  const baseWhere     = role === 'AGENT' ? { id: agentId } : {};
+  // Base query: if role === 'ADMIN', do NOT filter by agent_id (return all agents).
+  // Only AGENT role filters by id: agentId.
+  const baseWhere     = (role === 'AGENT' && agentId != null) ? { id: agentId } : {};
   const statusFilter  = (role !== 'AGENT' && status) ? { status } : {};
   const searchFilter  = (role !== 'AGENT' && search)
     ? {

@@ -321,6 +321,7 @@ function EditDialog({ campaign, open, onClose, onSaved, onToast }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function CampaignsPage({ user, isAdmin, onToast }) {
+  const canManage = isAdmin || (Array.isArray(user?.permissions) && user.permissions.includes('manage_campaigns'));
   const [data,     setData]     = useState([]);
   const [meta,     setMeta]     = useState(null);
   const [loading,  setLoading]  = useState(true);
@@ -422,7 +423,7 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
           </p>
         </div>
 
-        {isAdmin && (
+        {canManage && (
           <Button
             onClick={() => setIsFormOpen(true)}
             className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white font-semibold text-sm px-4 py-2.5 rounded-lg shadow-sm transition-all"

@@ -20,8 +20,13 @@ async function listReferrals(req, res, next) {
     const VALID_STATUSES = ['PENDING', 'SUCCESSFUL', 'REJECTED'];
     const safeStatus = VALID_STATUSES.includes(status) ? status : '';
 
+    // Ownership scoping: users with an agent_id are Agents and scoped to their own agent_id.
+    // Users without an agent_id (Admin, Auditor, etc.) see all referrals.
+    const isAgent = Boolean(req.user.agent_id);
+    const effectiveRole = isAgent ? 'AGENT' : 'ADMIN';
+
     const result = await svc.listReferrals(
-      req.user.role, req.user.agent_id, page, limit, { status: safeStatus, search }
+      effectiveRole, req.user.agent_id, page, limit, { status: safeStatus, search }
     );
     return res.status(200).json(result);
   } catch (err) {

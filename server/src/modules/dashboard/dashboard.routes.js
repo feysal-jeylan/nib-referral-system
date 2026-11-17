@@ -2,18 +2,19 @@
  * src/modules/dashboard/dashboard.routes.js
  * ───────────────────────────────────────────
  * Mount point: app.use('/api/dashboard', dashboardRouter)
+ *
+ * Authorization:
+ *   - GET /stats → view_dashboard
  */
 
 'use strict';
 
 const express = require('express');
-const { authenticateToken, authorizeRole } = require('@/middleware/auth');
+const { authenticateToken, authorizePermission } = require('@/middleware/auth');
 const ctrl = require('./dashboard.controller');
 
-const router    = express.Router();
-const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
+const router = express.Router();
 
-router.get('/stats', ...adminOnly, ctrl.getStats);
+router.get('/stats', authenticateToken, authorizePermission('view_dashboard'), ctrl.getStats);
 
 module.exports = router;
-

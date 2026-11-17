@@ -1,0 +1,638 @@
+/**
+ * features/users/pages/UsersPage.jsx
+ * ─────────────────────────────────────
+ * User Management page — full CRUD with RBAC role assignment.
+ *
+ * Features:
+ *   - Paginated, searchable user table
+ *   - Create User modal (username, email, password, initial role)
+ *   - Role assignment / removal per user (via /api/rbac/users/:id/roles)
+ *   - Suspend / Activate account with confirmation
+ *   - Toast notifications via onToast prop
+ *
+ * SECURITY: This page is UI-only. All writes are authorized by the backend.
+ * Never treat frontend permission checks as the security boundary.
+ *
+ * Props: user, isAdmin, onToast
+ */
+
+import { useState, useEffect, useCallback } from 'react';
+import {
+  UserCog, Plus, Search, RefreshCw, X,
+} from 'lucide-react';
+import { usersApi, rbacApi } from '@/services/rbacApi';
+import { Button }   from '@/components/ui/button';
+import { Input }    from '@/components/ui/input';
+import Spinner      from '@/components/ui/Spinner';
+import EmptyState   from '@/components/ui/EmptyState';
+import DataTablePagination from '@/components/common/DataTablePagination';
+import {
+  Dialog, DialogContent, DialogHeader,
+  DialogTitle, DialogFooter,
+} from '@/components/ui/dialog';
+import AccessDenied from '@/components/ui/AccessDenied';
+import usePermissions from '@/features/auth/usePermissions';
+import useAppStore from '@/store/useAppStore';
+
+// ── Brand tokens ──────────────────────────────────────────────────────────────
+const BRAND     = '#8A4D1F';
+const CHOCOLATE = '#3E2723';
+const MUTED     = '#9C8577';
+const IVORY     = '#FAF8F5';
+const BORDER    = 'rgba(138,77,31,0.12)';
+
+// ── Pill helper ───────────────────────────────────────────────────────────────
+function Pill({ children, color = MUTED, bg = 'rgba(138,77,31,0.08)', border = BORDER }) {
+  return (
+    <span
+      className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold tracking-wide border"
+      style={{ background: bg, color, borderColor: border }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function SuspendedPill({ suspended }) {
+  return suspended
+    ? <Pill color="#b91c1c" bg="rgba(220,38,38,0.08)" border="rgba(220,38,38,0.20)">Suspended</Pill>
+    : <Pill color="#15803d" bg="rgba(21,128,61,0.08)"  border="rgba(21,128,61,0.20)">Active</Pill>;
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
+export default function UsersPage({ onToast }) {
+  const currentUser = useAppStore(s => s.user);
+  const { hasPermission } = usePermissions();
+
+  const canView   = hasPermission('view_users');
+  const canManage = hasPermission('manage_users');
+
+  // ── Table state ───────────────────────────────────────────────────────────
+  const [users,   setUsers]   = useState([]);
+  const [meta,    setMeta]    = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [page,    setPage]    = useState(1);
+  const [search,  setSearch]  = useState('');
+  const [searchInput, setSearchInput] = useState('');
+
+  // ── Available roles (for dropdowns) ──────────────────────────────────────
+  const [allRoles,       setAllRoles]       = useState([]);
+  const [rolesLoading,   setRolesLoading]   = useState(false);
+
+  // ── Modals ────────────────────────────────────────────────────────────────
+  const [createOpen,  setCreateOpen]  = useState(false);
+  const [editUser,    setEditUser]    = useState(null);   // user object for edit
+  const [confirmUser, setConfirmUser] = useState(null);   // { user, action: 'suspend'|'activate' }
+
+  // ── Create form state ─────────────────────────────────────────────────────
+  const [form,       setForm]       = useState({ username: '', email: '', password: '', roleName: '' });
+  const [formError,  setFormError]  = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  // ── Edit: roles state ──────────────────────────────────────────────────────
+  const [editRoles,       setEditRoles]       = useState([]);
+  const [editRolesLoading, setEditRolesLoading] = useState(false);
+  const [roleToAdd,       setRoleToAdd]       = useState('');
+  const [roleOpLoading,   setRoleOpLoading]   = useState(false);
+
+  // ── Fetch users ───────────────────────────────────────────────────────────
+  const fetchUsers = useCallback(async (pg = page, q = search) => {
+    setLoading(true);
+    try {
+      const res = await usersApi.listUsers({ page: pg, limit: 20, search: q });
+      setUsers(res.data.users ?? []);
+      setMeta(res.data.meta ?? null);
+    } catch (err) {
+      onToast?.({ type: 'error', message: '🔴 Failed to load users.' });
+    } finally {
+      setLoading(false);
+    }
+  }, [page, search]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (canView) fetchUsers(page, search);
+  }, [page, search, canView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Fetch roles for dropdowns ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!canManage) return;
+    setRolesLoading(true);
+    rbacApi.getRoles()
+      .then(res => setAllRoles(res.data.data ?? []))
+      .catch(() => {})
+      .finally(() => setRolesLoading(false));
+  }, [canManage]);
+
+  // ── Search with debounce ───────────────────────────────────────────────────
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setPage(1);
+      setSearch(searchInput);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  // ── Create user ────────────────────────────────────────────────────────────
+  async function handleCreate(e) {
+    e.preventDefault();
+    setFormError('');
+    if (!form.username || !form.password) {
+      setFormError('Username and password are required.');
+      return;
+    }
+    if (form.password.length < 8) {
+      setFormError('Password must be at least 8 characters.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await usersApi.createUser(form);
+      setCreateOpen(false);
+      setForm({ username: '', email: '', password: '', roleName: '' });
+      onToast?.({ type: 'success', message: `✅ User "${form.username}" created.` });
+      fetchUsers(1, search);
+      setPage(1);
+    } catch (err) {
+      const msg = err.response?.data?.error ?? 'Failed to create user.';
+      setFormError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ── Helper: Map raw roles to full role objects ────────────────────────────
+  const resolveRoleObjects = useCallback((rawRoles) => {
+    return (rawRoles ?? []).map(r => {
+      if (typeof r === 'object' && r !== null && r.id && r.name) return r;
+      const roleName = typeof r === 'string' ? r : r?.name;
+      const found = allRoles.find(ar => ar.name === roleName);
+      return found || { id: found?.id ?? null, name: roleName };
+    });
+  }, [allRoles]);
+
+  // ── Open edit modal ────────────────────────────────────────────────────────
+  async function openEdit(u) {
+    setEditUser(u);
+    setRoleToAdd('');
+    setEditRolesLoading(true);
+    try {
+      const res = await rbacApi.getUserRoles(u.id);
+      const rolesList = res.data.roleObjects || res.data.roles || [];
+      setEditRoles(resolveRoleObjects(rolesList));
+    } catch {
+      setEditRoles(resolveRoleObjects(u.roles ?? []));
+    } finally {
+      setEditRolesLoading(false);
+    }
+  }
+
+  // ── Assign role to user ────────────────────────────────────────────────────
+  async function handleAssignRole() {
+    if (!roleToAdd || !editUser) return;
+    setRoleOpLoading(true);
+    try {
+      await rbacApi.assignRoleToUser(editUser.id, roleToAdd);
+      const res = await rbacApi.getUserRoles(editUser.id);
+      const rolesList = res.data.roleObjects || res.data.roles || [];
+      setEditRoles(resolveRoleObjects(rolesList));
+      setRoleToAdd('');
+      onToast?.({ type: 'success', message: `✅ Role "${roleToAdd}" assigned.` });
+      fetchUsers(page, search);
+    } catch (err) {
+      const msg = err.response?.data?.error ?? 'Failed to assign role.';
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+    } finally {
+      setRoleOpLoading(false);
+    }
+  }
+
+  // ── Remove role from user ──────────────────────────────────────────────────
+  async function handleRemoveRole(roleId, roleName) {
+    if (!editUser) return;
+    setRoleOpLoading(true);
+    try {
+      let id = roleId;
+      if (!id) {
+        const found = allRoles.find(ar => ar.name === roleName);
+        id = found?.id;
+      }
+      if (!id) {
+        throw new Error('Role ID could not be resolved.');
+      }
+      await rbacApi.removeRoleFromUser(editUser.id, id);
+      const res = await rbacApi.getUserRoles(editUser.id);
+      const rolesList = res.data.roleObjects || res.data.roles || [];
+      setEditRoles(resolveRoleObjects(rolesList));
+      onToast?.({ type: 'success', message: `✅ Role "${roleName}" removed.` });
+      fetchUsers(page, search);
+    } catch (err) {
+      const msg = err.response?.data?.error ?? 'Failed to remove role.';
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+    } finally {
+      setRoleOpLoading(false);
+    }
+  }
+
+  // ── Suspend / Activate ────────────────────────────────────────────────────
+  async function handleStatusChange() {
+    if (!confirmUser) return;
+    const { user: u, action } = confirmUser;
+    setSubmitting(true);
+    try {
+      if (action === 'suspend') {
+        await usersApi.suspendUser(u.id);
+        onToast?.({ type: 'success', message: `✅ Account "${u.username}" suspended.` });
+      } else {
+        await usersApi.activateUser(u.id);
+        onToast?.({ type: 'success', message: `✅ Account "${u.username}" reactivated.` });
+      }
+      setConfirmUser(null);
+      fetchUsers(page, search);
+    } catch (err) {
+      const msg = err.response?.data?.error ?? 'Operation failed.';
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ── Guard ──────────────────────────────────────────────────────────────────
+  if (!canView) {
+    return <AccessDenied onGoHome={() => useAppStore.getState().setActivePage('overview')} />;
+  }
+
+  return (
+    <div className="p-6 space-y-5" style={{ background: IVORY, minHeight: '100%' }}>
+
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-bold flex items-center gap-2" style={{ color: CHOCOLATE }}>
+            <UserCog size={20} style={{ color: BRAND }} />
+            User Management
+          </h1>
+          <p className="text-xs mt-0.5" style={{ color: MUTED }}>
+            Create, manage, and assign roles to system users.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => fetchUsers(page, search)}
+            title="Refresh"
+            className="p-2 rounded-lg border transition"
+            style={{ borderColor: BORDER, color: MUTED, background: '#fff' }}
+          >
+            <RefreshCw size={15} />
+          </button>
+          {canManage && (
+            <Button
+              onClick={() => { setCreateOpen(true); setFormError(''); }}
+              className="flex items-center gap-2 text-white text-sm font-semibold px-4 py-2 rounded-lg"
+              style={{ background: BRAND }}
+            >
+              <Plus size={15} /> Add User
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Search bar */}
+      <div className="relative max-w-sm">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: MUTED }} />
+        <Input
+          className="pl-9 text-sm"
+          placeholder="Search users…"
+          value={searchInput}
+          onChange={e => setSearchInput(e.target.value)}
+        />
+      </div>
+
+      {/* Table */}
+      <div
+        className="bg-white rounded-xl shadow-sm overflow-hidden"
+        style={{ border: `1px solid ${BORDER}` }}
+      >
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Spinner size={28} style={{ color: BRAND }} />
+          </div>
+        ) : users.length === 0 ? (
+          <EmptyState
+            icon={UserCog}
+            title="No users found"
+            description={search ? 'Try a different search term.' : 'No users in the system yet.'}
+          />
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${BORDER}`, background: '#FDFBF9' }}>
+                    {['Username', 'Email', 'Roles', 'Status', 'Created', 'Actions'].map(h => (
+                      <th
+                        key={h}
+                        className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider"
+                        style={{ color: MUTED }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((u, i) => (
+                    <tr
+                      key={u.id}
+                      style={{
+                        borderBottom: i < users.length - 1 ? `1px solid ${BORDER}` : 'none',
+                        background: u.is_suspended ? 'rgba(220,38,38,0.02)' : 'transparent',
+                      }}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                            style={{ background: BRAND }}
+                          >
+                            {u.username.charAt(0).toUpperCase()}
+                          </div>
+                          <span className="font-medium" style={{ color: CHOCOLATE }}>
+                            {u.username}
+                            {u.id === currentUser?.id && (
+                              <span className="ml-1.5 text-[10px]" style={{ color: MUTED }}>(you)</span>
+                            )}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3" style={{ color: MUTED }}>
+                        {u.email || <span style={{ color: '#ccc' }}>—</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {u.roles?.length > 0
+                            ? u.roles.map(r => (
+                                <Pill key={r.id}>{r.name}</Pill>
+                              ))
+                            : <span style={{ color: '#ccc', fontSize: 11 }}>None</span>
+                          }
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <SuspendedPill suspended={u.is_suspended} />
+                      </td>
+                      <td className="px-4 py-3 text-xs" style={{ color: MUTED }}>
+                        {new Date(u.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          {canManage && (
+                            <>
+                              <button
+                                onClick={() => openEdit(u)}
+                                className="px-2.5 py-1.5 rounded text-xs font-medium border transition"
+                                style={{ borderColor: BORDER, color: BRAND, background: '#fff' }}
+                                title="Manage Roles"
+                              >
+                                Roles
+                              </button>
+                              {u.id !== currentUser?.id && (
+                                u.is_suspended ? (
+                                  <button
+                                    onClick={() => setConfirmUser({ user: u, action: 'activate' })}
+                                    className="px-2.5 py-1.5 rounded text-xs font-medium border transition"
+                                    style={{ borderColor: 'rgba(21,128,61,0.3)', color: '#15803d', background: '#fff' }}
+                                    title="Activate"
+                                  >
+                                    Activate
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => setConfirmUser({ user: u, action: 'suspend' })}
+                                    className="px-2.5 py-1.5 rounded text-xs font-medium border transition"
+                                    style={{ borderColor: 'rgba(220,38,38,0.3)', color: '#b91c1c', background: '#fff' }}
+                                    title="Suspend"
+                                  >
+                                    Suspend
+                                  </button>
+                                )
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <DataTablePagination
+              meta={meta}
+              onPageChange={(p) => setPage(p)}
+              loading={loading}
+            />
+          </>
+        )}
+      </div>
+
+      {/* ── Create User Modal ───────────────────────────────────────────────── */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent style={{ maxWidth: '460px' }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: CHOCOLATE }}>Create New User</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCreate} className="space-y-4 py-2">
+            <div>
+              <label className="block text-xs font-semibold mb-1" style={{ color: MUTED }}>
+                Username <span style={{ color: BRAND }}>*</span>
+              </label>
+              <Input
+                placeholder="e.g. jane.doe"
+                value={form.username}
+                onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1" style={{ color: MUTED }}>Email</label>
+              <Input
+                type="email"
+                placeholder="user@nibbank.et"
+                value={form.email}
+                onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1" style={{ color: MUTED }}>
+                Password <span style={{ color: BRAND }}>*</span>
+              </label>
+              <Input
+                type="password"
+                placeholder="Min 8 characters"
+                value={form.password}
+                onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1" style={{ color: MUTED }}>
+                Initial Role
+              </label>
+              <select
+                disabled={rolesLoading}
+                className="w-full border rounded-lg px-3 py-2 text-sm outline-none"
+                style={{ borderColor: BORDER, color: CHOCOLATE, background: '#fff' }}
+                value={form.roleName}
+                onChange={e => setForm(f => ({ ...f, roleName: e.target.value }))}
+              >
+                <option value="">— None —</option>
+                {allRoles.map(r => (
+                  <option key={r.id} value={r.name}>{r.name}</option>
+                ))}
+              </select>
+            </div>
+            {formError && (
+              <p className="text-xs font-medium" style={{ color: '#b91c1c' }}>{formError}</p>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={submitting}
+                className="text-white font-semibold"
+                style={{ background: BRAND }}
+              >
+                {submitting ? <Spinner size={16} /> : 'Create User'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit Roles Modal ────────────────────────────────────────────────── */}
+      <Dialog open={!!editUser} onOpenChange={() => setEditUser(null)}>
+        <DialogContent style={{ maxWidth: '480px' }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: CHOCOLATE }}>
+              Manage Roles — <span style={{ color: BRAND }}>{editUser?.username}</span>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {/* Current roles */}
+            <div>
+              <p className="text-xs font-semibold mb-2" style={{ color: MUTED }}>Assigned Roles</p>
+              {editRolesLoading ? (
+                <Spinner size={18} style={{ color: BRAND }} />
+              ) : editRoles.length === 0 ? (
+                <p className="text-xs" style={{ color: MUTED }}>No roles assigned.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {editRoles.map(r => (
+                    <span
+                      key={r.id}
+                      className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full text-xs font-semibold border"
+                      style={{
+                        background: 'rgba(138,77,31,0.09)',
+                        borderColor: 'rgba(138,77,31,0.22)',
+                        color: BRAND,
+                      }}
+                    >
+                      {r.name}
+                      {canManage && (
+                        <button
+                          onClick={() => handleRemoveRole(r.id, r.name)}
+                          disabled={roleOpLoading}
+                          className="rounded-full hover:bg-red-100 transition p-0.5"
+                          title="Remove role"
+                        >
+                          <X size={11} style={{ color: '#b91c1c' }} />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Assign new role */}
+            {canManage && editUser && editUser.id !== currentUser?.id && (
+              <div>
+                <p className="text-xs font-semibold mb-2" style={{ color: MUTED }}>Assign Role</p>
+                <div className="flex gap-2">
+                  <select
+                    disabled={rolesLoading}
+                    className="flex-1 border rounded-lg px-3 py-2 text-sm outline-none"
+                    style={{ borderColor: BORDER, color: CHOCOLATE, background: '#fff' }}
+                    value={roleToAdd}
+                    onChange={e => setRoleToAdd(e.target.value)}
+                  >
+                    <option value="">— Select role —</option>
+                    {allRoles
+                      .filter(r => !editRoles.some(er => (er.id && er.id === r.id) || er.name === r.name))
+                      .map(r => (
+                        <option key={r.id} value={r.name}>{r.name}</option>
+                      ))
+                    }
+                  </select>
+                  <Button
+                    onClick={handleAssignRole}
+                    disabled={!roleToAdd || roleOpLoading}
+                    className="text-white text-sm font-semibold px-4"
+                    style={{ background: BRAND }}
+                  >
+                    {roleOpLoading ? <Spinner size={15} /> : 'Assign'}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {editUser && editUser.id === currentUser?.id && (
+              <p className="text-xs p-3 rounded-lg border" style={{ color: MUTED, borderColor: BORDER, background: '#FDFBF9' }}>
+                You cannot modify your own role assignments.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditUser(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Confirm Suspend / Activate ──────────────────────────────────────── */}
+      <Dialog open={!!confirmUser} onOpenChange={() => setConfirmUser(null)}>
+        <DialogContent style={{ maxWidth: '400px' }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: CHOCOLATE }}>
+              {confirmUser?.action === 'suspend' ? 'Suspend Account' : 'Activate Account'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <p className="text-sm" style={{ color: MUTED }}>
+              {confirmUser?.action === 'suspend'
+                ? `Suspend "${confirmUser?.user?.username}"? They will immediately lose all system access.`
+                : `Reactivate "${confirmUser?.user?.username}"? They will regain access to their assigned permissions.`
+              }
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmUser(null)}>Cancel</Button>
+            <Button
+              onClick={handleStatusChange}
+              disabled={submitting}
+              className="text-white font-semibold"
+              style={{
+                background: confirmUser?.action === 'suspend' ? '#b91c1c' : '#15803d',
+              }}
+            >
+              {submitting
+                ? <Spinner size={15} />
+                : confirmUser?.action === 'suspend' ? 'Suspend' : 'Activate'
+              }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+

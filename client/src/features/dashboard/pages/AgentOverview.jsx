@@ -131,6 +131,11 @@ export default function AgentOverview({ user: propUser, onToast }) {
 
   // ── Fetch Agent Profile, Stats, and Recent Referrals ───────────────────────
   const fetchData = useCallback(async () => {
+    if (!user?.agent_id) {
+      setLoading(false);
+      return;
+    }
+
     try {
       // 1. Fetch Agent profile (/api/agents filters by authenticated JWT agent_id)
       const { data: agentRes } = await api.get('/agents');
@@ -222,6 +227,11 @@ export default function AgentOverview({ user: propUser, onToast }) {
   const formattedEarned    = `${(!isNaN(totalEarned) ? totalEarned : 0).toLocaleString('en-US')} ETB`;
   const formattedAvailable = `${(!isNaN(availableBalance) ? availableBalance : 0).toLocaleString('en-US')} ETB`;
   const formattedPaid      = `${(!isNaN(totalPaid) ? totalPaid : 0).toLocaleString('en-US')} ETB`;
+
+  // Strict RBAC Guard: Non-agents must never render the Agent Dashboard
+  if (!user?.agent_id) {
+    return null;
+  }
 
   return (
     <div className="p-6 space-y-6" style={{ background: IVORY }}>

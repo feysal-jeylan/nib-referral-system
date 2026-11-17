@@ -3,17 +3,23 @@
  * ───────────────────────────────────────────────
  * URL mapping only — no business logic.
  *
- * API-key middleware guards ALL POST routes on this router.
- * GET /logs is protected by JWT + ADMIN role (not API key).
+ * API-key middleware guards ALL POST webhook routes on this router.
+ * GET/POST/DELETE /logs are protected by JWT + permission guards.
  *
  * Mount point (index.js): app.use('/api/integration', integrationRouter)
+ *
+ * Authorization:
+ *   - POST /account-opened   → API key only (external Temenos webhook)
+ *   - GET /logs              → view_logs
+ *   - POST /logs/:id/retry   → manage_logs
+ *   - DELETE /logs/:id       → manage_logs
  */
 
 'use strict';
 
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const { authenticateToken, authorizeRole } = require('@/middleware/auth');
+const { authenticateToken, authorizePermission } = require('@/middleware/auth');
 const ctrl = require('./integration.controller');
 
 const router  = express.Router();
@@ -51,16 +57,13 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-const adminOnly = [authenticateToken, authorizeRole(['ADMIN'])];
-
 // ── Routes ────────────────────────────────────────────────────────────────────
-// Temenos webhook ingestion (rate-limited + protected by API key)
+// Temenos webhook ingestion (rate-limited + protected by API key — no JWT)
 router.post('/account-opened', webhookLimiter, requireApiKey, ctrl.accountOpened);
 
-// Admin audit log management (protected by JWT + ADMIN role)
-router.get('/logs',            ...adminOnly, ctrl.getLogs);
-router.post('/logs/:id/retry', ...adminOnly, ctrl.retryLog);
-router.delete('/logs/:id',     ...adminOnly, ctrl.deleteLog);
+// Admin audit log management (protected by JWT + permission)
+router.get('/logs',            authenticateToken, authorizePermission('view_logs'),   ctrl.getLogs);
+router.post('/logs/:id/retry', authenticateToken, authorizePermission('manage_logs'), ctrl.retryLog);
+router.delete('/logs/:id',     authenticateToken, authorizePermission('manage_logs'), ctrl.deleteLog);
 
 module.exports = router;
-

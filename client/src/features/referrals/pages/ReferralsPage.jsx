@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '@/services/api';
+import useAppStore from '@/store/useAppStore';
 
 import ReferralTable       from '@/features/referrals/ReferralTable';
 import TableFilters        from '@/components/common/TableFilters';
@@ -41,7 +42,12 @@ const STATUS_OPTIONS = [
   { value: 'REJECTED',   label: 'Rejected'     },
 ];
 
-export default function ReferralsPage({ user: _user, isAdmin, onToast }) {
+export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, onToast }) {
+  const storeUser = useAppStore(s => s.user);
+  const user = storeUser || propUser;
+  const isAgent = Boolean(user?.agent_id);
+  const canManage = propIsAdmin || (Array.isArray(user?.permissions) && user.permissions.includes('manage_referrals'));
+
   const [data,    setData]    = useState([]);
   const [meta,    setMeta]    = useState(null);
   const [loading, setLoading] = useState(true);
@@ -298,10 +304,10 @@ export default function ReferralsPage({ user: _user, isAdmin, onToast }) {
         >
           <div>
             <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>
-              {isAdmin ? 'All Referrals' : 'My Referrals'}
+              {!isAgent ? 'All Referrals' : 'My Referrals'}
             </h2>
             <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-              {isAdmin
+              {!isAgent
                 ? 'All referrals submitted through the Core Banking integration.'
                 : 'Customers you have referred through Temenos.'}
             </p>
@@ -333,7 +339,7 @@ export default function ReferralsPage({ user: _user, isAdmin, onToast }) {
           <EmptyState
             icon="📋"
             title="No referrals found"
-            sub={status ? 'Try clearing the status filter.' : (isAdmin ? 'Referrals appear here once Temenos sends a webhook.' : 'No referrals registered under your code yet.')}
+            sub={status ? 'Try clearing the status filter.' : (!isAgent ? 'Referrals appear here once Temenos sends a webhook.' : 'No referrals registered under your code yet.')}
           />
         ) : (
           <>
@@ -343,7 +349,7 @@ export default function ReferralsPage({ user: _user, isAdmin, onToast }) {
               onStatusChange={handleStatusChange_Referral}
               onViewDetails={handleViewDetails}
               onDeleteRequest={handleDeleteRequest}
-              isAdmin={isAdmin}
+              isAdmin={canManage}
             />
             <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={loading} />
           </>
