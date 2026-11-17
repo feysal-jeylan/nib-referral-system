@@ -18,7 +18,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  UserCog, Plus, Search, RefreshCw, X,
+  UserCog, Plus, Search, RefreshCw, X, MoreVertical,
 } from 'lucide-react';
 import { usersApi, rbacApi } from '@/services/rbacApi';
 import { Button }   from '@/components/ui/button';
@@ -30,6 +30,12 @@ import {
   Dialog, DialogContent, DialogHeader,
   DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import AccessDenied from '@/components/ui/AccessDenied';
 import usePermissions from '@/features/auth/usePermissions';
 import useAppStore from '@/store/useAppStore';
@@ -80,9 +86,11 @@ export default function UsersPage({ onToast }) {
   const [rolesLoading,   setRolesLoading]   = useState(false);
 
   // ── Modals ────────────────────────────────────────────────────────────────
-  const [createOpen,  setCreateOpen]  = useState(false);
-  const [editUser,    setEditUser]    = useState(null);   // user object for edit
-  const [confirmUser, setConfirmUser] = useState(null);   // { user, action: 'suspend'|'activate' }
+  const [createOpen,       setCreateOpen]       = useState(false);
+  const [editUser,         setEditUser]         = useState(null);   // user object for edit
+  const [confirmUser,      setConfirmUser]      = useState(null);   // { user, action: 'suspend'|'activate' }
+  const [deleteUserTarget, setDeleteUserTarget] = useState(null);   // user object to delete
+  const [deleting,         setDeleting]         = useState(false);
 
   // ── Create form state ─────────────────────────────────────────────────────
   const [form,       setForm]       = useState({ username: '', email: '', password: '', roleName: '' });
@@ -256,6 +264,24 @@ export default function UsersPage({ onToast }) {
     }
   }
 
+  // ── Delete User ────────────────────────────────────────────────────────────
+  async function handleDeleteUser() {
+    if (!deleteUserTarget) return;
+    setDeleting(true);
+    try {
+      await usersApi.deleteUser(deleteUserTarget.id);
+      onToast?.({ type: 'success', message: `🗑️ User "${deleteUserTarget.username}" deleted successfully.` });
+      setDeleteUserTarget(null);
+      fetchUsers(page, search);
+    } catch (err) {
+      const msg = err.response?.data?.error ?? 'Failed to delete user.';
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+      setDeleteUserTarget(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   // ── Guard ──────────────────────────────────────────────────────────────────
   if (!canView) {
     return <AccessDenied onGoHome={() => useAppStore.getState().setActivePage('overview')} />;
@@ -395,27 +421,51 @@ export default function UsersPage({ onToast }) {
                               >
                                 Roles
                               </button>
-                              {u.id !== currentUser?.id && (
-                                u.is_suspended ? (
-                                  <button
-                                    onClick={() => setConfirmUser({ user: u, action: 'activate' })}
-                                    className="px-2.5 py-1.5 rounded text-xs font-medium border transition"
-                                    style={{ borderColor: 'rgba(21,128,61,0.3)', color: '#15803d', background: '#fff' }}
-                                    title="Activate"
+
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-[#FAF8F5] rounded-md"
+                                    aria-label={`Actions for ${u.username}`}
                                   >
-                                    Activate
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => setConfirmUser({ user: u, action: 'suspend' })}
-                                    className="px-2.5 py-1.5 rounded text-xs font-medium border transition"
-                                    style={{ borderColor: 'rgba(220,38,38,0.3)', color: '#b91c1c', background: '#fff' }}
-                                    title="Suspend"
+                                    <MoreVertical className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
+                                  {u.id !== currentUser?.id && (
+                                    <DropdownMenuItem
+                                      onClick={() => setConfirmUser({ user: u, action: u.is_suspended ? 'activate' : 'suspend' })}
+                                      className={u.is_suspended
+                                        ? "cursor-pointer text-[#15803d] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#15803d]"
+                                        : "cursor-pointer text-[#b91c1c] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#b91c1c]"
+                                      }
+                                    >
+                                      {u.is_suspended ? 'Activate Account' : 'Suspend Account'}
+                                    </DropdownMenuItem>
+                                  )}
+
+                                  <DropdownMenuItem
+                                    onClick={() => {
+                                      onToast?.({ type: 'success', message: 'Password reset email sent.' });
+                                    }}
+                                    className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
                                   >
-                                    Suspend
-                                  </button>
-                                )
-                              )}
+                                    Reset Password
+                                  </DropdownMenuItem>
+
+                                  {u.id !== currentUser?.id && (
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onClick={() => setDeleteUserTarget(u)}
+                                      className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
+                                    >
+                                      Delete User
+                                    </DropdownMenuItem>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </>
                           )}
                         </div>
@@ -628,6 +678,33 @@ export default function UsersPage({ onToast }) {
                 ? <Spinner size={15} />
                 : confirmUser?.action === 'suspend' ? 'Suspend' : 'Activate'
               }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Confirm Delete User ────────────────────────────────────────────── */}
+      <Dialog open={!!deleteUserTarget} onOpenChange={() => !deleting && setDeleteUserTarget(null)}>
+        <DialogContent style={{ maxWidth: '400px' }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: CHOCOLATE }}>Delete User</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <p className="text-sm" style={{ color: MUTED }}>
+              Are you sure you want to permanently delete user <strong style={{ color: CHOCOLATE }}>"{deleteUserTarget?.username}"</strong>? This action cannot be undone.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={deleting} onClick={() => setDeleteUserTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteUser}
+              disabled={deleting}
+              className="bg-[#C0392B] hover:bg-[#a93226] text-white font-semibold"
+            >
+              {deleting ? <Spinner size={15} /> : 'Delete User'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -16,6 +16,7 @@ import { useState } from 'react';
 import { CheckCircle2, Mail, KeyRound } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import api from '@/services/api';
+import Toast from '@/components/ui/Toast';
 import { Input }  from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import {
@@ -608,6 +609,7 @@ export default function Login() {
 
   const [form, setForm]                 = useState({ username: '', password: '' });
   const [error, setError]               = useState('');
+  const [toast, setToast]               = useState(null);
   const [submitting, setSubmitting]     = useState(false);
   const [showPw, setShowPw]             = useState(false);
   const [view, setView]                 = useState('login');   // 'login' | 'apply'
@@ -632,7 +634,13 @@ export default function Login() {
       });
       login(data.user);
     } catch (err) {
-      setError(err.response?.data?.error ?? 'Invalid username or password. Please try again.');
+      if (err.response?.status === 429) {
+        const msg = 'Too many login attempts. Please wait 15 minutes.';
+        setError(msg);
+        setToast({ type: 'error', message: msg });
+      } else {
+        setError(err.response?.data?.error ?? 'Invalid username or password. Please try again.');
+      }
     } finally { setSubmitting(false); }
   }
 
@@ -818,6 +826,7 @@ export default function Login() {
           <ForgotPasswordDialog open={forgotOpen} onOpenChange={setForgotOpen} />
         </div>
       </div>
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }

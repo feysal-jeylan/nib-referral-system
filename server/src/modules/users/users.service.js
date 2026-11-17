@@ -265,6 +265,47 @@ async function activateUser(userId) {
   return getUserById(userId);
 }
 
+/**
+ * Delete a user account, ensuring they are not the last active administrator.
+ */
+async function deleteUser(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      userRoles: {
+        include: { role: true },
+      },
+    },
+  });
+  if (!user) return null;
+
+  // Check if user is an ADMIN
+  const isAdmin = user.role === 'ADMIN' || user.userRoles.some(ur => ur.role.name === 'ADMIN');
+  if (isAdmin) {
+    const adminCount = await prisma.user.count({
+      where: {
+        OR: [
+          { role: 'ADMIN' },
+          { userRoles: { some: { role: { name: 'ADMIN' } } } },
+        ],
+      },
+    });
+    if (adminCount <= 1) {
+      const err = new Error('Cannot delete the last remaining administrator.');
+      err.code = 'LAST_ADMIN';
+      throw err;
+    }
+  }
+
+  // Remove linked userRoles
+  await prisma.userRole.deleteMany({ where: { userId } });
+
+  // Delete user
+  await prisma.user.delete({ where: { id: userId } });
+
+  return true;
+}
+
 module.exports = {
   listUsers,
   getUserById,
@@ -272,4 +313,5 @@ module.exports = {
   updateUser,
   suspendUser,
   activateUser,
+  deleteUser,
 };

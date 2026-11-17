@@ -63,5 +63,8 @@ export const usersApi = {
 
   /** PATCH /api/users/:id/activate — requires manage_users */
   activateUser: (userId) => api.patch(`/users/${userId}/activate`),
+
+  /** DELETE /api/users/:id — requires manage_users */
+  deleteUser: (userId) => api.delete(`/users/${userId}`),
 };
 

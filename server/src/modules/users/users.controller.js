@@ -115,5 +115,32 @@ async function activateUser(req, res, next) {
   }
 }
 
-module.exports = { listUsers, createUser, updateUser, suspendUser, activateUser };
+// ── DELETE /api/users/:id ─────────────────────────────────────────────────────
+async function deleteUser(req, res, next) {
+  const userId = parseInt(req.params.id, 10);
+  if (isNaN(userId)) {
+    return res.status(400).json({ error: 'User ID must be a valid integer.', code: 'INVALID_ID' });
+  }
+
+  // Prevent self-deletion
+  if (userId === req.user.id) {
+    return res.status(403).json({
+      error: 'You cannot delete your own account.',
+      code:  'SELF_MODIFICATION_FORBIDDEN',
+    });
+  }
+
+  try {
+    const deleted = await usersSvc.deleteUser(userId);
+    if (!deleted) return res.status(404).json({ error: 'User not found.', code: 'USER_NOT_FOUND' });
+    return res.status(200).json({ message: 'User deleted successfully.' });
+  } catch (err) {
+    if (err.code === 'LAST_ADMIN') {
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
+    next(err);
+  }
+}
+
+module.exports = { listUsers, createUser, updateUser, suspendUser, activateUser, deleteUser };
 

@@ -53,5 +53,12 @@ router.patch(
   ctrl.activateUser
 );
 
+router.delete(
+  '/:id',
+  authenticateToken,
+  authorizePermission('manage_users'),
+  ctrl.deleteUser
+);
+
 module.exports = router;
 
