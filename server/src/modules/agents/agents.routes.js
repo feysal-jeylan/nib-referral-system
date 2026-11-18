@@ -22,13 +22,26 @@
 'use strict';
 
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { authenticateToken, authorizePermission } = require('@/middleware/auth');
 const ctrl = require('./agents.controller');
 
 const router = express.Router();
 
-// PUBLIC — must be before /:id routes
-router.post('/apply', ctrl.applyAsAgent);
+// ── Rate Limiter: Max 5 requests per 15 minutes for public agent applications (SEC-VAPT-02) ────
+const applyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many agent registration applications submitted from this IP, please try again after 15 minutes.',
+    code: 'RATE_LIMIT_EXCEEDED',
+  },
+});
+
+// PUBLIC — must be before /:id routes (rate-limited against automated spam/DoS)
+router.post('/apply', applyLimiter, ctrl.applyAsAgent);
 
 // Authenticated: view_agents required; service layer handles ownership scoping
 router.get('/',  authenticateToken, authorizePermission('view_agents'), ctrl.listAgents);

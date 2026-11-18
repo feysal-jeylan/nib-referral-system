@@ -17,13 +17,19 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { authenticateToken, authorizePermission } = require('@/middleware/auth');
 const ctrl = require('./integration.controller');
 
 const router  = express.Router();
+
+// ── Boot-time API key verification (SEC-VAPT-01) ──────────────────────────────
 const API_KEY = process.env.MOCK_TEMENOS_API_KEY;
+if (!API_KEY) {
+  throw new Error('[FATAL] MOCK_TEMENOS_API_KEY environment variable is not defined.');
+}
 
 // ── Rate Limiter: Max 1000 requests per 1 minute for webhooks (SEC-P0-02) ────
 const webhookLimiter = rateLimit({
@@ -38,22 +44,45 @@ const webhookLimiter = rateLimit({
 });
 
 // ── Webhook API-key guard (for external Temenos webhook ingestion) ───────────
+// SEC-VAPT-01: Timing-safe comparison & strict rejection of missing/undefined keys.
 // SEC-P0-01: Removed database write (svc.logApiKeyFailure) to prevent
 // pre-authentication idempotency cache poisoning on transaction_id.
 function requireApiKey(req, res, next) {
   const providedKey = req.headers['x-api-key'];
-  if (providedKey !== API_KEY) {
+
+  if (!providedKey || typeof providedKey !== 'string') {
     const ip  = req.ip || req.connection?.remoteAddress;
     const tid = typeof req.body?.transaction_id === 'string' && req.body.transaction_id.trim()
       ? req.body.transaction_id.trim() : null;
 
     console.warn(
-      `[integration] UNAUTHORIZED — invalid or missing x-api-key. ` +
+      `[integration] UNAUTHORIZED — missing or invalid x-api-key header. ` +
       `IP: ${ip}, transaction_id: ${tid ?? 'N/A'}`
     );
 
     return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
   }
+
+  const providedBuf = Buffer.from(providedKey);
+  const expectedBuf = Buffer.from(API_KEY);
+
+  const isValid =
+    providedBuf.length === expectedBuf.length &&
+    crypto.timingSafeEqual(providedBuf, expectedBuf);
+
+  if (!isValid) {
+    const ip  = req.ip || req.connection?.remoteAddress;
+    const tid = typeof req.body?.transaction_id === 'string' && req.body.transaction_id.trim()
+      ? req.body.transaction_id.trim() : null;
+
+    console.warn(
+      `[integration] UNAUTHORIZED — invalid x-api-key. ` +
+      `IP: ${ip}, transaction_id: ${tid ?? 'N/A'}`
+    );
+
+    return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
+  }
+
   next();
 }
 

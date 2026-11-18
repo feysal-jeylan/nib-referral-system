@@ -60,9 +60,9 @@ app.set('trust proxy', 1);
 app.use(helmet());
 
 // credentials:true + explicit origin required for HttpOnly cookie cross-port flow
-// (Vite :5173 → API :3000)
+// (Vite :5173 → API :3000). Uses CLIENT_URL env var with fallback (SEC-VAPT-04).
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: process.env.CLIENT_URL || 'http://localhost:5173',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type'],
