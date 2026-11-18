@@ -73,15 +73,26 @@ async function authenticateToken(req, res, next) {
     // ── Resolve dynamic relational roles & permissions from DB ───────────────
     const { roles, permissions } = await resolveUserRolesAndPermissions(user.id);
 
+    // ── Auto-expand manage_* → view_* (manage implies view) ─────────────────
+    // A user who can manage an entity can also view it. This eliminates the need
+    // to explicitly assign both view_X and manage_X to every managing role.
+    const expandedPermissions = new Set(permissions);
+    for (const perm of permissions) {
+      if (perm.startsWith('manage_')) {
+        const viewPerm = perm.replace('manage_', 'view_');
+        expandedPermissions.add(viewPerm);
+      }
+    }
+
     // Attach to request
     req.user = {
       ...decoded,
       agent_id: user.agent_id,
       roles,
-      permissions,
+      permissions: Array.from(expandedPermissions),
     };
     req.userRoles = roles;
-    req.userPermissions = new Set(permissions);
+    req.userPermissions = expandedPermissions;
 
     next();
   } catch (err) {

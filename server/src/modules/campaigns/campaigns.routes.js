@@ -21,7 +21,7 @@
 'use strict';
 
 const express = require('express');
-const { authenticateToken, authorizePermission } = require('@/middleware/auth');
+const { authenticateToken, authorizePermission, authorizeAnyPermission } = require('@/middleware/auth');
 const ctrl = require('./campaigns.controller');
 
 const router = express.Router();
@@ -29,10 +29,10 @@ const router = express.Router();
 // All campaign routes require authentication
 router.use(authenticateToken);
 
-// Read-only — available to any user with view_campaigns (Agents included)
-router.get('/roots',         authorizePermission('view_campaigns'), ctrl.listRootCampaigns);  // before /:id
-router.get('/',              authorizePermission('view_campaigns'), ctrl.listCampaigns);
-router.get('/:id/stats',     authorizePermission('view_campaigns'), ctrl.getCampaignStats);
+// Read-only — available to any user with view_campaigns OR manage_campaigns (Agents included)
+router.get('/roots',         authorizeAnyPermission(['view_campaigns', 'manage_campaigns']), ctrl.listRootCampaigns);  // before /:id
+router.get('/',              authorizeAnyPermission(['view_campaigns', 'manage_campaigns']), ctrl.listCampaigns);
+router.get('/:id/stats',     authorizeAnyPermission(['view_campaigns', 'manage_campaigns']), ctrl.getCampaignStats);
 
 // Mutation — manage_campaigns only
 router.post('/',             authorizePermission('manage_campaigns'), ctrl.createCampaign);

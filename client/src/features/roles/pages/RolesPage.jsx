@@ -73,9 +73,9 @@ function SystemBadge({ isSystem }) {
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function RolesPage({ onToast }) {
-  const { hasPermission } = usePermissions();
+  const { hasPermission, hasAnyPermission } = usePermissions();
 
-  const canView   = hasPermission('view_roles');
+  const canView   = hasAnyPermission(['view_roles', 'manage_roles']);
   const canManage = hasPermission('manage_roles');
 
   // ── Data ───────────────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@
 'use strict';
 
 const express = require('express');
-const { authenticateToken, authorizePermission } = require('@/middleware/auth');
+const { authenticateToken, authorizePermission, authorizeAnyPermission } = require('@/middleware/auth');
 const ctrl = require('./rbac.controller');
 
 const router = express.Router();
@@ -20,12 +20,12 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // ── Roles ─────────────────────────────────────────────────────────────────────
-router.get('/roles',                   authorizePermission('view_roles'),   ctrl.listRoles);
+router.get('/roles',                   authorizeAnyPermission(['view_roles', 'manage_roles']),   ctrl.listRoles);
 router.post('/roles',                  authorizePermission('manage_roles'),  ctrl.createRole);
 router.delete('/roles/:id',            authorizePermission('manage_roles'),  ctrl.deleteRole);
 
 // ── Permissions ───────────────────────────────────────────────────────────────
-router.get('/permissions',             authorizePermission('view_roles'),   ctrl.listPermissions);
+router.get('/permissions',             authorizeAnyPermission(['view_roles', 'manage_roles']),   ctrl.listPermissions);
 
 // ── Role-Permission assignments ───────────────────────────────────────────────
 router.post('/roles/:id/permissions',         authorizePermission('manage_roles'), ctrl.addPermissionToRole);
@@ -34,7 +34,7 @@ router.delete('/roles/:id/permissions/:permId', authorizePermission('manage_role
 // ── User-Role assignments ─────────────────────────────────────────────────────
 router.post('/users/:userId/roles',          authorizePermission('manage_roles'), ctrl.assignRoleToUser);
 router.delete('/users/:userId/roles/:roleId', authorizePermission('manage_roles'), ctrl.removeRoleFromUser);
-router.get('/users/:userId/roles',           authorizePermission('view_roles'),   ctrl.getUserRoles);
+router.get('/users/:userId/roles',           authorizeAnyPermission(['view_roles', 'manage_roles']),   ctrl.getUserRoles);
 
 module.exports = router;
 

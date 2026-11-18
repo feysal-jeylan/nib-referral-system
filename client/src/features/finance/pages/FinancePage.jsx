@@ -42,9 +42,9 @@ const IVORY     = '#FAF8F5';
 const BORDER    = 'rgba(138,77,31,0.12)';
 
 export default function FinancePage({ onToast }) {
-  const { hasPermission, isAdmin } = usePermissions();
+  const { hasPermission, hasAnyPermission, isAdmin } = usePermissions();
 
-  const canView   = hasPermission('view_finance')   || isAdmin;
+  const canView   = hasAnyPermission(['view_finance', 'manage_finance']) || isAdmin;
   const canManage = hasPermission('manage_finance') || isAdmin;
 
   const [financeData,  setFinanceData]  = useState(null);

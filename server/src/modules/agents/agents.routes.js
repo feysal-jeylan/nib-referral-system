@@ -23,7 +23,7 @@
 
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const { authenticateToken, authorizePermission } = require('@/middleware/auth');
+const { authenticateToken, authorizePermission, authorizeAnyPermission } = require('@/middleware/auth');
 const ctrl = require('./agents.controller');
 
 const router = express.Router();
@@ -43,8 +43,8 @@ const applyLimiter = rateLimit({
 // PUBLIC — must be before /:id routes (rate-limited against automated spam/DoS)
 router.post('/apply', applyLimiter, ctrl.applyAsAgent);
 
-// Authenticated: view_agents required; service layer handles ownership scoping
-router.get('/',  authenticateToken, authorizePermission('view_agents'), ctrl.listAgents);
+// Authenticated: view_agents OR manage_agents; service layer handles ownership scoping
+router.get('/',  authenticateToken, authorizeAnyPermission(['view_agents', 'manage_agents']), ctrl.listAgents);
 
 // Management: manage_agents required
 router.post('/',             authenticateToken, authorizePermission('manage_agents'), ctrl.createAgent);
@@ -55,7 +55,7 @@ router.patch('/:id/activate',authenticateToken, authorizePermission('manage_agen
 router.put('/:id',           authenticateToken, authorizePermission('manage_agents'), ctrl.updateAgent);
 router.delete('/:id',        authenticateToken, authorizePermission('manage_agents'), ctrl.deleteAgent);
 
-// Stats: view_agents; controller enforces ownership for Agents
-router.get('/:id/stats', authenticateToken, authorizePermission('view_agents'), ctrl.getAgentStats);
+// Stats: view_agents OR manage_agents; controller enforces ownership for Agents
+router.get('/:id/stats', authenticateToken, authorizeAnyPermission(['view_agents', 'manage_agents']), ctrl.getAgentStats);
 
 module.exports = router;

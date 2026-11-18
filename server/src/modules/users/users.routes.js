@@ -13,7 +13,7 @@
 'use strict';
 
 const { Router } = require('express');
-const { authenticateToken, authorizePermission } = require('@/middleware/auth');
+const { authenticateToken, authorizePermission, authorizeAnyPermission } = require('@/middleware/auth');
 const ctrl = require('./users.controller');
 
 const router = Router();
@@ -21,7 +21,7 @@ const router = Router();
 router.get(
   '/',
   authenticateToken,
-  authorizePermission('view_users'),
+  authorizeAnyPermission(['view_users', 'manage_users']),
   ctrl.listUsers
 );
 

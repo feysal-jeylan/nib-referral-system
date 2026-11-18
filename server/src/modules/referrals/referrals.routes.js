@@ -13,7 +13,7 @@
 'use strict';
 
 const express = require('express');
-const { authenticateToken, authorizePermission } = require('@/middleware/auth');
+const { authenticateToken, authorizePermission, authorizeAnyPermission } = require('@/middleware/auth');
 const ctrl = require('./referrals.controller');
 
 const router = express.Router();
@@ -21,8 +21,8 @@ const router = express.Router();
 // All referral routes require authentication
 router.use(authenticateToken);
 
-// List: view_referrals — Agent ownership enforced inside referrals.service.js
-router.get('/',             authorizePermission('view_referrals'), ctrl.listReferrals);
+// List: view_referrals OR manage_referrals — Agent ownership enforced inside referrals.service.js
+router.get('/',             authorizeAnyPermission(['view_referrals', 'manage_referrals']), ctrl.listReferrals);
 
 // Management: manage_referrals only
 router.patch('/:id/status', authorizePermission('manage_referrals'), ctrl.updateStatus);

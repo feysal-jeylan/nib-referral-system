@@ -57,18 +57,19 @@ const IVORY      = '#FAF8F5';
 const BORDER_CLR = 'rgba(138,77,31,0.12)';
 
 // ── Unified Nav Config ────────────────────────────────────────────────────────
-// permission: null → always visible (e.g. Settings)
+// permissions: null  → always visible (e.g. Settings)
+// permissions: []    → any permission in the array grants access (manage_* implies view_*)
 // agentLabel: alternate label for agent-role users
 const NAV_CONFIG = [
-  { key: 'overview',  label: 'Overview',         agentLabel: 'My Dashboard', Icon: LayoutDashboard, permission: 'view_dashboard' },
-  { key: 'agents',    label: 'Agents',            Icon: Users,                permission: 'view_agents'    },
-  { key: 'campaigns', label: 'Campaigns',         Icon: Megaphone,            permission: 'view_campaigns' },
-  { key: 'referrals', label: 'Referrals',         agentLabel: 'My Referrals', Icon: FileText,        permission: 'view_referrals' },
-  { key: 'finance',   label: 'Finance',           Icon: Wallet,               permission: 'view_finance'   },
-  { key: 'logs',      label: 'Integration Logs',  Icon: Terminal,             permission: 'view_logs'      },
-  { key: 'users',     label: 'User Management',   Icon: UserCog,              permission: 'view_users'     },
-  { key: 'roles',     label: 'Role Management',   Icon: Shield,               permission: 'view_roles'     },
-  { key: 'settings',  label: 'Settings',          Icon: Settings,             permission: null             },
+  { key: 'overview',  label: 'Overview',         agentLabel: 'My Dashboard', Icon: LayoutDashboard, permissions: ['view_dashboard'] },
+  { key: 'agents',    label: 'Agents',            Icon: Users,                permissions: ['view_agents',    'manage_agents']    },
+  { key: 'campaigns', label: 'Campaigns',         Icon: Megaphone,            permissions: ['view_campaigns', 'manage_campaigns'] },
+  { key: 'referrals', label: 'Referrals',         agentLabel: 'My Referrals', Icon: FileText,        permissions: ['view_referrals', 'manage_referrals'] },
+  { key: 'finance',   label: 'Finance',           Icon: Wallet,               permissions: ['view_finance',   'manage_finance']   },
+  { key: 'logs',      label: 'Integration Logs',  Icon: Terminal,             permissions: ['view_logs',      'manage_logs']      },
+  { key: 'users',     label: 'User Management',   Icon: UserCog,              permissions: ['view_users',     'manage_users']     },
+  { key: 'roles',     label: 'Role Management',   Icon: Shield,               permissions: ['view_roles',     'manage_roles']     },
+  { key: 'settings',  label: 'Settings',          Icon: Settings,             permissions: null                                   },
 ];
 
 // ── NavItem Component ─────────────────────────────────────────────────────────
@@ -121,7 +122,7 @@ export default function Dashboard({ user: propUser, logout }) {
   const toggleSidebar = useAppStore(s => s.toggleSidebar);
   const clearUser     = useAppStore(s => s.clearUser);
 
-  const { hasPermission, isAdmin } = usePermissions();
+  const { hasPermission, hasAnyPermission, isAdmin } = usePermissions();
 
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
@@ -141,8 +142,8 @@ export default function Dashboard({ user: propUser, logout }) {
   const isAgent = Boolean(user?.agent_id);
 
   const visibleNav = NAV_CONFIG.filter(item => {
-    if (!item.permission) return true;                    // always show (Settings)
-    return hasPermission(item.permission);
+    if (!item.permissions) return true;             // always show (Settings)
+    return hasAnyPermission(item.permissions);
   }).map(item => ({
     ...item,
     // Apply agentLabel ONLY when user is an Agent (has agent_id)
@@ -171,8 +172,8 @@ export default function Dashboard({ user: propUser, logout }) {
 
     // Permission guard: if user navigates here but lost access, show AccessDenied
     const navItem    = NAV_CONFIG.find(n => n.key === page);
-    const needsPerm  = navItem?.permission;
-    if (needsPerm && !hasPermission(needsPerm)) {
+    const needsPerms = navItem?.permissions;
+    if (needsPerms && !hasAnyPermission(needsPerms)) {
       return <AccessDenied onGoHome={() => setActivePage('overview')} />;
     }
 

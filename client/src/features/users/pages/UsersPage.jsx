@@ -68,9 +68,9 @@ function SuspendedPill({ suspended }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function UsersPage({ onToast }) {
   const currentUser = useAppStore(s => s.user);
-  const { hasPermission } = usePermissions();
+  const { hasPermission, hasAnyPermission } = usePermissions();
 
-  const canView   = hasPermission('view_users');
+  const canView   = hasAnyPermission(['view_users', 'manage_users']);
   const canManage = hasPermission('manage_users');
 
   // ── Table state ───────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@
 'use strict';
 
 const express = require('express');
-const { authenticateToken, authorizePermission } = require('@/middleware/auth');
+const { authenticateToken, authorizePermission, authorizeAnyPermission } = require('@/middleware/auth');
 const ctrl = require('./finance.controller');
 
 const router = express.Router();
@@ -21,9 +21,9 @@ const router = express.Router();
 // All finance routes require authentication
 router.use(authenticateToken);
 
-router.get('/finance',                authorizePermission('view_finance'),   ctrl.getFinance);
+router.get('/finance',                authorizeAnyPermission(['view_finance', 'manage_finance']), ctrl.getFinance);
 router.patch('/finance/pay/:agentId', authorizePermission('manage_finance'), ctrl.payAgent);
-router.get('/config',                 authorizePermission('view_settings'),  ctrl.getConfig);
+router.get('/config',                 authorizeAnyPermission(['view_settings', 'manage_system']), ctrl.getConfig);
 router.put('/config',                 authorizePermission('manage_system'),  ctrl.updateConfig);
 
 module.exports = router;
