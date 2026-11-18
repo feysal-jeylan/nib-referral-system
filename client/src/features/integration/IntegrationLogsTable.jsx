@@ -34,7 +34,7 @@ import {
 export default function IntegrationLogsTable({
   logs,
   loading,
-  isAdmin = true,
+  canManage = false,
   onViewPayload,
   onRetry,
   onDeleteRequest,
@@ -69,7 +69,7 @@ export default function IntegrationLogsTable({
       <table className="min-w-[850px] w-full text-sm border-collapse" aria-label="Temenos integration log">
         <thead>
           <tr className="bg-panel border-b border-border">
-            {isAdmin && (
+            {canManage && (
               <th scope="col" className="w-10 px-4 py-3 text-center">
                 <Checkbox
                   checked={allOnPageSelected ? true : someOnPageSelected ? 'indeterminate' : false}
@@ -84,9 +84,7 @@ export default function IntegrationLogsTable({
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Status</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Reason / Error</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Date</th>
-            {isAdmin && (
-              <th scope="col" className="px-6 py-3 text-right text-[11px] font-semibold text-text-3 uppercase tracking-widest">Actions</th>
-            )}
+            <th scope="col" className="px-6 py-3 text-right text-[11px] font-semibold text-text-3 uppercase tracking-widest">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -100,7 +98,7 @@ export default function IntegrationLogsTable({
                   isSelected ? 'bg-amber-50/50' : ''
                 }`}
               >
-                {isAdmin && (
+                {canManage && (
                   <td className="w-10 px-4 py-4 text-center">
                     <Checkbox
                       checked={isSelected}
@@ -129,44 +127,47 @@ export default function IntegrationLogsTable({
                 <td className="px-6 py-4 text-text-2 text-xs tabular-nums whitespace-nowrap">
                   {new Date(log.created_at).toLocaleString()}
                 </td>
-                {isAdmin && (
-                  <td className="px-6 py-4 text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={isRetrying}
-                          className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-panel rounded-md"
-                          aria-label={`Actions for log #${log.id}`}
-                        >
-                          {isRetrying ? (
-                            <span className="w-4 h-4 border-2 border-brand/30 border-t-brand rounded-full animate-spin" />
-                          ) : (
-                            <MoreVertical className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
-                        <DropdownMenuItem
-                          onClick={() => onViewPayload?.(log)}
-                          className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723] flex items-center gap-2"
-                        >
-                          <Eye size={14} className="text-[#8A4D1F]" />
-                          <span>View Payload</span>
-                        </DropdownMenuItem>
-
-                        {log.status === 'FAILED' && (
-                          <DropdownMenuItem
-                            onClick={() => onRetry?.(log)}
-                            disabled={isRetrying}
-                            className="cursor-pointer text-[#8A4D1F] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#8A4D1F] flex items-center gap-2 font-medium"
-                          >
-                            <RotateCcw size={14} className="text-[#8A4D1F]" />
-                            <span>Retry Webhook</span>
-                          </DropdownMenuItem>
+                <td className="px-6 py-4 text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={isRetrying}
+                        className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-panel rounded-md"
+                        aria-label={`Actions for log #${log.id}`}
+                      >
+                        {isRetrying ? (
+                          <span className="w-4 h-4 border-2 border-brand/30 border-t-brand rounded-full animate-spin" />
+                        ) : (
+                          <MoreVertical className="h-4 w-4" />
                         )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
+                      {/* View Payload: visible to ALL (view_logs users too) */}
+                      <DropdownMenuItem
+                        onClick={() => onViewPayload?.(log)}
+                        className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723] flex items-center gap-2"
+                      >
+                        <Eye size={14} className="text-[#8A4D1F]" />
+                        <span>View Payload</span>
+                      </DropdownMenuItem>
 
+                      {/* Retry: manage_logs only */}
+                      {canManage && log.status === 'FAILED' && (
+                        <DropdownMenuItem
+                          onClick={() => onRetry?.(log)}
+                          disabled={isRetrying}
+                          className="cursor-pointer text-[#8A4D1F] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#8A4D1F] flex items-center gap-2 font-medium"
+                        >
+                          <RotateCcw size={14} className="text-[#8A4D1F]" />
+                          <span>Retry Webhook</span>
+                        </DropdownMenuItem>
+                      )}
+
+                      {/* Delete: manage_logs only */}
+                      {canManage && (
                         <DropdownMenuItem
                           variant="destructive"
                           onClick={() => onDeleteRequest?.(log)}
@@ -175,10 +176,10 @@ export default function IntegrationLogsTable({
                           <Trash2 size={14} className="text-[#C0392B]" />
                           <span>Delete Log</span>
                         </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </td>
-                )}
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </td>
               </tr>
             );
           })}

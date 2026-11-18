@@ -38,7 +38,7 @@ export default function ReferralTable({
   onStatusChange,
   onViewDetails,
   onDeleteRequest,
-  isAdmin,
+  canManage = false,
 }) {
   const [updating, setUpdating] = useState(new Set());
 
@@ -62,7 +62,7 @@ export default function ReferralTable({
         icon="📋"
         title="No referrals yet"
         sub={
-          isAdmin
+          canManage
             ? 'Referrals appear here once Temenos sends a webhook event.'
             : 'No referrals have been registered under your code yet.'
         }
@@ -82,9 +82,7 @@ export default function ReferralTable({
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Code</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Campaign Code</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Status</th>
-            {isAdmin && (
-              <th scope="col" className="px-6 py-3 text-right text-[11px] font-semibold text-text-3 uppercase tracking-widest">Actions</th>
-            )}
+            <th scope="col" className="px-6 py-3 text-right text-[11px] font-semibold text-text-3 uppercase tracking-widest">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -115,52 +113,54 @@ export default function ReferralTable({
                   )}
                 </td>
                 <td className="px-6 py-4"><StatusPill status={r.status} /></td>
-                {isAdmin && (
-                  <td className="px-6 py-4">
-                    <div className="flex items-center justify-end gap-2">
-                      {r.status === 'PENDING' && (
-                        <div className="flex items-center gap-1.5 mr-1">
-                          <button
-                            id={`approve-btn-${r.id}`}
-                            disabled={busy}
-                            onClick={() => handleAction(r.id, 'SUCCESSFUL')}
-                            aria-label={`Approve referral for ${r.customer_name}`}
-                            className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded bg-brand hover:bg-brand-hover text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            title="Approve referral"
-                          >
-                            {busy ? <Spinner small /> : '✓ Approve'}
-                          </button>
-                          <button
-                            id={`reject-btn-${r.id}`}
-                            disabled={busy}
-                            onClick={() => handleAction(r.id, 'REJECTED')}
-                            aria-label={`Reject referral for ${r.customer_name}`}
-                            className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded bg-reject-bg text-reject-txt border border-reject-bdr hover:bg-[#f9e5e1] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            title="Reject referral"
-                          >
-                            {busy ? <Spinner small /> : '✕ Reject'}
-                          </button>
-                        </div>
-                      )}
+                <td className="px-6 py-4">
+                  <div className="flex items-center justify-end gap-2">
+                    {canManage && r.status === 'PENDING' && (
+                      <div className="flex items-center gap-1.5 mr-1">
+                        <button
+                          id={`approve-btn-${r.id}`}
+                          disabled={busy}
+                          onClick={() => handleAction(r.id, 'SUCCESSFUL')}
+                          aria-label={`Approve referral for ${r.customer_name}`}
+                          className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded bg-brand hover:bg-brand-hover text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Approve referral"
+                        >
+                          {busy ? <Spinner small /> : '✓ Approve'}
+                        </button>
+                        <button
+                          id={`reject-btn-${r.id}`}
+                          disabled={busy}
+                          onClick={() => handleAction(r.id, 'REJECTED')}
+                          aria-label={`Reject referral for ${r.customer_name}`}
+                          className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded bg-reject-bg text-reject-txt border border-reject-bdr hover:bg-[#f9e5e1] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Reject referral"
+                        >
+                          {busy ? <Spinner small /> : '✕ Reject'}
+                        </button>
+                      </div>
+                    )}
 
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-panel rounded-md"
-                            aria-label={`Actions for referral #${r.id}`}
-                          >
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-40 bg-white border border-[#E5DED6] shadow-md z-50">
-                          <DropdownMenuItem
-                            onClick={() => onViewDetails?.(r)}
-                            className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
-                          >
-                            View Details
-                          </DropdownMenuItem>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-panel rounded-md"
+                          aria-label={`Actions for referral #${r.id}`}
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-40 bg-white border border-[#E5DED6] shadow-md z-50">
+                        {/* View Details: always visible for any referral viewer */}
+                        <DropdownMenuItem
+                          onClick={() => onViewDetails?.(r)}
+                          className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
+                        >
+                          View Details
+                        </DropdownMenuItem>
+                        {/* Delete: manage_referrals only */}
+                        {canManage && (
                           <DropdownMenuItem
                             variant="destructive"
                             disabled={r.status === 'SUCCESSFUL'}
@@ -174,11 +174,11 @@ export default function ReferralTable({
                           >
                             Delete
                           </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </td>
-                )}
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </td>
               </tr>
             );
           })}

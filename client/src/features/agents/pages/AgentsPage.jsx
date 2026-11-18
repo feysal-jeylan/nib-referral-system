@@ -64,7 +64,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
   const { hasPermission, isAdmin: contextIsAdmin } = usePermissions();
 
   const isAgent = Boolean(user?.agent_id);
-  const canManage = contextIsAdmin || hasPermission('manage_agents') || Boolean(propIsAdmin) || (Array.isArray(user?.permissions) && user.permissions.includes('manage_agents'));
+  const canManage = hasPermission('manage_agents');
 
   const [data,      setData]      = useState([]);
   const [meta,      setMeta]      = useState(null);

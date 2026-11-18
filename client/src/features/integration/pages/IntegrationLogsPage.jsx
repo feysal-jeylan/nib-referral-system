@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal, Copy, Check, Trash2, History } from 'lucide-react';
 import api from '@/services/api';
+import usePermissions from '@/features/auth/usePermissions';
 
 import IntegrationLogsTable from '@/features/integration/IntegrationLogsTable';
 import DataTablePagination  from '@/components/common/DataTablePagination';
@@ -41,7 +42,9 @@ const STATUS_OPTIONS = [
 
 const LIMIT = 10;
 
-export default function IntegrationLogsPage({ user: _user, isAdmin = true, onToast }) {
+export default function IntegrationLogsPage({ user: _user, onToast }) {
+  const { hasPermission } = usePermissions();
+  const canManage = hasPermission('manage_logs');
   const [data,       setData]       = useState([]);
   const [meta,       setMeta]       = useState(null);
   const [loading,    setLoading]    = useState(true);
@@ -260,7 +263,7 @@ export default function IntegrationLogsPage({ user: _user, isAdmin = true, onToa
           </div>
 
           <div className="flex items-center gap-2">
-            {isAdmin && (
+            {canManage && (
               <>
                 <Button
                   variant="outline"
@@ -320,7 +323,7 @@ export default function IntegrationLogsPage({ user: _user, isAdmin = true, onToa
         <IntegrationLogsTable
           logs={data}
           loading={loading}
-          isAdmin={isAdmin}
+          canManage={canManage}
           onViewPayload={handleViewPayload}
           onRetry={handleRetry}
           onDeleteRequest={handleDeleteRequest}

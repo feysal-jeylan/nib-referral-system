@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import api from '@/services/api';
+import usePermissions from '@/features/auth/usePermissions';
 
 import CampaignForm from '@/features/campaigns/CampaignForm';
 import { OPERATOR_SYMBOL } from '@/features/campaigns/constants';
@@ -79,7 +80,7 @@ function DeleteDialog({ open, campaignName, onConfirm, onCancel, loading }) {
 }
 
 // ── Details Dialog ────────────────────────────────────────────────────────────
-function DetailsDialog({ campaign, open, onClose, onDelete, onEdit, onActivate, actioning }) {
+function DetailsDialog({ campaign, open, onClose, onDelete, onEdit, onActivate, actioning, canManage = false }) {
   if (!campaign) return null;
   const rules  = Array.isArray(campaign.rules) ? campaign.rules : [];
   const busy   = actioning.has(campaign.id);
@@ -182,7 +183,7 @@ function DetailsDialog({ campaign, open, onClose, onDelete, onEdit, onActivate, 
         </div>
 
         <DialogFooter className="flex-wrap gap-2">
-          {campaign.status === 'DRAFT' && (
+          {canManage && campaign.status === 'DRAFT' && (
             <Button
               variant="outline"
               disabled={busy}
@@ -192,23 +193,27 @@ function DetailsDialog({ campaign, open, onClose, onDelete, onEdit, onActivate, 
               {busy ? <Spinner small /> : '▶ Activate'}
             </Button>
           )}
-          <Button
-            variant="outline"
-            disabled={busy}
-            onClick={() => onEdit(campaign)}
-            className="border-[rgba(138,77,31,0.3)] hover:bg-[#FAF8F5]"
-            style={{ color: CHOCOLATE }}
-          >
-            ✏ Edit
-          </Button>
-          <Button
-            variant="destructive"
-            disabled={busy}
-            onClick={() => onDelete(campaign.id, campaign.name)}
-            className="bg-[#C0392B] hover:bg-[#a93226] text-white"
-          >
-            🗑 Delete
-          </Button>
+          {canManage && (
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => onEdit(campaign)}
+              className="border-[rgba(138,77,31,0.3)] hover:bg-[#FAF8F5]"
+              style={{ color: CHOCOLATE }}
+            >
+              ✏ Edit
+            </Button>
+          )}
+          {canManage && (
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={() => onDelete(campaign.id, campaign.name)}
+              className="bg-[#C0392B] hover:bg-[#a93226] text-white"
+            >
+              🗑 Delete
+            </Button>
+          )}
           <Button variant="ghost" onClick={onClose}>Close</Button>
         </DialogFooter>
       </DialogContent>
@@ -321,7 +326,8 @@ function EditDialog({ campaign, open, onClose, onSaved, onToast }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function CampaignsPage({ user, isAdmin, onToast }) {
-  const canManage = isAdmin || (Array.isArray(user?.permissions) && user.permissions.includes('manage_campaigns'));
+  const { hasPermission } = usePermissions();
+  const canManage = hasPermission('manage_campaigns');
   const [data,     setData]     = useState([]);
   const [meta,     setMeta]     = useState(null);
   const [loading,  setLoading]  = useState(true);
@@ -590,6 +596,7 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
         onEdit={handleEditRequest}
         onActivate={handleActivate}
         actioning={actioning}
+        canManage={canManage}
       />
       <DeleteDialog
         open={!!deleteTarget}

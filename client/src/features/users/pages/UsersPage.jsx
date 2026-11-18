@@ -68,10 +68,11 @@ function SuspendedPill({ suspended }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function UsersPage({ onToast }) {
   const currentUser = useAppStore(s => s.user);
-  const { hasPermission, hasAnyPermission } = usePermissions();
+  const { hasPermission, hasAnyPermission, isAdmin } = usePermissions();
 
-  const canView   = hasAnyPermission(['view_users', 'manage_users']);
-  const canManage = hasPermission('manage_users');
+  const canView        = hasAnyPermission(['view_users', 'manage_users']);
+  const canManage      = hasPermission('manage_users');
+  const canAssignRoles = hasPermission('manage_roles');
 
   // ── Table state ───────────────────────────────────────────────────────────
   const [users,   setUsers]   = useState([]);
@@ -123,13 +124,14 @@ export default function UsersPage({ onToast }) {
 
   // ── Fetch roles for dropdowns ─────────────────────────────────────────────
   useEffect(() => {
-    if (!canManage) return;
+    // Requires manage_roles or manage_users to fetch the roles list
+    if (!canManage && !canAssignRoles) return;
     setRolesLoading(true);
     rbacApi.getRoles()
       .then(res => setAllRoles(res.data.data ?? []))
       .catch(() => {})
       .finally(() => setRolesLoading(false));
-  }, [canManage]);
+  }, [canManage, canAssignRoles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Search with debounce ───────────────────────────────────────────────────
   useEffect(() => {
@@ -411,63 +413,73 @@ export default function UsersPage({ onToast }) {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          {canManage && (
-                            <>
-                              <button
-                                onClick={() => openEdit(u)}
-                                className="px-2.5 py-1.5 rounded text-xs font-medium border transition"
-                                style={{ borderColor: BORDER, color: BRAND, background: '#fff' }}
-                                title="Manage Roles"
-                              >
-                                Roles
-                              </button>
+                          {canManage && (() => {
+                            // Determine if the target user is an Admin account
+                            const isTargetAdmin =
+                              u.roles?.some(r => r.name === 'ADMIN') ||
+                              u.role === 'ADMIN';
+                            // Non-admins cannot act on Admin accounts
+                            const canActOnTarget = isAdmin || !isTargetAdmin;
+                            return (
+                              <>
+                                <button
+                                  onClick={() => openEdit(u)}
+                                  className="px-2.5 py-1.5 rounded text-xs font-medium border transition"
+                                  style={{ borderColor: BORDER, color: BRAND, background: '#fff' }}
+                                  title="Manage Roles"
+                                >
+                                  Roles
+                                </button>
 
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-[#FAF8F5] rounded-md"
-                                    aria-label={`Actions for ${u.username}`}
-                                  >
-                                    <MoreVertical className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
-                                  {u.id !== currentUser?.id && (
-                                    <DropdownMenuItem
-                                      onClick={() => setConfirmUser({ user: u, action: u.is_suspended ? 'activate' : 'suspend' })}
-                                      className={u.is_suspended
-                                        ? "cursor-pointer text-[#15803d] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#15803d]"
-                                        : "cursor-pointer text-[#b91c1c] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#b91c1c]"
-                                      }
-                                    >
-                                      {u.is_suspended ? 'Activate Account' : 'Suspend Account'}
-                                    </DropdownMenuItem>
-                                  )}
+                                {canActOnTarget && (
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-[#FAF8F5] rounded-md"
+                                        aria-label={`Actions for ${u.username}`}
+                                      >
+                                        <MoreVertical className="h-4 w-4" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
+                                      {u.id !== currentUser?.id && (
+                                        <DropdownMenuItem
+                                          onClick={() => setConfirmUser({ user: u, action: u.is_suspended ? 'activate' : 'suspend' })}
+                                          className={u.is_suspended
+                                            ? "cursor-pointer text-[#15803d] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#15803d]"
+                                            : "cursor-pointer text-[#b91c1c] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#b91c1c]"
+                                          }
+                                        >
+                                          {u.is_suspended ? 'Activate Account' : 'Suspend Account'}
+                                        </DropdownMenuItem>
+                                      )}
 
-                                  <DropdownMenuItem
-                                    onClick={() => {
-                                      onToast?.({ type: 'success', message: 'Password reset email sent.' });
-                                    }}
-                                    className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
-                                  >
-                                    Reset Password
-                                  </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => {
+                                          onToast?.({ type: 'success', message: 'Password reset email sent.' });
+                                        }}
+                                        className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
+                                      >
+                                        Reset Password
+                                      </DropdownMenuItem>
 
-                                  {u.id !== currentUser?.id && (
-                                    <DropdownMenuItem
-                                      variant="destructive"
-                                      onClick={() => setDeleteUserTarget(u)}
-                                      className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
-                                    >
-                                      Delete User
-                                    </DropdownMenuItem>
-                                  )}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </>
-                          )}
+                                      {u.id !== currentUser?.id && (
+                                        <DropdownMenuItem
+                                          variant="destructive"
+                                          onClick={() => setDeleteUserTarget(u)}
+                                          className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
+                                        >
+                                          Delete User
+                                        </DropdownMenuItem>
+                                      )}
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                       </td>
                     </tr>
@@ -527,17 +539,29 @@ export default function UsersPage({ onToast }) {
                 Initial Role
               </label>
               <select
-                disabled={rolesLoading}
+                disabled={rolesLoading || !canAssignRoles}
                 className="w-full border rounded-lg px-3 py-2 text-sm outline-none"
-                style={{ borderColor: BORDER, color: CHOCOLATE, background: '#fff' }}
+                style={{
+                  borderColor: BORDER,
+                  color: !canAssignRoles ? MUTED : CHOCOLATE,
+                  background: !canAssignRoles ? '#F5F5F5' : '#fff',
+                  cursor: !canAssignRoles ? 'not-allowed' : 'default',
+                }}
                 value={form.roleName}
                 onChange={e => setForm(f => ({ ...f, roleName: e.target.value }))}
               >
                 <option value="">— None —</option>
-                {allRoles.map(r => (
-                  <option key={r.id} value={r.name}>{r.name}</option>
-                ))}
+                {allRoles
+                  .filter(r => isAdmin || r.name !== 'ADMIN')
+                  .map(r => (
+                    <option key={r.id} value={r.name}>{r.name}</option>
+                  ))}
               </select>
+              {!canAssignRoles && (
+                <p className="text-[11px] mt-1" style={{ color: MUTED }}>
+                  Role assignment requires the Role Management permission.
+                </p>
+              )}
             </div>
             {formError && (
               <p className="text-xs font-medium" style={{ color: '#b91c1c' }}>{formError}</p>
@@ -619,6 +643,7 @@ export default function UsersPage({ onToast }) {
                     <option value="">— Select role —</option>
                     {allRoles
                       .filter(r => !editRoles.some(er => (er.id && er.id === r.id) || er.name === r.name))
+                      .filter(r => isAdmin || r.name !== 'ADMIN')
                       .map(r => (
                         <option key={r.id} value={r.name}>{r.name}</option>
                       ))

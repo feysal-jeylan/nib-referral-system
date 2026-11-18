@@ -68,6 +68,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
   // ── Permission helpers (UI-only; backend enforces security) ──────────────────
   const { hasPermission } = usePermissions();
   const isAdmin = isAdminUser(user);
+  const canViewSystem  = hasPermission('view_settings') || hasPermission('manage_system') || isAdmin;
   const canManageSystem = hasPermission('manage_system') || isAdmin;
   const isAgent = Boolean(user?.agent_id || user?.role === 'AGENT');
 
@@ -88,13 +89,13 @@ export default function SettingsPage({ user: propUser, onToast }) {
     }
   }, [user, agentId]);
 
-  // ── Tab 2: System Config State (manage_system or Admin) ──────────────────────
+  // ── Tab 2: System Config State (view_settings or manage_system or Admin) ───────
   const [configData,  setConfigData]  = useState(null);
   const [configError, setConfigError] = useState(false);
-  const configLoading = canManageSystem && activeTab === 'system' && !configData && !configError;
+  const configLoading = canViewSystem && activeTab === 'system' && !configData && !configError;
 
   useEffect(() => {
-    if (canManageSystem && activeTab === 'system' && !configData) {
+    if (canViewSystem && activeTab === 'system' && !configData) {
       api.get('/dashboard/config')
         .then((res) => setConfigData(res.data))
         .catch(() => {
@@ -102,7 +103,7 @@ export default function SettingsPage({ user: propUser, onToast }) {
           onToast?.({ type: 'error', message: '🔴 Failed to load system configuration.' });
         });
     }
-  }, [canManageSystem, activeTab, configData]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canViewSystem, activeTab, configData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Modal State for Change Password ─────────────────────────────────────────
   const [modalOpen,       setModalOpen]       = useState(false);
@@ -276,8 +277,8 @@ export default function SettingsPage({ user: propUser, onToast }) {
             <span>My Profile</span>
           </TabsTrigger>
 
-          {/* Tab 2 Trigger: System Configuration (manage_system or Admin) */}
-          {canManageSystem && (
+          {/* Tab 2 Trigger: System Configuration (view_settings or manage_system or Admin) */}
+          {canViewSystem && (
             <TabsTrigger
               value="system"
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all data-[state=active]:bg-[#8A4D1F] data-[state=active]:text-white data-[state=active]:shadow-sm text-[#5D4037] hover:text-[#3E2723]"
@@ -548,9 +549,9 @@ export default function SettingsPage({ user: propUser, onToast }) {
         </TabsContent>
 
         {/* ═════════════════════════════════════════════════════════════════════ */}
-        {/* TAB 2: SYSTEM CONFIGURATION (manage_system or Admin)                */}
+        {/* TAB 2: SYSTEM CONFIGURATION (view_settings or manage_system or Admin) */}
         {/* ═════════════════════════════════════════════════════════════════════ */}
-        {canManageSystem && (
+        {canViewSystem && (
           <TabsContent value="system" className="space-y-6 focus-visible:outline-none">
 
             {/* Config Header Section */}
@@ -567,16 +568,18 @@ export default function SettingsPage({ user: propUser, onToast }) {
                 </p>
               </div>
 
-              {/* Functional Edit Configuration Button */}
-              <Button
-                type="button"
-                onClick={handleOpenConfigModal}
-                className="text-xs font-semibold px-4 py-2 rounded-lg text-white flex items-center gap-1.5 transition-all shadow-sm hover:opacity-90 active:scale-95 cursor-pointer"
-                style={{ background: BRAND }}
-              >
-                <Sliders size={14} />
-                <span>Edit Configuration</span>
-              </Button>
+              {/* Edit Configuration Button — manage_system only */}
+              {canManageSystem && (
+                <Button
+                  type="button"
+                  onClick={handleOpenConfigModal}
+                  className="text-xs font-semibold px-4 py-2 rounded-lg text-white flex items-center gap-1.5 transition-all shadow-sm hover:opacity-90 active:scale-95 cursor-pointer"
+                  style={{ background: BRAND }}
+                >
+                  <Sliders size={14} />
+                  <span>Edit Configuration</span>
+                </Button>
+              )}
             </div>
 
             {/* 3 Premium Reward Tier Cards */}

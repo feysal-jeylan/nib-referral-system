@@ -7,7 +7,12 @@
 
 'use strict';
 
-const usersSvc = require('./users.service');
+const prisma    = require('@/config/db');
+const usersSvc  = require('./users.service');
+const { isRequestUserAdmin } = require('@/modules/rbac/rbac.service');
+
+// Restricted permissions that only Admins may grant through role assignment
+const RESTRICTED_ADMIN_PERMISSIONS = ['manage_roles', 'manage_system'];
 
 // ── GET /api/users ────────────────────────────────────────────────────────────
 async function listUsers(req, res, next) {
@@ -40,10 +45,53 @@ async function createUser(req, res, next) {
     });
   }
 
+  const callerIsAdmin = isRequestUserAdmin(req);
+  const trimmedRole   = roleName?.trim();
+
+  // Phase 2: Role-assignment gates
+  if (trimmedRole) {
+    // Requires manage_roles to assign any role at user creation
+    if (!req.userPermissions?.has('manage_roles')) {
+      return res.status(403).json({
+        error: 'Role assignment during user creation requires the Role Management permission.',
+        code:  'ROLE_ASSIGNMENT_FORBIDDEN',
+      });
+    }
+    // Block non-Admin from assigning the ADMIN role
+    if (trimmedRole.toUpperCase() === 'ADMIN' && !callerIsAdmin) {
+      return res.status(403).json({
+        error: 'Only system administrators can assign the ADMIN role.',
+        code:  'ADMIN_ASSIGNMENT_FORBIDDEN',
+      });
+    }
+    // Block non-Admin from assigning roles that contain admin-tier permissions
+    if (!callerIsAdmin) {
+      try {
+        const targetRole = await prisma.role.findFirst({
+          where: { name: { equals: trimmedRole, mode: 'insensitive' } },
+          include: { rolePermissions: { include: { permission: true } } },
+        });
+        if (targetRole) {
+          const hasAdminCap = targetRole.rolePermissions.some(rp =>
+            RESTRICTED_ADMIN_PERMISSIONS.includes(rp.permission?.key)
+          );
+          if (hasAdminCap) {
+            return res.status(403).json({
+              error: 'Non-administrators cannot assign roles with administrative privileges.',
+              code:  'ADMIN_ROLE_DELEGATION_FORBIDDEN',
+            });
+          }
+        }
+      } catch (lookupErr) {
+        return next(lookupErr);
+      }
+    }
+  }
+
   try {
     const user = await usersSvc.createUser(
       { username: username.trim(), email: email?.trim() || null, password, roleName },
-      { actorId: req.user.id, ipAddress: req.ip }
+      { actorId: req.user.id, actorIsAdmin: callerIsAdmin, ipAddress: req.ip }
     );
     return res.status(201).json({ user });
   } catch (err) {
@@ -62,14 +110,22 @@ async function updateUser(req, res, next) {
   }
 
   const { username, email } = req.body;
+  const callerIsAdmin = isRequestUserAdmin(req);
 
   try {
-    const user = await usersSvc.updateUser(userId, { username, email });
+    const user = await usersSvc.updateUser(
+      userId,
+      { username, email },
+      { actorId: req.user.id, actorIsAdmin: callerIsAdmin, ipAddress: req.ip }
+    );
     if (!user) return res.status(404).json({ error: 'User not found.', code: 'USER_NOT_FOUND' });
     return res.status(200).json({ user });
   } catch (err) {
     if (err.code === 'NO_FIELDS') {
       return res.status(400).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'ADMIN_ACTION_FORBIDDEN') {
+      return res.status(403).json({ error: err.message, code: err.code });
     }
     next(err);
   }
@@ -90,11 +146,23 @@ async function suspendUser(req, res, next) {
     });
   }
 
+  const callerIsAdmin = isRequestUserAdmin(req);
+
   try {
-    const user = await usersSvc.suspendUser(userId);
+    const user = await usersSvc.suspendUser(userId, {
+      actorId: req.user.id,
+      actorIsAdmin: callerIsAdmin,
+      ipAddress: req.ip,
+    });
     if (!user) return res.status(404).json({ error: 'User not found.', code: 'USER_NOT_FOUND' });
     return res.status(200).json({ user, message: 'Account suspended.' });
   } catch (err) {
+    if (err.code === 'ADMIN_ACTION_FORBIDDEN') {
+      return res.status(403).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'LAST_ADMIN_PROTECTED') {
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
     next(err);
   }
 }
@@ -106,11 +174,20 @@ async function activateUser(req, res, next) {
     return res.status(400).json({ error: 'User ID must be a valid integer.', code: 'INVALID_ID' });
   }
 
+  const callerIsAdmin = isRequestUserAdmin(req);
+
   try {
-    const user = await usersSvc.activateUser(userId);
+    const user = await usersSvc.activateUser(userId, {
+      actorId: req.user.id,
+      actorIsAdmin: callerIsAdmin,
+      ipAddress: req.ip,
+    });
     if (!user) return res.status(404).json({ error: 'User not found.', code: 'USER_NOT_FOUND' });
     return res.status(200).json({ user, message: 'Account reactivated.' });
   } catch (err) {
+    if (err.code === 'ADMIN_ACTION_FORBIDDEN') {
+      return res.status(403).json({ error: err.message, code: err.code });
+    }
     next(err);
   }
 }
@@ -130,12 +207,21 @@ async function deleteUser(req, res, next) {
     });
   }
 
+  const callerIsAdmin = isRequestUserAdmin(req);
+
   try {
-    const deleted = await usersSvc.deleteUser(userId);
+    const deleted = await usersSvc.deleteUser(userId, {
+      actorId: req.user.id,
+      actorIsAdmin: callerIsAdmin,
+      ipAddress: req.ip,
+    });
     if (!deleted) return res.status(404).json({ error: 'User not found.', code: 'USER_NOT_FOUND' });
     return res.status(200).json({ message: 'User deleted successfully.' });
   } catch (err) {
-    if (err.code === 'LAST_ADMIN') {
+    if (err.code === 'ADMIN_ACTION_FORBIDDEN') {
+      return res.status(403).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'LAST_ADMIN_PROTECTED' || err.code === 'LAST_ADMIN') {
       return res.status(400).json({ error: err.message, code: err.code });
     }
     next(err);

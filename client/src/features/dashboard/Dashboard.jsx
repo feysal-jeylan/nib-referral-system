@@ -154,27 +154,27 @@ export default function Dashboard({ user: propUser, logout }) {
   const currentNavItem = visibleNav.find(n => n.key === activePage);
   const pageTitle      = currentNavItem?.label ?? 'Dashboard';
 
-  // ── Security fallback: if activePage is not in visibleNav, go to overview ───
-  const isPageAllowed = !activePage ||
-    activePage === 'overview' ||
-    visibleNav.some(n => n.key === activePage);
+  // ── Security fallback: redirect to first accessible page ─────────────────────
+  // "Settings" is always visible (permissions: null), so defaultPage is always defined.
+  const defaultPage = visibleNav[0]?.key ?? 'settings';
+  const isCurrentPageAllowed = !activePage || visibleNav.some(n => n.key === activePage);
 
   useEffect(() => {
-    if (!isPageAllowed) {
-      setActivePage('overview');
+    if (!isCurrentPageAllowed) {
+      setActivePage(defaultPage);
     }
-  }, [isPageAllowed, setActivePage]);
+  }, [isCurrentPageAllowed, defaultPage, setActivePage]);
 
   // ── Content Router ────────────────────────────────────────────────────────────
   function renderPage() {
-    const page  = isPageAllowed ? activePage : 'overview';
+    const page  = isCurrentPageAllowed ? activePage : defaultPage;
     const props = { user, isAdmin, onToast: showToast };
 
     // Permission guard: if user navigates here but lost access, show AccessDenied
     const navItem    = NAV_CONFIG.find(n => n.key === page);
     const needsPerms = navItem?.permissions;
     if (needsPerms && !hasAnyPermission(needsPerms)) {
-      return <AccessDenied onGoHome={() => setActivePage('overview')} />;
+      return <AccessDenied onGoHome={() => setActivePage(defaultPage)} />;
     }
 
     switch (page) {

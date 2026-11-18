@@ -13,8 +13,39 @@
 const bcrypt   = require('bcrypt');
 const prisma   = require('@/config/db');
 const rbacSvc  = require('@/modules/rbac/rbac.service');
+const { logAuditEvent } = require('@/services/auditService');
 
 const SALT_ROUNDS = 12;
+
+// ── Privileged-action helpers ─────────────────────────────────────────────────
+
+/**
+ * Fetches a user by ID and throws 404 if not found.
+ * Includes userRoles for admin detection.
+ */
+async function fetchUserWithRoles(userId) {
+  return prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      agent: true,
+      userRoles: { include: { role: true } },
+    },
+  });
+}
+
+/**
+ * Guards a privileged write against Admin targets.
+ * - If the target user is an Admin, the acting user must also be an Admin.
+ * @throws {Error} 403 ADMIN_ACTION_FORBIDDEN if caller is not Admin
+ */
+function guardAdminTarget(targetUser, actor = {}) {
+  if (rbacSvc.isUserAdmin(targetUser) && !actor.actorIsAdmin) {
+    const err = new Error('Only system administrators can perform this action on an Admin account.');
+    err.status = 403;
+    err.code = 'ADMIN_ACTION_FORBIDDEN';
+    throw err;
+  }
+}
 
 /**
  * List all users with their roles — paginated.
@@ -187,6 +218,16 @@ async function createUser({ username, email, password, roleName }, actor) {
     await rbacSvc.assignRoleToUser(user.id, roleName, actor);
   }
 
+  // Audit: user creation
+  await logAuditEvent({
+    userId: actor?.actorId || null,
+    action: 'USER_CREATED',
+    entity: 'USER',
+    entityId: String(user.id),
+    details: { username, email: email || null, roleName: roleName || null },
+    ipAddress: actor?.ipAddress || null,
+  });
+
   return getUserById(user.id);
 }
 
@@ -194,8 +235,15 @@ async function createUser({ username, email, password, roleName }, actor) {
  * Update a user's username / email (non-sensitive fields).
  * @param {number} userId
  * @param {object} data   { username?, email? }
+ * @param {object} actor  { actorId, actorIsAdmin, ipAddress }
  */
-async function updateUser(userId, { username, email }) {
+async function updateUser(userId, { username, email }, actor = {}) {
+  const user = await fetchUserWithRoles(userId);
+  if (!user) return null;
+
+  // Guard: only Admins can modify Admin accounts
+  guardAdminTarget(user, actor);
+
   const data = {};
   if (username !== undefined) data.username = username;
   if (email    !== undefined) data.email    = email;
@@ -207,19 +255,54 @@ async function updateUser(userId, { username, email }) {
   }
 
   await prisma.user.update({ where: { id: userId }, data });
+
+  // Audit
+  await logAuditEvent({
+    userId: actor.actorId || null,
+    action: 'USER_UPDATED',
+    entity: 'USER',
+    entityId: String(userId),
+    details: { updatedFields: Object.keys(data) },
+    ipAddress: actor.ipAddress || null,
+  });
+
   return getUserById(userId);
 }
 
 /**
  * Suspend a user account at the User level (and sync linked agent if applicable).
  * Never creates dummy agent records.
+ * @param {number} userId
+ * @param {object} actor  { actorId, actorIsAdmin, ipAddress }
  */
-async function suspendUser(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { agent: true },
-  });
+async function suspendUser(userId, actor = {}) {
+  const user = await fetchUserWithRoles(userId);
   if (!user) return null;
+
+  // Guard: only Admins can suspend Admin accounts
+  guardAdminTarget(user, actor);
+
+  // Guard: cannot suspend the last active Admin
+  if (rbacSvc.isUserAdmin(user)) {
+    const activeAdminCount = await prisma.$queryRaw`
+      SELECT COUNT(*)::int AS cnt FROM users
+      WHERE status = 'ACTIVE'
+        AND (
+          role = 'ADMIN'
+          OR id IN (
+            SELECT ur.user_id FROM user_roles ur
+            JOIN roles r ON ur.role_id = r.id
+            WHERE r.name = 'ADMIN'
+          )
+        )
+    `;
+    if (activeAdminCount[0]?.cnt <= 1) {
+      const err = new Error('Cannot suspend the last active administrator.');
+      err.status = 400;
+      err.code = 'LAST_ADMIN_PROTECTED';
+      throw err;
+    }
+  }
 
   // 1. Update user.status = 'SUSPENDED'
   await prisma.user.update({
@@ -235,18 +318,30 @@ async function suspendUser(userId) {
     });
   }
 
+  // Audit
+  await logAuditEvent({
+    userId: actor.actorId || null,
+    action: 'USER_SUSPENDED',
+    entity: 'USER',
+    entityId: String(userId),
+    details: { targetUsername: user.username },
+    ipAddress: actor.ipAddress || null,
+  });
+
   return getUserById(userId);
 }
 
 /**
  * Reactivate a suspended user account at the User level (and sync linked agent if applicable).
+ * @param {number} userId
+ * @param {object} actor  { actorId, actorIsAdmin, ipAddress }
  */
-async function activateUser(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { agent: true },
-  });
+async function activateUser(userId, actor = {}) {
+  const user = await fetchUserWithRoles(userId);
   if (!user) return null;
+
+  // Guard: only Admins can activate Admin accounts
+  guardAdminTarget(user, actor);
 
   // 1. Update user.status = 'ACTIVE'
   await prisma.user.update({
@@ -262,46 +357,88 @@ async function activateUser(userId) {
     });
   }
 
+  // Audit
+  await logAuditEvent({
+    userId: actor.actorId || null,
+    action: 'USER_ACTIVATED',
+    entity: 'USER',
+    entityId: String(userId),
+    details: { targetUsername: user.username },
+    ipAddress: actor.ipAddress || null,
+  });
+
   return getUserById(userId);
 }
 
 /**
  * Delete a user account, ensuring they are not the last active administrator.
+ * @param {number} userId
+ * @param {object} actor  { actorId, actorIsAdmin, ipAddress }
  */
-async function deleteUser(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: {
-      userRoles: {
-        include: { role: true },
-      },
-    },
-  });
+async function deleteUser(userId, actor = {}) {
+  const user = await fetchUserWithRoles(userId);
   if (!user) return null;
 
-  // Check if user is an ADMIN
-  const isAdmin = user.role === 'ADMIN' || user.userRoles.some(ur => ur.role.name === 'ADMIN');
-  if (isAdmin) {
-    const adminCount = await prisma.user.count({
-      where: {
-        OR: [
-          { role: 'ADMIN' },
-          { userRoles: { some: { role: { name: 'ADMIN' } } } },
-        ],
-      },
+  // Guard: only Admins can delete Admin accounts
+  guardAdminTarget(user, actor);
+
+  // Guard: cannot delete the last Admin
+  if (rbacSvc.isUserAdmin(user)) {
+    await prisma.$transaction(async (tx) => {
+      // Lock all admin rows to prevent concurrent deletes racing past this check
+      await tx.$queryRaw`
+        SELECT id FROM users
+        WHERE status = 'ACTIVE'
+          AND (
+            role = 'ADMIN'
+            OR id IN (
+              SELECT ur.user_id FROM user_roles ur
+              JOIN roles r ON ur.role_id = r.id
+              WHERE r.name = 'ADMIN'
+            )
+          )
+        FOR UPDATE
+      `;
+
+      const result = await tx.$queryRaw`
+        SELECT COUNT(*)::int AS cnt FROM users
+        WHERE role = 'ADMIN'
+           OR id IN (
+             SELECT ur.user_id FROM user_roles ur
+             JOIN roles r ON ur.role_id = r.id
+             WHERE r.name = 'ADMIN'
+           )
+      `;
+      const adminCount = result[0]?.cnt ?? 0;
+      if (adminCount <= 1) {
+        const err = new Error('Cannot delete the last remaining administrator.');
+        err.status = 400;
+        err.code = 'LAST_ADMIN_PROTECTED';
+        throw err;
+      }
+
+      // Remove linked userRoles within transaction
+      await tx.userRole.deleteMany({ where: { userId } });
+      await tx.user.delete({ where: { id: userId } });
     });
-    if (adminCount <= 1) {
-      const err = new Error('Cannot delete the last remaining administrator.');
-      err.code = 'LAST_ADMIN';
-      throw err;
-    }
+  } else {
+    // Non-admin delete — no lock needed
+    await prisma.userRole.deleteMany({ where: { userId } });
+    await prisma.user.delete({ where: { id: userId } });
   }
 
-  // Remove linked userRoles
-  await prisma.userRole.deleteMany({ where: { userId } });
-
-  // Delete user
-  await prisma.user.delete({ where: { id: userId } });
+  // Audit (outside transaction — auditService uses global prisma client)
+  await logAuditEvent({
+    userId: actor.actorId || null,
+    action: 'USER_DELETED',
+    entity: 'USER',
+    entityId: String(userId),
+    details: {
+      deletedUsername: user.username,
+      roles: user.userRoles.map(ur => ur.role?.name).filter(Boolean),
+    },
+    ipAddress: actor.ipAddress || null,
+  });
 
   return true;
 }

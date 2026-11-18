@@ -11,16 +11,56 @@ const prisma = require('@/config/db');
 const { PERMISSIONS, SYSTEM_ROLES, AGENT_DEFAULT_PERMISSIONS } = require('./rbac.catalog');
 const { logAuditEvent } = require('@/services/auditService');
 
+// ── Permission Inheritance Map ────────────────────────────────────────────────
+// manage_X implies view_X. manage_system is a special case → view_settings.
+// This is the SINGLE SOURCE OF TRUTH for permission expansion.
+// The database stores ONLY explicitly assigned permissions.
+const MANAGE_TO_VIEW_MAP = {
+  'manage_agents':    'view_agents',
+  'manage_campaigns': 'view_campaigns',
+  'manage_referrals': 'view_referrals',
+  'manage_logs':      'view_logs',
+  'manage_finance':   'view_finance',
+  'manage_users':     'view_users',
+  'manage_roles':     'view_roles',
+  'manage_system':    'view_settings', // Special mapping — NOT "view_system"
+};
+
+/**
+ * Expands a list of assigned permissions into effective permissions.
+ * manage_X implies view_X (see MANAGE_TO_VIEW_MAP for exact mappings).
+ * The database is NOT modified — this is a runtime expansion only.
+ *
+ * @param {string[]} assignedPermissions - Raw permissions from the database
+ * @returns {string[]} Effective permissions (assigned + implied)
+ */
+function calculateEffectivePermissions(assignedPermissions) {
+  const effective = new Set(assignedPermissions);
+  for (const perm of assignedPermissions) {
+    const implied = MANAGE_TO_VIEW_MAP[perm];
+    if (implied) {
+      effective.add(implied);
+    }
+  }
+  return Array.from(effective);
+}
+
 /**
  * Dynamically resolves current roles and effective permissions for a user from PostgreSQL.
  * Does NOT trust permissions in JWT claims.
- * 
+ *
+ * Returns:
+ *   - roles: string[]              — role names
+ *   - assignedPermissions: string[] — raw DB permissions (for Role Management matrix display)
+ *   - permissions: string[]         — effective permissions (assigned + inherited, for auth checks)
+ *   - user: object|null
+ *
  * @param {number} userId
- * @returns {Promise<{ roles: string[], permissions: string[], user: object|null }>}
+ * @returns {Promise<{ roles: string[], assignedPermissions: string[], permissions: string[], user: object|null }>}
  */
 async function resolveUserRolesAndPermissions(userId) {
   if (!userId) {
-    return { roles: [], permissions: [], user: null };
+    return { roles: [], assignedPermissions: [], permissions: [], user: null };
   }
 
   const user = await prisma.user.findUnique({
@@ -44,7 +84,7 @@ async function resolveUserRolesAndPermissions(userId) {
   });
 
   if (!user) {
-    return { roles: [], permissions: [], user: null };
+    return { roles: [], assignedPermissions: [], permissions: [], user: null };
   }
 
   const roleSet = new Set();
@@ -73,9 +113,13 @@ async function resolveUserRolesAndPermissions(userId) {
     }
   }
 
+  const rawPermissions = Array.from(permissionSet);
+  const effectivePermissions = calculateEffectivePermissions(rawPermissions);
+
   return {
     roles: Array.from(roleSet),
-    permissions: Array.from(permissionSet),
+    assignedPermissions: rawPermissions,   // Raw DB perms (for Role Management matrix display)
+    permissions: effectivePermissions,      // Effective perms (for frontend auth state & backend guards)
     user,
   };
 }
@@ -441,7 +485,64 @@ async function seedRbacCatalog() {
   return { success: true };
 }
 
+/**
+ * Determines whether a user object represents a system administrator.
+ *
+ * Checks all three identity representations to handle legacy accounts,
+ * relational-only accounts, and hybrid accounts:
+ *   1. user.userRoles[]  — relational assignment (most common for new accounts)
+ *   2. user.roles[]      — shaped array (may be string or { name } objects)
+ *   3. user.role         — legacy string field (for accounts predating user_roles)
+ *
+ * Uses logical OR across ALL sources — never short-circuits early — so an account
+ * that has ANY one of these set to ADMIN is correctly identified.
+ *
+ * IMPORTANT: isSystem:true applies to both ADMIN and AGENT. Do NOT use isSystem
+ * as an admin indicator.
+ *
+ * @param {object|null} user - A user object from Prisma or the shaped service layer
+ * @returns {boolean}
+ */
+function isUserAdmin(user) {
+  if (!user) return false;
+
+  // Check relational userRoles (Prisma include: { role: true })
+  const byUserRoles =
+    Array.isArray(user.userRoles) &&
+    user.userRoles.some(ur => ur.role?.name === 'ADMIN');
+
+  // Check shaped roles array (may contain strings or { name } objects)
+  const byRoles =
+    Array.isArray(user.roles) &&
+    user.roles.some(r =>
+      (typeof r === 'string' ? r : r?.name) === 'ADMIN'
+    );
+
+  // Check legacy role string field
+  const byLegacyRole =
+    typeof user.role === 'string' &&
+    user.role.trim().toUpperCase() === 'ADMIN';
+
+  return byUserRoles || byRoles || byLegacyRole;
+}
+
+/**
+ * Determines whether the acting request user is a system administrator.
+ * Uses req.userRoles (resolved fresh from DB by auth.js) as the authoritative source,
+ * with req.user.role as a legacy fallback.
+ *
+ * @param {object} req - Express request with req.userRoles and req.user
+ * @returns {boolean}
+ */
+function isRequestUserAdmin(req) {
+  if (!req) return false;
+  const byRoles = Array.isArray(req.userRoles) && req.userRoles.includes('ADMIN');
+  const byLegacy = req.user?.role === 'ADMIN';
+  return byRoles || byLegacy;
+}
+
 module.exports = {
+  calculateEffectivePermissions,
   resolveUserRolesAndPermissions,
   hasPermission,
   assignRoleToUser,
@@ -453,4 +554,6 @@ module.exports = {
   addPermissionToRole,
   removePermissionFromRole,
   seedRbacCatalog,
+  isUserAdmin,
+  isRequestUserAdmin,
 };

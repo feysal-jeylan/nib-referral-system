@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '@/services/api';
 import useAppStore from '@/store/useAppStore';
+import usePermissions from '@/features/auth/usePermissions';
 
 import ReferralTable       from '@/features/referrals/ReferralTable';
 import TableFilters        from '@/components/common/TableFilters';
@@ -46,7 +47,8 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
   const storeUser = useAppStore(s => s.user);
   const user = storeUser || propUser;
   const isAgent = Boolean(user?.agent_id);
-  const canManage = propIsAdmin || (Array.isArray(user?.permissions) && user.permissions.includes('manage_referrals'));
+  const { hasPermission } = usePermissions();
+  const canManage = hasPermission('manage_referrals');
 
   const [data,    setData]    = useState([]);
   const [meta,    setMeta]    = useState(null);
@@ -349,7 +351,7 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
               onStatusChange={handleStatusChange_Referral}
               onViewDetails={handleViewDetails}
               onDeleteRequest={handleDeleteRequest}
-              isAdmin={canManage}
+              canManage={canManage}
             />
             <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={loading} />
           </>
