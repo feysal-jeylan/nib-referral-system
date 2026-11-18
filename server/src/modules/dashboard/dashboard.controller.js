@@ -11,7 +11,8 @@ const svc = require('./dashboard.service');
 // ── GET /api/dashboard/stats  (ADMIN only) ────────────────────────────────────
 async function getStats(req, res, next) {
   try {
-    const stats = await svc.getDashboardStats();
+    const { range } = req.query;
+    const stats = await svc.getDashboardStats(range);
     return res.status(200).json(stats);
   } catch (err) {
     console.error('[GET /api/dashboard/stats] Error:', err.message);
@@ -20,4 +21,3 @@ async function getStats(req, res, next) {
 }
 
 module.exports = { getStats };
-

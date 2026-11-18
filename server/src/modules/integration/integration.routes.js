@@ -91,8 +91,10 @@ function requireApiKey(req, res, next) {
 router.post('/account-opened', webhookLimiter, requireApiKey, ctrl.accountOpened);
 
 // Admin audit log management (protected by JWT + permission)
-router.get('/logs',            authenticateToken, authorizePermission('view_logs'),   ctrl.getLogs);
-router.post('/logs/:id/retry', authenticateToken, authorizePermission('manage_logs'), ctrl.retryLog);
-router.delete('/logs/:id',     authenticateToken, authorizePermission('manage_logs'), ctrl.deleteLog);
+router.get('/logs',             authenticateToken, authorizePermission('view_logs'),   ctrl.getLogs);
+router.delete('/logs/bulk',      authenticateToken, authorizePermission('manage_logs'), ctrl.bulkDelete);
+router.delete('/logs/clear-old', authenticateToken, authorizePermission('manage_logs'), ctrl.clearOld);
+router.post('/logs/:id/retry',   authenticateToken, authorizePermission('manage_logs'), ctrl.retryLog);
+router.delete('/logs/:id',       authenticateToken, authorizePermission('manage_logs'), ctrl.deleteLog);
 
 module.exports = router;

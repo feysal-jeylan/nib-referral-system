@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Terminal, Copy, Check } from 'lucide-react';
+import { Terminal, Copy, Check, Trash2, History } from 'lucide-react';
 import api from '@/services/api';
 
 import IntegrationLogsTable from '@/features/integration/IntegrationLogsTable';
@@ -51,12 +51,17 @@ export default function IntegrationLogsPage({ user: _user, isAdmin = true, onToa
   const debounceRef = useRef(null);
 
   // Modal & action states
-  const [selectedLog,   setSelectedLog]   = useState(null);
-  const [isPayloadOpen, setIsPayloadOpen] = useState(false);
-  const [deleteTarget,  setDeleteTarget]  = useState(null);
-  const [deleting,      setDeleting]      = useState(false);
-  const [retryingId,    setRetryingId]    = useState(null);
-  const [copied,        setCopied]        = useState(false);
+  const [selectedLog,       setSelectedLog]       = useState(null);
+  const [isPayloadOpen,     setIsPayloadOpen]     = useState(false);
+  const [deleteTarget,      setDeleteTarget]      = useState(null);
+  const [deleting,          setDeleting]          = useState(false);
+  const [retryingId,        setRetryingId]        = useState(null);
+  const [copied,            setCopied]            = useState(false);
+  const [selectedIds,       setSelectedIds]       = useState([]);
+  const [isBulkDeleteOpen,  setIsBulkDeleteOpen]  = useState(false);
+  const [bulkDeleting,      setBulkDeleting]      = useState(false);
+  const [isClearOldOpen,    setIsClearOldOpen]    = useState(false);
+  const [clearingOld,       setClearingOld]       = useState(false);
 
   const fetchLogs = useCallback(async (pg, st, srch = '') => {
     setLoading(true);
@@ -170,6 +175,70 @@ export default function IntegrationLogsPage({ user: _user, isAdmin = true, onToa
     }
   }
 
+  // ── Action: Selection for Bulk Operations ────────────────────────────────
+  function handleSelectAll(checked) {
+    if (checked) {
+      const pageIds = data.map((log) => log.id);
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+    } else {
+      const pageIds = new Set(data.map((log) => log.id));
+      setSelectedIds((prev) => prev.filter((id) => !pageIds.has(id)));
+    }
+  }
+
+  function handleSelectOne(id, checked) {
+    setSelectedIds((prev) => (checked ? [...prev, id] : prev.filter((item) => item !== id)));
+  }
+
+  // ── Action: Bulk Delete Logs ──────────────────────────────────────────────
+  async function handleBulkDeleteConfirm() {
+    if (selectedIds.length === 0) return;
+    setBulkDeleting(true);
+    try {
+      const { data: res } = await api.delete('/integration/logs/bulk', {
+        data: { ids: selectedIds },
+      });
+      onToast?.({
+        type: 'success',
+        message: `🗑️ ${res.message || `${selectedIds.length} logs deleted successfully.`}`,
+      });
+      setSelectedIds([]);
+      setIsBulkDeleteOpen(false);
+      fetchLogs(page, status, search);
+    } catch (err) {
+      onToast?.({
+        type: 'error',
+        message: err.response?.data?.error || 'Failed to bulk delete integration logs.',
+      });
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
+  // ── Action: Clear Old Logs (Retention) ────────────────────────────────────
+  async function handleClearOldConfirm() {
+    setClearingOld(true);
+    try {
+      const { data: res } = await api.delete('/integration/logs/clear-old', {
+        data: { days: 30 },
+      });
+      onToast?.({
+        type: 'success',
+        message: `${res.count ?? 0} logs older than 30 days were deleted.`,
+      });
+      setIsClearOldOpen(false);
+      setSelectedIds([]);
+      fetchLogs(page, status, search);
+    } catch (err) {
+      onToast?.({
+        type: 'error',
+        message: err.response?.data?.error || 'Failed to clear old integration logs.',
+      });
+    } finally {
+      setClearingOld(false);
+    }
+  }
+
   return (
     <div className="p-6">
       <section
@@ -178,7 +247,7 @@ export default function IntegrationLogsPage({ user: _user, isAdmin = true, onToa
       >
         {/* Header */}
         <div
-          className="flex items-center justify-between px-6 py-4"
+          className="flex flex-col sm:flex-row sm:items-center justify-between px-6 py-4 gap-3"
           style={{ borderBottom: `1px solid ${BORDER}` }}
         >
           <div>
@@ -189,14 +258,52 @@ export default function IntegrationLogsPage({ user: _user, isAdmin = true, onToa
               Temenos webhook events received by the Core Banking integration.
             </p>
           </div>
-          {meta && (
-            <span
-              className="text-xs font-semibold px-2.5 py-1 rounded-full"
-              style={{ background: '#FAF8F5', color: MUTED }}
-            >
-              {meta.total} event{meta.total !== 1 ? 's' : ''}
-            </span>
-          )}
+
+          <div className="flex items-center gap-2">
+            {isAdmin && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={selectedIds.length === 0}
+                  onClick={() => setIsBulkDeleteOpen(true)}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{
+                    borderColor: selectedIds.length > 0 ? '#C0392B' : 'rgba(138,77,31,0.2)',
+                    color: selectedIds.length > 0 ? '#C0392B' : MUTED,
+                    background: selectedIds.length > 0 ? '#FEF2F2' : '#fff',
+                  }}
+                >
+                  <Trash2 size={14} className={selectedIds.length > 0 ? 'text-[#C0392B]' : ''} />
+                  <span>Delete Selected ({selectedIds.length})</span>
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsClearOldOpen(true)}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition shadow-2xs cursor-pointer hover:bg-stone-50"
+                  style={{
+                    borderColor: 'rgba(138,77,31,0.28)',
+                    color: '#8A4D1F',
+                    background: '#fff',
+                  }}
+                >
+                  <History size={14} style={{ color: '#8A4D1F' }} />
+                  <span>Clear 30+ Days</span>
+                </Button>
+              </>
+            )}
+
+            {meta && (
+              <span
+                className="text-xs font-semibold px-2.5 py-1 rounded-full"
+                style={{ background: '#FAF8F5', color: MUTED }}
+              >
+                {meta.total} event{meta.total !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Filters */}
@@ -218,6 +325,9 @@ export default function IntegrationLogsPage({ user: _user, isAdmin = true, onToa
           onRetry={handleRetry}
           onDeleteRequest={handleDeleteRequest}
           retryingId={retryingId}
+          selectedIds={selectedIds}
+          onSelectAll={handleSelectAll}
+          onSelectOne={handleSelectOne}
         />
 
         {/* Pagination */}
@@ -374,6 +484,82 @@ export default function IntegrationLogsPage({ user: _user, isAdmin = true, onToa
               className="bg-[#C0392B] hover:bg-[#A93226] text-white font-semibold"
             >
               {deleting ? 'Deleting…' : 'Delete Log'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Bulk Delete Confirmation Modal ───────────────────────────────── */}
+      <Dialog open={isBulkDeleteOpen} onOpenChange={setIsBulkDeleteOpen}>
+        <DialogContent className="sm:max-w-md bg-white border border-[#E5DED6] shadow-xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-[#C0392B] flex items-center gap-2">
+              <Trash2 size={18} className="text-[#C0392B]" />
+              Bulk Delete Integration Logs
+            </DialogTitle>
+            <DialogDescription className="text-xs text-[#9C8577] mt-1">
+              Are you sure you want to delete {selectedIds.length} selected log{selectedIds.length !== 1 ? 's' : ''}? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter className="gap-2 sm:gap-0 mt-4">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={bulkDeleting}
+              onClick={() => setIsBulkDeleteOpen(false)}
+              className="border-[#D7CCC8] text-[#3E2723] hover:bg-[#F5EDE6]"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={bulkDeleting}
+              onClick={handleBulkDeleteConfirm}
+              className="bg-[#C0392B] hover:bg-[#A93226] text-white font-semibold"
+            >
+              {bulkDeleting ? 'Deleting…' : `Delete (${selectedIds.length})`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Clear Old Logs Confirmation Modal ────────────────────────────── */}
+      <Dialog open={isClearOldOpen} onOpenChange={setIsClearOldOpen}>
+        <DialogContent className="sm:max-w-md bg-white border border-[#E5DED6] shadow-xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-[#C0392B] flex items-center gap-2">
+              <History size={18} className="text-[#8A4D1F]" />
+              Clear Old Logs?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-[#9C8577] mt-1">
+              Are you sure you want to permanently delete all integration logs older than 30 days? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter className="gap-2 sm:gap-0 mt-4">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={clearingOld}
+              onClick={() => setIsClearOldOpen(false)}
+              className="border-[#D7CCC8] text-[#3E2723] hover:bg-[#F5EDE6]"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={clearingOld}
+              onClick={handleClearOldConfirm}
+              className="bg-[#C0392B] hover:bg-[#A93226] text-white font-semibold"
+            >
+              {clearingOld ? 'Clearing…' : 'Clear Logs'}
             </Button>
           </DialogFooter>
         </DialogContent>

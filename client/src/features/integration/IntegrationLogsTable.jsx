@@ -23,6 +23,7 @@ import Spinner from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
 import { IntegrationStatusPill } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,6 +39,9 @@ export default function IntegrationLogsTable({
   onRetry,
   onDeleteRequest,
   retryingId = null,
+  selectedIds = [],
+  onSelectAll,
+  onSelectOne,
 }) {
   if (loading) {
     return (
@@ -57,11 +61,23 @@ export default function IntegrationLogsTable({
     );
   }
 
+  const allOnPageSelected = logs.length > 0 && logs.every((l) => selectedIds.includes(l.id));
+  const someOnPageSelected = logs.some((l) => selectedIds.includes(l.id)) && !allOnPageSelected;
+
   return (
     <div className="overflow-x-auto w-full">
       <table className="min-w-[850px] w-full text-sm border-collapse" aria-label="Temenos integration log">
         <thead>
           <tr className="bg-panel border-b border-border">
+            {isAdmin && (
+              <th scope="col" className="w-10 px-4 py-3 text-center">
+                <Checkbox
+                  checked={allOnPageSelected ? true : someOnPageSelected ? 'indeterminate' : false}
+                  onCheckedChange={(checked) => onSelectAll?.(Boolean(checked))}
+                  aria-label="Select all logs on current page"
+                />
+              </th>
+            )}
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">#</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Transaction ID</th>
             <th scope="col" className="px-6 py-3 text-left text-[11px] font-semibold text-text-3 uppercase tracking-widest">Customer Name</th>
@@ -76,8 +92,23 @@ export default function IntegrationLogsTable({
         <tbody>
           {logs.map((log, i) => {
             const isRetrying = retryingId === log.id;
+            const isSelected = selectedIds.includes(log.id);
             return (
-              <tr key={log.id} className="border-b border-border last:border-0 hover:bg-bg transition-colors duration-150">
+              <tr
+                key={log.id}
+                className={`border-b border-border last:border-0 hover:bg-bg transition-colors duration-150 ${
+                  isSelected ? 'bg-amber-50/50' : ''
+                }`}
+              >
+                {isAdmin && (
+                  <td className="w-10 px-4 py-4 text-center">
+                    <Checkbox
+                      checked={isSelected}
+                      onCheckedChange={(checked) => onSelectOne?.(log.id, Boolean(checked))}
+                      aria-label={`Select log #${log.id}`}
+                    />
+                  </td>
+                )}
                 <td className="px-6 py-4 text-text-3 text-xs tabular-nums">{i + 1}</td>
                 <td className="px-6 py-4">
                   <code className="font-mono text-xs bg-brand-light text-brand px-2 py-0.5 rounded font-semibold">

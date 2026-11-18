@@ -454,6 +454,44 @@ async function deleteIntegrationLog(id) {
   return existing;
 }
 
+/**
+ * Atomically bulk deletes integration logs matching the provided IDs.
+ * @param {number[]} ids
+ * @returns {Promise<number>} count of deleted records
+ */
+async function bulkDeleteLogs(ids) {
+  const numericIds = ids.map(Number).filter(id => !isNaN(id));
+  if (numericIds.length === 0) return 0;
+
+  const result = await prisma.integrationLog.deleteMany({
+    where: {
+      id: { in: numericIds },
+    },
+  });
+
+  return result.count;
+}
+
+/**
+ * Atomically deletes all integration logs older than the specified number of days.
+ * @param {number} days - Number of days of logs to retain (default: 30)
+ * @returns {Promise<number>} count of deleted records
+ */
+async function clearOldLogs(days = 30) {
+  const cutoffDays = Math.max(1, parseInt(days, 10) || 30);
+  const cutoffDate = new Date(Date.now() - cutoffDays * 24 * 60 * 60 * 1000);
+
+  const result = await prisma.integrationLog.deleteMany({
+    where: {
+      created_at: {
+        lt: cutoffDate,
+      },
+    },
+  });
+
+  return result.count;
+}
+
 module.exports = {
   ALLOWED_FIELDS,
   findExistingLog,
@@ -463,5 +501,7 @@ module.exports = {
   listIntegrationLogs,
   retryIntegrationLog,
   deleteIntegrationLog,
+  bulkDeleteLogs,
+  clearOldLogs,
 };
 

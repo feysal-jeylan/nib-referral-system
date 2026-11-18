@@ -5,6 +5,9 @@
  *
  * Authorization:
  *   - GET /stats → view_dashboard
+ *
+ * Query params:
+ *   - range: '7d' | '30d' | 'month' (default: '7d')
  */
 
 'use strict';

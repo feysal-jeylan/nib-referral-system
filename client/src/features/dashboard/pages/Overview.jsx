@@ -10,7 +10,7 @@
  *     - Conversion Rate (Percentage of successful referrals out of total referrals)
  *     - Active Campaigns (Count of ACTIVE campaigns)
  *  2. Row 2: Operational Analytics Charts
- *     - Referrals Over Time (Line Chart)
+ *     - Referrals Over Time (Line Chart with dynamic range filter: 7d, 30d, month)
  *     - Campaign Distribution (Bar Chart)
  *  3. Row 3: Split Widgets
  *     - Column A: Top Performing Agents (Rank #1, #2..., Agent Name, Successful Referral Count)
@@ -30,6 +30,13 @@ import {
 } from 'lucide-react';
 import api from '@/services/api';
 import Spinner from '@/components/ui/Spinner';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 // ── Brand palette ─────────────────────────────────────────────────────────────
 const BRAND       = '#8A4D1F';
@@ -165,16 +172,20 @@ function Section({ title, subtitle, children, action }) {
       style={{ border: `1px solid ${BORDER}` }}
     >
       <div
-        className="flex items-center justify-between px-6 py-4"
+        className="flex items-center justify-between px-6 py-4 gap-4"
         style={{ borderBottom: `1px solid ${BORDER}` }}
       >
-        <div>
-          <h2 className="font-bold text-sm tracking-wide" style={{ color: CHOCOLATE }}>{title}</h2>
+        <div className="min-w-0">
+          <h2 className="font-bold text-sm tracking-wide truncate" style={{ color: CHOCOLATE }}>{title}</h2>
           {subtitle && (
-            <p className="text-xs mt-0.5" style={{ color: MUTED }}>{subtitle}</p>
+            <p className="text-xs mt-0.5 truncate" style={{ color: MUTED }}>{subtitle}</p>
           )}
         </div>
-        {action}
+        {action && (
+          <div className="flex-shrink-0">
+            {action}
+          </div>
+        )}
       </div>
       <div className="flex-1">
         {children}
@@ -244,19 +255,39 @@ function RankBadge({ rank }) {
 
 // ── Main Page Component ───────────────────────────────────────────────────────
 export default function Overview({ onToast }) {
-  const [stats,   setStats]   = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [stats,        setStats]        = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [range,        setRange]        = useState('7d');
 
-  useEffect(() => {
-    api.get('/dashboard/stats')
+  const fetchStats = (selectedRange = range, isInitial = false) => {
+    if (isInitial) {
+      setLoading(true);
+    } else {
+      setChartLoading(true);
+    }
+
+    api.get(`/dashboard/stats?range=${selectedRange}`)
       .then(r => setStats(r.data))
       .catch(() => {
         if (onToast) {
           onToast({ type: 'error', message: '🔴 Failed to load dashboard metrics.' });
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setChartLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    fetchStats('7d', true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRangeChange = (newRange) => {
+    setRange(newRange);
+    fetchStats(newRange, false);
+  };
 
   const rot = stats?.referralsOverTime    ?? [];
   const cd  = stats?.campaignDistribution ?? [];
@@ -267,6 +298,12 @@ export default function Overview({ onToast }) {
   const displayConversionRate = (!stats || !stats.totalReferrals || stats.totalReferrals === 0)
     ? '0%'
     : `${Number(stats.conversionRate ?? 0).toFixed(1)}%`;
+
+  const rangeSubtitle = {
+    '7d':    'All referrals submitted in the last 7 days',
+    '30d':   'All referrals submitted in the last 30 days',
+    'month': 'All referrals submitted this month',
+  }[range] || 'All referrals submitted in the selected range';
 
   return (
     <div className="p-6 space-y-6" style={{ background: IVORY, minHeight: '100%' }}>
@@ -320,16 +357,40 @@ export default function Overview({ onToast }) {
         {/* Line Chart — Referrals Over Time */}
         <Section
           title="Referrals Over Time"
-          subtitle="All referrals submitted in the last 7 days"
-          action={<TrendingUp size={16} style={{ color: MUTED }} />}
+          subtitle={rangeSubtitle}
+          action={
+            <div className="flex items-center gap-2">
+              <Select value={range} onValueChange={handleRangeChange}>
+                <SelectTrigger
+                  className="h-8 w-[130px] text-xs bg-white border-[rgba(138,77,31,0.2)] text-[#3E2723] focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37]"
+                  aria-label="Select date range"
+                >
+                  <SelectValue placeholder="Select Range" />
+                </SelectTrigger>
+                <SelectContent className="bg-white border-[#E5DED6] z-50">
+                  <SelectItem value="7d" className="text-xs text-[#3E2723] focus:bg-[#FAF8F5] cursor-pointer">
+                    Last 7 Days
+                  </SelectItem>
+                  <SelectItem value="30d" className="text-xs text-[#3E2723] focus:bg-[#FAF8F5] cursor-pointer">
+                    Last 30 Days
+                  </SelectItem>
+                  <SelectItem value="month" className="text-xs text-[#3E2723] focus:bg-[#FAF8F5] cursor-pointer">
+                    This Month
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          }
         >
-          <div className="px-2 pt-5 pb-6">
+          <div className={`px-2 pt-5 pb-6 transition-opacity duration-200 ${chartLoading ? 'opacity-50' : 'opacity-100'}`}>
             {loading ? (
               <div className="flex items-center justify-center h-56"><Spinner /></div>
             ) : rot.every(d => d.count === 0) ? (
               <div className="flex flex-col items-center justify-center h-56 gap-2">
                 <TrendingUp size={28} style={{ color: MUTED }} strokeWidth={1.4} />
-                <p className="text-xs" style={{ color: MUTED }}>No referral data for the last 7 days.</p>
+                <p className="text-xs" style={{ color: MUTED }}>
+                  No referral data for {range === '7d' ? 'the last 7 days' : range === '30d' ? 'the last 30 days' : 'this month'}.
+                </p>
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={224}>
@@ -341,7 +402,14 @@ export default function Overview({ onToast }) {
                   />
                   <XAxis
                     dataKey="date"
-                    tickFormatter={(val, idx) => (val === 'Today' || idx === rot.length - 1 ? 'Today' : val)}
+                    interval={range === '7d' ? 0 : 'preserveStartEnd'}
+                    minTickGap={range === '7d' ? 0 : 20}
+                    tickFormatter={(val, idx) => {
+                      if (range === '7d') {
+                        return (val === 'Today' || idx === rot.length - 1) ? 'Today' : val;
+                      }
+                      return val;
+                    }}
                     tick={{ fill: MUTED, fontSize: 11 }}
                     axisLine={false}
                     tickLine={false}
@@ -362,8 +430,11 @@ export default function Overview({ onToast }) {
                     dataKey="count"
                     stroke={BRAND}
                     strokeWidth={2.5}
-                    dot={{ r: 4, fill: '#fff', stroke: BRAND, strokeWidth: 2.5 }}
+                    dot={{ r: range === '7d' ? 4 : 2.5, fill: '#fff', stroke: BRAND, strokeWidth: range === '7d' ? 2.5 : 1.5 }}
                     activeDot={{ r: 6, fill: BRAND, stroke: '#fff', strokeWidth: 2 }}
+                    isAnimationActive={true}
+                    animationDuration={400}
+                    animationEasing="ease-in-out"
                   />
                 </LineChart>
               </ResponsiveContainer>

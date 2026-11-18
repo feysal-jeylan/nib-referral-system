@@ -7,13 +7,66 @@
 
 'use strict';
 
+const { Prisma } = require('@prisma/client');
 const prisma = require('@/config/db');
+
+/**
+ * Returns time-series referral volume for the specified date range.
+ * Supports: '7d' (default), '30d', and 'month' (current calendar month to date).
+ * Uses PostgreSQL generate_series with DATE_TRUNC to ensure continuous date bins.
+ *
+ * @param {'7d' | '30d' | 'month'} [range='7d']
+ * @returns {Promise<Array<{ date: string, day: string, dayName: string, shortDate: string, fullDate: string, count: number }>>}
+ */
+async function referralsOverTime(range = '7d') {
+  const normalizedRange = ['7d', '30d', 'month'].includes(range) ? range : '7d';
+
+  let startDateSql;
+  if (normalizedRange === '30d') {
+    startDateSql = Prisma.sql`CURRENT_DATE - INTERVAL '29 days'`;
+  } else if (normalizedRange === 'month') {
+    startDateSql = Prisma.sql`DATE_TRUNC('month', CURRENT_DATE)::date`;
+  } else {
+    startDateSql = Prisma.sql`CURRENT_DATE - INTERVAL '6 days'`;
+  }
+
+  const raw = await prisma.$queryRaw`
+    SELECT
+      TO_CHAR(day::date, 'YYYY-MM-DD')     AS full_date,
+      TRIM(TO_CHAR(day::date, 'Dy'))       AS day_name,
+      TRIM(TO_CHAR(day::date, 'Mon FMDD')) AS short_date,
+      COUNT(r.id)::int                     AS count
+    FROM generate_series(
+      ${startDateSql},
+      CURRENT_DATE,
+      INTERVAL '1 day'
+    ) AS day
+    LEFT JOIN referrals r
+      ON r.created_at::date = day::date
+    GROUP BY day::date
+    ORDER BY day::date ASC
+  `;
+
+  return raw.map((r, idx, arr) => {
+    const isToday = idx === arr.length - 1;
+    return {
+      date:      normalizedRange === '7d' ? (isToday ? 'Today' : r.day_name) : r.short_date,
+      day:       r.day_name,
+      dayName:   r.day_name,
+      shortDate: r.short_date,
+      fullDate:  r.full_date,
+      count:     Number(r.count ?? 0),
+    };
+  });
+}
 
 /**
  * Returns operational KPI stats for the Overview page in a single call.
  * Uses Promise.all so all queries run in parallel.
+ *
+ * @param {'7d' | '30d' | 'month'} [range='7d']
  */
-async function getDashboardStats() {
+async function getDashboardStats(range = '7d') {
   // ── Parallel aggregate queries ────────────────────────────────────────────
   const [
     totalAgents,
@@ -22,9 +75,9 @@ async function getDashboardStats() {
     pendingApprovals,
     activeCampaigns,
     topAgentsRaw,
-    referralsRaw,       // guaranteed 7-day timeline ending TODAY via generate_series
-    campaignDist,       // per-campaign successful referral counts
-    recentActivity,     // 5 most recent referrals
+    referralsTimeline,   // dynamic time-series timeline based on requested range
+    campaignDist,        // per-campaign successful referral counts
+    recentActivity,      // 5 most recent referrals
   ] = await Promise.all([
 
     // 1. Total APPROVED agent count
@@ -56,23 +109,8 @@ async function getDashboardStats() {
       LIMIT 5
     `,
 
-    // 7. Referrals over last 7 days — guaranteed 7-day timeline ending TODAY
-    //    Uses CURRENT_DATE and generate_series to fill missing dates with 0
-    prisma.$queryRaw`
-      SELECT
-        TO_CHAR(day::date, 'YYYY-MM-DD') AS full_date,
-        TRIM(TO_CHAR(day::date, 'Dy'))   AS day_name,
-        COUNT(r.id)::int                 AS count
-      FROM generate_series(
-        CURRENT_DATE - INTERVAL '6 days',
-        CURRENT_DATE,
-        INTERVAL '1 day'
-      ) AS day
-      LEFT JOIN referrals r
-        ON r.created_at::date = day::date
-      GROUP BY day::date
-      ORDER BY day::date ASC
-    `,
+    // 7. Dynamic Referrals timeline based on range ('7d', '30d', 'month')
+    referralsOverTime(range),
 
     // 8. Campaign distribution — successful referrals per campaign (top 8)
     prisma.$queryRaw`
@@ -108,17 +146,6 @@ async function getDashboardStats() {
     ? Number(((successfulReferrals / totalReferrals) * 100).toFixed(1))
     : 0;
 
-  // ── Build the 7-day series with "Today" as the final point ───────────────
-  const referralsOverTime = referralsRaw.map((r, idx, arr) => {
-    const isToday = idx === arr.length - 1;
-    return {
-      date:     isToday ? 'Today' : r.day_name,
-      day:      r.day_name,
-      fullDate: r.full_date,
-      count:    Number(r.count ?? 0),
-    };
-  });
-
   return {
     totalAgents:          Number(totalAgents),
     totalReferrals:       Number(totalReferrals),
@@ -132,7 +159,7 @@ async function getDashboardStats() {
       successful_count: Number(a.successful_count ?? 0),
       successfulCount:  Number(a.successful_count ?? 0),
     })),
-    referralsOverTime,
+    referralsOverTime:    referralsTimeline,
     campaignDistribution: campaignDist.map(r => ({
       name:  r.name,
       count: Number(r.count),
@@ -148,4 +175,7 @@ async function getDashboardStats() {
   };
 }
 
-module.exports = { getDashboardStats };
+module.exports = {
+  getDashboardStats,
+  referralsOverTime,
+};

@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Clock,
   ShieldAlert,
+  Download,
 } from 'lucide-react';
 import api from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -94,6 +95,65 @@ export default function FinancePage({ onToast }) {
     }
   }
 
+  // ── CSV Data Export ─────────────────────────────────────────────────────────
+  function handleExportCSV() {
+    const list = financeData?.agents ?? [];
+    if (!list || list.length === 0) {
+      onToast?.({ type: 'warning', message: 'No financial records available to export.' });
+      return;
+    }
+
+    // CSV Header row
+    const headers = [
+      '"Agent Name"',
+      '"Email"',
+      '"Phone"',
+      '"Successful Referrals"',
+      '"Total Earned (ETB)"',
+      '"Payout Status"',
+    ];
+
+    // RFC-4180 CSV escaping: double up internal double-quotes
+    const escapeCsv = (val) => {
+      if (val === null || val === undefined) return '';
+      return String(val).replace(/"/g, '""');
+    };
+
+    const rows = list.map((agent) => {
+      const name = escapeCsv(agent.name || '');
+      const email = escapeCsv(agent.email || '');
+      const phone = escapeCsv(agent.phone || '');
+
+      // Raw numeric values without commas or currency labels
+      const rawReferrals = Number(String(agent.successful_referrals ?? 0).replace(/[^0-9]/g, '')) || 0;
+      const rawTotalEarned = Number(String(agent.total_earned ?? 0).replace(/[^0-9.]/g, '')) || 0;
+
+      const payoutStatus = escapeCsv(
+        agent.payout_status || (Number(agent.available_balance ?? 0) > 0 ? 'PENDING' : 'PAID')
+      );
+
+      return `"${name}","${email}","${phone}","${rawReferrals}","${rawTotalEarned}","${payoutStatus}"`;
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\r\n');
+
+    // Prepend UTF-8 BOM so Excel opens with proper character encoding
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    const today = new Date().toISOString().split('T')[0];
+    link.setAttribute('href', url);
+    link.setAttribute('download', `NIB_Finance_Payouts_${today}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    onToast?.({ type: 'success', message: 'Financial ledger exported to CSV successfully.' });
+  }
+
   // ── Guard ──────────────────────────────────────────────────────────────────
   if (!canView) {
     return <AccessDenied onGoHome={() => useAppStore.getState().setActivePage('overview')} />;
@@ -118,11 +178,28 @@ export default function FinancePage({ onToast }) {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleExportCSV}
+            disabled={loading || agentsList.length === 0}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition hover:bg-stone-50 disabled:opacity-50 cursor-pointer shadow-2xs"
+            style={{
+              borderColor: 'rgba(138,77,31,0.28)',
+              color: BRAND,
+              background: '#fff',
+            }}
+          >
+            <Download size={14} style={{ color: BRAND }} />
+            <span>Export CSV</span>
+          </Button>
+
           <button
             onClick={fetchFinanceData}
             title="Refresh Ledger"
             disabled={loading}
-            className="p-2 rounded-lg border transition hover:bg-stone-50 disabled:opacity-50"
+            className="p-2 rounded-lg border transition hover:bg-stone-50 disabled:opacity-50 cursor-pointer"
             style={{ borderColor: BORDER, color: MUTED, background: '#fff' }}
           >
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />

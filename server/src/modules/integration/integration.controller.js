@@ -185,10 +185,69 @@ async function deleteLog(req, res, next) {
   }
 }
 
+// ── DELETE /api/integration/logs/bulk (ADMIN) ─────────────────────────────────
+async function bulkDelete(req, res, next) {
+  try {
+    const { ids } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        error: 'Invalid request: "ids" must be a non-empty array of numbers.',
+        code: 'INVALID_IDS',
+      });
+    }
+
+    const hasInvalid = ids.some(id => typeof id !== 'number' || isNaN(id));
+    if (hasInvalid) {
+      return res.status(400).json({
+        error: 'All IDs must be valid numbers.',
+        code: 'INVALID_ID_FORMAT',
+      });
+    }
+
+    const count = await svc.bulkDeleteLogs(ids);
+
+    return res.status(200).json({
+      message: `${count} logs deleted`,
+      count,
+    });
+  } catch (err) {
+    console.error('[DELETE /api/integration/logs/bulk] Error:', err.message);
+    next(err);
+  }
+}
+
+// ── DELETE /api/integration/logs/clear-old (ADMIN) ────────────────────────────
+async function clearOld(req, res, next) {
+  try {
+    const rawDays = req.body?.days;
+    const days = rawDays !== undefined ? parseInt(rawDays, 10) : 30;
+
+    if (isNaN(days) || days < 1) {
+      return res.status(400).json({
+        error: '"days" parameter must be a positive integer.',
+        code: 'INVALID_DAYS',
+      });
+    }
+
+    const count = await svc.clearOldLogs(days);
+
+    return res.status(200).json({
+      message: `${count} logs deleted`,
+      count,
+    });
+  } catch (err) {
+    console.error('[DELETE /api/integration/logs/clear-old] Error:', err.message);
+    next(err);
+  }
+}
+
 module.exports = {
   accountOpened,
   getLogs,
   retryLog,
   deleteLog,
+  bulkDelete,
+  clearOld,
 };
 
