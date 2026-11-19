@@ -16,7 +16,8 @@
  * Props: user, isAdmin, onToast
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   UserCog, Plus, Search, RefreshCw, X, MoreVertical,
 } from 'lucide-react';
@@ -47,6 +48,13 @@ const MUTED     = '#9C8577';
 const IVORY     = '#FAF8F5';
 const BORDER    = 'rgba(138,77,31,0.12)';
 
+// ── Query key factory ─────────────────────────────────────────────────────────
+const userKeys = {
+  all:   ()             => ['users'],
+  list:  (page, search) => ['users', page, search],
+  roles: ()             => ['roles'],
+};
+
 // ── Pill helper ───────────────────────────────────────────────────────────────
 function Pill({ children, color = MUTED, bg = 'rgba(138,77,31,0.08)', border = BORDER }) {
   return (
@@ -69,116 +77,152 @@ function SuspendedPill({ suspended }) {
 export default function UsersPage({ onToast }) {
   const currentUser = useAppStore(s => s.user);
   const { hasPermission, hasAnyPermission, isAdmin } = usePermissions();
+  const queryClient = useQueryClient();
 
   const canView        = hasAnyPermission(['view_users', 'manage_users']);
   const canManage      = hasPermission('manage_users');
   const canAssignRoles = hasPermission('manage_roles');
 
-  // ── Table state ───────────────────────────────────────────────────────────
-  const [users,   setUsers]   = useState([]);
-  const [meta,    setMeta]    = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [page,    setPage]    = useState(1);
-  const [search,  setSearch]  = useState('');
+  // ── Filter / pagination state ─────────────────────────────────────────────
+  const [page,        setPage]        = useState(1);
+  const [search,      setSearch]      = useState('');
   const [searchInput, setSearchInput] = useState('');
-
-  // ── Available roles (for dropdowns) ──────────────────────────────────────
-  const [allRoles,       setAllRoles]       = useState([]);
-  const [rolesLoading,   setRolesLoading]   = useState(false);
+  const debounceRef = useRef(null);
 
   // ── Modals ────────────────────────────────────────────────────────────────
   const [createOpen,       setCreateOpen]       = useState(false);
   const [editUser,         setEditUser]         = useState(null);   // user object for edit
   const [confirmUser,      setConfirmUser]      = useState(null);   // { user, action: 'suspend'|'activate' }
   const [deleteUserTarget, setDeleteUserTarget] = useState(null);   // user object to delete
-  const [deleting,         setDeleting]         = useState(false);
 
   // ── Create form state ─────────────────────────────────────────────────────
-  const [form,       setForm]       = useState({ username: '', email: '', password: '', roleName: '' });
-  const [formError,  setFormError]  = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [form,      setForm]      = useState({ username: '', email: '', password: '', roleName: '' });
+  const [formError, setFormError] = useState('');
 
   // ── Edit: roles state ──────────────────────────────────────────────────────
-  const [editRoles,       setEditRoles]       = useState([]);
+  const [editRoles,        setEditRoles]        = useState([]);
   const [editRolesLoading, setEditRolesLoading] = useState(false);
-  const [roleToAdd,       setRoleToAdd]       = useState('');
-  const [roleOpLoading,   setRoleOpLoading]   = useState(false);
+  const [roleToAdd,        setRoleToAdd]        = useState('');
+  const [roleOpLoading,    setRoleOpLoading]    = useState(false);
 
-  // ── Fetch users ───────────────────────────────────────────────────────────
-  const fetchUsers = useCallback(async (pg = page, q = search) => {
-    setLoading(true);
-    try {
-      const res = await usersApi.listUsers({ page: pg, limit: 20, search: q });
-      setUsers(res.data.users ?? []);
-      setMeta(res.data.meta ?? null);
-    } catch (err) {
-      onToast?.({ type: 'error', message: '🔴 Failed to load users.' });
-    } finally {
-      setLoading(false);
-    }
-  }, [page, search]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── Invalidation helper ───────────────────────────────────────────────────
+  const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: userKeys.all() });
 
+  // ── Debounced search ──────────────────────────────────────────────────────
   useEffect(() => {
-    if (canView) fetchUsers(page, search);
-  }, [page, search, canView]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Fetch roles for dropdowns ─────────────────────────────────────────────
-  useEffect(() => {
-    // Requires manage_roles or manage_users to fetch the roles list
-    if (!canManage && !canAssignRoles) return;
-    setRolesLoading(true);
-    rbacApi.getRoles()
-      .then(res => setAllRoles(res.data.data ?? []))
-      .catch(() => {})
-      .finally(() => setRolesLoading(false));
-  }, [canManage, canAssignRoles]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Search with debounce ───────────────────────────────────────────────────
-  useEffect(() => {
-    const t = setTimeout(() => {
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
       setPage(1);
       setSearch(searchInput);
     }, 400);
-    return () => clearTimeout(t);
+    return () => clearTimeout(debounceRef.current);
   }, [searchInput]);
 
-  // ── Create user ────────────────────────────────────────────────────────────
-  async function handleCreate(e) {
-    e.preventDefault();
-    setFormError('');
-    if (!form.username || !form.password) {
-      setFormError('Username and password are required.');
-      return;
-    }
-    if (form.password.length < 8) {
-      setFormError('Password must be at least 8 characters.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await usersApi.createUser(form);
+  // ── useQuery: users list ──────────────────────────────────────────────────
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: userKeys.list(page, search),
+    queryFn:  async () => {
+      const res = await usersApi.listUsers({ page, limit: 20, search });
+      return res.data;
+    },
+    enabled: canView,
+  });
+
+  const users = data?.users ?? [];
+  const meta  = data?.meta  ?? null;
+
+  // ── useQuery: roles list (for dropdowns) ──────────────────────────────────
+  const { data: rolesData, isLoading: rolesLoading } = useQuery({
+    queryKey: userKeys.roles(),
+    queryFn:  async () => {
+      const res = await rbacApi.getRoles();
+      return res.data.data ?? [];
+    },
+    enabled: canManage || canAssignRoles,
+    staleTime: 1000 * 60 * 10, // roles rarely change — cache 10 min
+  });
+
+  const allRoles = rolesData ?? [];
+
+  // ── useMutation: create user ──────────────────────────────────────────────
+  const createMutation = useMutation({
+    mutationFn: (payload) => usersApi.createUser(payload),
+    onSuccess: (_, variables) => {
       setCreateOpen(false);
       setForm({ username: '', email: '', password: '', roleName: '' });
-      onToast?.({ type: 'success', message: `✅ User "${form.username}" created.` });
-      fetchUsers(1, search);
       setPage(1);
-    } catch (err) {
+      onToast?.({ type: 'success', message: `✅ User "${variables.username}" created.` });
+      invalidateUsers();
+    },
+    onError: (err) => {
       const msg = err.response?.data?.error ?? 'Failed to create user.';
       setFormError(msg);
-    } finally {
-      setSubmitting(false);
-    }
-  }
+    },
+  });
+
+  // ── useMutation: suspend user ─────────────────────────────────────────────
+  const suspendMutation = useMutation({
+    mutationFn: (id) => usersApi.suspendUser(id),
+    onSuccess: (_, __, ctx) => {
+      onToast?.({ type: 'success', message: `✅ Account suspended.` });
+      setConfirmUser(null);
+      invalidateUsers();
+    },
+    onError: (err) => {
+      const msg = err.response?.data?.error ?? 'Operation failed.';
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+    },
+  });
+
+  // ── useMutation: activate user ────────────────────────────────────────────
+  const activateMutation = useMutation({
+    mutationFn: (id) => usersApi.activateUser(id),
+    onSuccess: () => {
+      onToast?.({ type: 'success', message: `✅ Account reactivated.` });
+      setConfirmUser(null);
+      invalidateUsers();
+    },
+    onError: (err) => {
+      const msg = err.response?.data?.error ?? 'Operation failed.';
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+    },
+  });
+
+  // ── useMutation: delete user ──────────────────────────────────────────────
+  const deleteMutation = useMutation({
+    mutationFn: (id) => usersApi.deleteUser(id),
+    onSuccess: (_, id) => {
+      const username = deleteUserTarget?.username ?? '';
+      onToast?.({ type: 'success', message: `🗑️ User "${username}" deleted successfully.` });
+      setDeleteUserTarget(null);
+      invalidateUsers();
+    },
+    onError: (err) => {
+      const msg = err.response?.data?.error ?? 'Failed to delete user.';
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+      setDeleteUserTarget(null);
+    },
+  });
+
+  // Derived loading flags
+  const submitting = createMutation.isPending;
+  const statusSubmitting = suspendMutation.isPending || activateMutation.isPending;
+  const deleting   = deleteMutation.isPending;
 
   // ── Helper: Map raw roles to full role objects ────────────────────────────
-  const resolveRoleObjects = useCallback((rawRoles) => {
+  function resolveRoleObjects(rawRoles) {
     return (rawRoles ?? []).map(r => {
       if (typeof r === 'object' && r !== null && r.id && r.name) return r;
       const roleName = typeof r === 'string' ? r : r?.name;
       const found = allRoles.find(ar => ar.name === roleName);
       return found || { id: found?.id ?? null, name: roleName };
     });
-  }, [allRoles]);
+  }
 
   // ── Open edit modal ────────────────────────────────────────────────────────
   async function openEdit(u) {
@@ -207,7 +251,7 @@ export default function UsersPage({ onToast }) {
       setEditRoles(resolveRoleObjects(rolesList));
       setRoleToAdd('');
       onToast?.({ type: 'success', message: `✅ Role "${roleToAdd}" assigned.` });
-      fetchUsers(page, search);
+      invalidateUsers();
     } catch (err) {
       const msg = err.response?.data?.error ?? 'Failed to assign role.';
       onToast?.({ type: 'error', message: `❌ ${msg}` });
@@ -226,15 +270,13 @@ export default function UsersPage({ onToast }) {
         const found = allRoles.find(ar => ar.name === roleName);
         id = found?.id;
       }
-      if (!id) {
-        throw new Error('Role ID could not be resolved.');
-      }
+      if (!id) throw new Error('Role ID could not be resolved.');
       await rbacApi.removeRoleFromUser(editUser.id, id);
       const res = await rbacApi.getUserRoles(editUser.id);
       const rolesList = res.data.roleObjects || res.data.roles || [];
       setEditRoles(resolveRoleObjects(rolesList));
       onToast?.({ type: 'success', message: `✅ Role "${roleName}" removed.` });
-      fetchUsers(page, search);
+      invalidateUsers();
     } catch (err) {
       const msg = err.response?.data?.error ?? 'Failed to remove role.';
       onToast?.({ type: 'error', message: `❌ ${msg}` });
@@ -243,44 +285,29 @@ export default function UsersPage({ onToast }) {
     }
   }
 
-  // ── Suspend / Activate ────────────────────────────────────────────────────
-  async function handleStatusChange() {
-    if (!confirmUser) return;
-    const { user: u, action } = confirmUser;
-    setSubmitting(true);
-    try {
-      if (action === 'suspend') {
-        await usersApi.suspendUser(u.id);
-        onToast?.({ type: 'success', message: `✅ Account "${u.username}" suspended.` });
-      } else {
-        await usersApi.activateUser(u.id);
-        onToast?.({ type: 'success', message: `✅ Account "${u.username}" reactivated.` });
-      }
-      setConfirmUser(null);
-      fetchUsers(page, search);
-    } catch (err) {
-      const msg = err.response?.data?.error ?? 'Operation failed.';
-      onToast?.({ type: 'error', message: `❌ ${msg}` });
-    } finally {
-      setSubmitting(false);
+  // ── Create user handler ────────────────────────────────────────────────────
+  function handleCreate(e) {
+    e.preventDefault();
+    setFormError('');
+    if (!form.username || !form.password) {
+      setFormError('Username and password are required.');
+      return;
     }
+    if (form.password.length < 8) {
+      setFormError('Password must be at least 8 characters.');
+      return;
+    }
+    createMutation.mutate(form);
   }
 
-  // ── Delete User ────────────────────────────────────────────────────────────
-  async function handleDeleteUser() {
-    if (!deleteUserTarget) return;
-    setDeleting(true);
-    try {
-      await usersApi.deleteUser(deleteUserTarget.id);
-      onToast?.({ type: 'success', message: `🗑️ User "${deleteUserTarget.username}" deleted successfully.` });
-      setDeleteUserTarget(null);
-      fetchUsers(page, search);
-    } catch (err) {
-      const msg = err.response?.data?.error ?? 'Failed to delete user.';
-      onToast?.({ type: 'error', message: `❌ ${msg}` });
-      setDeleteUserTarget(null);
-    } finally {
-      setDeleting(false);
+  // ── Suspend / Activate handler ────────────────────────────────────────────
+  function handleStatusChange() {
+    if (!confirmUser) return;
+    const { user: u, action } = confirmUser;
+    if (action === 'suspend') {
+      suspendMutation.mutate(u.id);
+    } else {
+      activateMutation.mutate(u.id);
     }
   }
 
@@ -305,7 +332,7 @@ export default function UsersPage({ onToast }) {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => fetchUsers(page, search)}
+            onClick={() => refetch()}
             title="Refresh"
             className="p-2 rounded-lg border transition"
             style={{ borderColor: BORDER, color: MUTED, background: '#fff' }}
@@ -340,10 +367,16 @@ export default function UsersPage({ onToast }) {
         className="bg-white rounded-xl shadow-sm overflow-hidden"
         style={{ border: `1px solid ${BORDER}` }}
       >
-        {loading ? (
+        {isLoading ? (
           <div className="flex items-center justify-center py-20">
             <Spinner size={28} style={{ color: BRAND }} />
           </div>
+        ) : isError ? (
+          <EmptyState
+            icon={UserCog}
+            title="Failed to load users"
+            description="An error occurred. Try refreshing."
+          />
         ) : users.length === 0 ? (
           <EmptyState
             icon={UserCog}
@@ -490,7 +523,7 @@ export default function UsersPage({ onToast }) {
             <DataTablePagination
               meta={meta}
               onPageChange={(p) => setPage(p)}
-              loading={loading}
+              loading={isLoading}
             />
           </>
         )}
@@ -693,13 +726,13 @@ export default function UsersPage({ onToast }) {
             <Button variant="outline" onClick={() => setConfirmUser(null)}>Cancel</Button>
             <Button
               onClick={handleStatusChange}
-              disabled={submitting}
+              disabled={statusSubmitting}
               className="text-white font-semibold"
               style={{
                 background: confirmUser?.action === 'suspend' ? '#b91c1c' : '#15803d',
               }}
             >
-              {submitting
+              {statusSubmitting
                 ? <Spinner size={15} />
                 : confirmUser?.action === 'suspend' ? 'Suspend' : 'Activate'
               }
@@ -725,7 +758,7 @@ export default function UsersPage({ onToast }) {
             </Button>
             <Button
               variant="destructive"
-              onClick={handleDeleteUser}
+              onClick={() => deleteMutation.mutate(deleteUserTarget?.id)}
               disabled={deleting}
               className="bg-[#C0392B] hover:bg-[#a93226] text-white font-semibold"
             >
@@ -737,4 +770,3 @@ export default function UsersPage({ onToast }) {
     </div>
   );
 }
-

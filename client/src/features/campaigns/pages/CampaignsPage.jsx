@@ -1,16 +1,13 @@
 /**
  * features/campaigns/pages/CampaignsPage.jsx
  * ────────────────────────────────────────────
- * Campaign management interface for Admins:
- *   - Page header with "+ New Campaign" modal trigger
- *   - Modal (shadcn Dialog) hosting the full Rules Builder CampaignForm
- *   - Minimal-row data table with details dialog, edit dialog, delete dialog
- *   - Status filtering, search, and server-side pagination
- *
+ * Campaign management interface for Admins.
+ * Data fetching: TanStack Query (useQuery + useMutation)
  * Props: user, isAdmin, onToast
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import api from '@/services/api';
 import usePermissions from '@/features/auth/usePermissions';
@@ -37,6 +34,7 @@ const CHOCOLATE = '#3E2723';
 const MUTED     = '#9C8577';
 const BORDER    = 'rgba(138,77,31,0.10)';
 const IVORY     = '#FAF8F5';
+const LIMIT     = 10;
 
 const STATUS_OPTIONS = [
   { value: '',       label: 'All Statuses' },
@@ -48,6 +46,12 @@ const EDIT_INPUT_CLS =
   'w-full px-3 py-2 bg-[#FAF8F5] border border-[rgba(138,77,31,0.18)] rounded text-sm ' +
   'text-[#1C0F05] placeholder-[#9C8577] outline-none transition-all ' +
   'focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] focus:bg-white';
+
+// ── Query key factory ────────────────────────────────────────────────────────
+const campaignKeys = {
+  all:  () => ['campaigns'],
+  list: (page, status, search) => ['campaigns', page, status, search],
+};
 
 // ── Delete Dialog ─────────────────────────────────────────────────────────────
 function DeleteDialog({ open, campaignName, onConfirm, onCancel, loading }) {
@@ -82,8 +86,8 @@ function DeleteDialog({ open, campaignName, onConfirm, onCancel, loading }) {
 // ── Details Dialog ────────────────────────────────────────────────────────────
 function DetailsDialog({ campaign, open, onClose, onDelete, onEdit, onActivate, actioning, canManage = false }) {
   if (!campaign) return null;
-  const rules  = Array.isArray(campaign.rules) ? campaign.rules : [];
-  const busy   = actioning.has(campaign.id);
+  const rules = Array.isArray(campaign.rules) ? campaign.rules : [];
+  const busy  = actioning.has(campaign.id);
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
@@ -96,7 +100,6 @@ function DetailsDialog({ campaign, open, onClose, onDelete, onEdit, onActivate, 
         </DialogHeader>
 
         <div className="space-y-4 py-2 text-sm">
-          {/* Hierarchy badge */}
           {(campaign.parent_id || (campaign.children && campaign.children.length > 0)) && (
             <div
               className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
@@ -121,7 +124,6 @@ function DetailsDialog({ campaign, open, onClose, onDelete, onEdit, onActivate, 
             </div>
           )}
 
-          {/* Meta */}
           <div className="grid grid-cols-2 gap-3">
             <InfoRow label="Campaign Code" value={campaign.campaign_code
               ? <code className="font-mono text-xs bg-[#FAF8F5] border border-[rgba(138,77,31,0.15)] px-2 py-0.5 rounded" style={{ color: BRAND }}>{campaign.campaign_code}</code>
@@ -140,7 +142,6 @@ function DetailsDialog({ campaign, open, onClose, onDelete, onEdit, onActivate, 
             )}
           </div>
 
-          {/* Rules */}
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: MUTED }}>
               Qualification Rules ({rules.length})
@@ -230,7 +231,7 @@ function InfoRow({ label, value }) {
   );
 }
 
-// ── Edit inline dialog ────────────────────────────────────────────────────────
+// ── Edit inline dialog (keeps its own local useState for form — intentional) ──
 function EditDialog({ campaign, open, onClose, onSaved, onToast }) {
   const [form,   setForm]   = useState({});
   const [saving, setSaving] = useState(false);
@@ -328,97 +329,99 @@ function EditDialog({ campaign, open, onClose, onSaved, onToast }) {
 export default function CampaignsPage({ user, isAdmin, onToast }) {
   const { hasPermission } = usePermissions();
   const canManage = hasPermission('manage_campaigns');
-  const [data,     setData]     = useState([]);
-  const [meta,     setMeta]     = useState(null);
-  const [loading,  setLoading]  = useState(true);
-  const [actioning, setActioning] = useState(new Set());
+  const queryClient = useQueryClient();
 
-  const [search,  setSearch]  = useState('');
-  const [status,  setStatus]  = useState('');
-  const [page,    setPage]    = useState(1);
-  const LIMIT = 10;
-
-  // Modal states
-  const [isFormOpen,   setIsFormOpen]   = useState(false); // New Campaign modal
-  const [viewTarget,   setViewTarget]   = useState(null);  // campaign for details dialog
-  const [deleteTarget, setDeleteTarget] = useState(null);  // { id, name }
-  const [editTarget,   setEditTarget]   = useState(null);  // campaign for edit dialog
-  const [deleting,     setDeleting]     = useState(false);
-
+  // ── Filter / pagination state ─────────────────────────────────────────────
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [page,   setPage]   = useState(1);
   const debounceRef = useRef(null);
 
-  const fetchCampaigns = useCallback(async (pg, srch, st) => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page: pg, limit: LIMIT,
-        ...(srch ? { search: srch } : {}),
-        ...(st   ? { status: st   } : {}),
-      });
-      const { data: res } = await api.get(`/campaigns?${params}`);
-      // Support both new { data, meta } and legacy { campaigns } shapes
-      setData(res.data ?? res.campaigns ?? []);
-      setMeta(res.meta ?? null);
-    } catch {
+  // ── UI-only state ─────────────────────────────────────────────────────────
+  const [actioning,    setActioning]    = useState(new Set());
+  const [isFormOpen,   setIsFormOpen]   = useState(false);
+  const [viewTarget,   setViewTarget]   = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [editTarget,   setEditTarget]   = useState(null);
+
+  // ── useQuery: fetch campaigns ─────────────────────────────────────────────
+  const { data: queryData, isLoading } = useQuery({
+    queryKey: campaignKeys.list(page, status, search),
+    queryFn: async () => {
+      const params = {
+        page, limit: LIMIT,
+        ...(search ? { search } : {}),
+        ...(status ? { status } : {}),
+      };
+      const { data: res } = await api.get('/campaigns', { params });
+      return {
+        campaigns: res.data ?? res.campaigns ?? [],
+        meta:      res.meta ?? null,
+      };
+    },
+    onError: () => {
       onToast({ type: 'error', message: '🔴 Failed to load campaigns.' });
-    } finally {
-      setLoading(false);
-    }
-  }, [onToast]);
+    },
+  });
 
-  useEffect(() => { fetchCampaigns(1, '', ''); }, [fetchCampaigns]);
+  const campaigns = queryData?.campaigns ?? [];
+  const meta      = queryData?.meta      ?? null;
 
+  // ── Invalidation helper ───────────────────────────────────────────────────
+  function invalidateCampaigns() {
+    queryClient.invalidateQueries({ queryKey: campaignKeys.all() });
+  }
+
+  // ── useMutation: Activate ─────────────────────────────────────────────────
+  const activateMutation = useMutation({
+    mutationFn: ({ id }) => api.patch(`/campaigns/${id}/activate`),
+    onMutate:   ({ id }) => setActioning(prev => new Set(prev).add(id)),
+    onSuccess:  (_, { name }) => {
+      setViewTarget(null);
+      onToast({ type: 'success', message: `✅ Campaign "${name}" is now ACTIVE.` });
+      invalidateCampaigns();
+    },
+    onError:    (err) => {
+      onToast({ type: 'error', message: err.response?.data?.error ?? 'Activation failed.' });
+    },
+    onSettled:  (_, __, { id }) => {
+      setActioning(prev => { const s = new Set(prev); s.delete(id); return s; });
+    },
+  });
+
+  // ── useMutation: Delete ───────────────────────────────────────────────────
+  const deleteMutation = useMutation({
+    mutationFn: ({ id }) => api.delete(`/campaigns/${id}`),
+    onSuccess:  (res) => {
+      setDeleteTarget(null);
+      onToast({ type: 'success', message: `🗑️ ${res.data?.message ?? 'Campaign deleted.'}` });
+      invalidateCampaigns();
+    },
+    onError:    (err) => {
+      onToast({ type: 'error', message: err.response?.data?.error ?? 'Failed to delete campaign.' });
+      setDeleteTarget(null);
+    },
+  });
+
+  // ── Filter / pagination handlers ─────────────────────────────────────────
   function handleSearchChange(val) {
     setSearch(val);
     clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => { setPage(1); fetchCampaigns(1, val, status); }, 300);
+    debounceRef.current = setTimeout(() => { setPage(1); setSearch(val); }, 300);
   }
 
-  function handleStatusChange(val) { setStatus(val); setPage(1); fetchCampaigns(1, search, val); }
-  function handlePageChange(pg)    { setPage(pg);    fetchCampaigns(pg, search, status); }
-  function refresh()               { fetchCampaigns(page, search, status); }
+  function handleStatusChange(val) { setStatus(val); setPage(1); }
+  function handlePageChange(pg)    { setPage(pg); }
 
-  // Activate
-  async function handleActivate(id, name) {
-    setActioning(prev => new Set(prev).add(id));
-    try {
-      await api.patch(`/campaigns/${id}/activate`);
-      refresh();
-      setViewTarget(null);
-      onToast({ type: 'success', message: `✅ Campaign "${name}" is now ACTIVE.` });
-    } catch (err) {
-      onToast({ type: 'error', message: err.response?.data?.error ?? 'Activation failed.' });
-    } finally {
-      setActioning(prev => { const s = new Set(prev); s.delete(id); return s; });
-    }
-  }
-
-  // Delete
   function handleDeleteRequest(id, name) { setDeleteTarget({ id, name }); setViewTarget(null); }
+  function handleEditRequest(c)          { setEditTarget(c); setViewTarget(null); }
 
-  async function handleDeleteConfirm() {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    try {
-      const { data: res } = await api.delete(`/campaigns/${deleteTarget.id}`);
-      setDeleteTarget(null);
-      refresh();
-      onToast({ type: 'success', message: `🗑️ ${res.message}` });
-    } catch (err) {
-      onToast({ type: 'error', message: err.response?.data?.error ?? 'Failed to delete campaign.' });
-      setDeleteTarget(null);
-    } finally {
-      setDeleting(false);
-    }
-  }
-
-  // Edit
-  function handleEditRequest(c) { setEditTarget(c); setViewTarget(null); }
+  const deleting = deleteMutation.isPending;
 
   return (
     <div className="p-6 space-y-6">
 
-      {/* ── 1. Page Header with "+ New Campaign" CTA ──────────────────────── */}
+      {/* ── 1. Page Header ───────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight" style={{ color: CHOCOLATE }}>
@@ -440,7 +443,7 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
         )}
       </div>
 
-      {/* ── 2. Campaign Table Section ──────────────────────────────────────── */}
+      {/* ── 2. Campaign Table Section ─────────────────────────────────────── */}
       <section
         className="bg-white rounded-xl shadow-sm overflow-hidden"
         style={{ border: `1px solid ${BORDER}` }}
@@ -471,12 +474,12 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
           statusOptions={STATUS_OPTIONS}
         />
 
-        {loading ? (
+        {isLoading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <Spinner />
             <p className="text-sm" style={{ color: MUTED }}>Loading campaigns…</p>
           </div>
-        ) : data.length === 0 ? (
+        ) : campaigns.length === 0 ? (
           <EmptyState
             icon="📋"
             title="No campaigns found"
@@ -484,7 +487,6 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
           />
         ) : (
           <>
-            {/* Minimal table */}
             <div className="overflow-x-auto w-full">
               <table className="min-w-[700px] w-full text-sm border-collapse" aria-label="Campaign list">
                 <thead>
@@ -498,7 +500,7 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.map((c, i) => (
+                  {campaigns.map((c, i) => (
                     <tr
                       key={c.id}
                       className="transition-colors duration-100"
@@ -513,10 +515,7 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
                         {c.parent_id ? (
                           <div className="ml-4">
                             <span className="truncate block">{c.name}</span>
-                            <span
-                              className="text-[10px] font-normal mt-0.5 block"
-                              style={{ color: MUTED }}
-                            >
+                            <span className="text-[10px] font-normal mt-0.5 block" style={{ color: MUTED }}>
                               ↳ Child of {c.parent?.name ?? `#${c.parent_id}`}
                             </span>
                           </div>
@@ -559,12 +558,12 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
                 </tbody>
               </table>
             </div>
-            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={loading} />
+            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
           </>
         )}
       </section>
 
-      {/* ── 3. Create Campaign Dialog (Modal) ─────────────────────────────── */}
+      {/* ── 3. Create Campaign Dialog ─────────────────────────────────────── */}
       <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-bg border border-border rounded-xl p-0 sm:max-w-4xl">
           <DialogHeader className="px-6 pt-6 pb-4 border-b border-border bg-surface sticky top-0 z-10">
@@ -575,11 +574,10 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
               Define campaign parameters, rewards, and referral qualification rules.
             </DialogDescription>
           </DialogHeader>
-
           <div className="p-6">
             <CampaignForm
               key={isFormOpen ? 'open' : 'closed'}
-              onCreated={refresh}
+              onCreated={invalidateCampaigns}
               onSuccess={() => setIsFormOpen(false)}
               onToast={onToast}
             />
@@ -587,21 +585,21 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
         </DialogContent>
       </Dialog>
 
-      {/* ── 4. Action Dialogs (Details, Delete, Inline Edit) ──────────────── */}
+      {/* ── 4. Action Dialogs ─────────────────────────────────────────────── */}
       <DetailsDialog
         campaign={viewTarget}
         open={!!viewTarget}
         onClose={() => setViewTarget(null)}
         onDelete={handleDeleteRequest}
         onEdit={handleEditRequest}
-        onActivate={handleActivate}
+        onActivate={(id, name) => activateMutation.mutate({ id, name })}
         actioning={actioning}
         canManage={canManage}
       />
       <DeleteDialog
         open={!!deleteTarget}
         campaignName={deleteTarget?.name ?? ''}
-        onConfirm={handleDeleteConfirm}
+        onConfirm={() => deleteMutation.mutate({ id: deleteTarget.id, name: deleteTarget.name })}
         onCancel={() => setDeleteTarget(null)}
         loading={deleting}
       />
@@ -609,7 +607,7 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
         campaign={editTarget}
         open={!!editTarget}
         onClose={() => setEditTarget(null)}
-        onSaved={refresh}
+        onSaved={invalidateCampaigns}
         onToast={onToast}
       />
     </div>

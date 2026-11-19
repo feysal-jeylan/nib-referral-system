@@ -2,21 +2,11 @@
  * features/finance/pages/FinancePage.jsx
  * ───────────────────────────────────────
  * Dedicated Finance & Payouts Ledger.
- *
- * Capabilities:
- *  - Real-time liability summary ("Total Outstanding Liability: X,XXX ETB")
- *  - Agent earnings & payout ledger with individual performance metrics
- *  - Settlement actions ("Mark as Paid") gated by manage_finance permission
- *  - Integrated with GET /api/dashboard/finance and PATCH /api/dashboard/finance/pay/:id
- *
- * Permissions:
- *  - View:   view_finance (or Admin)
- *  - Manage: manage_finance (or Admin)
- *
+ * Data fetching: TanStack Query (useQuery + useMutation)
  * Props: user, isAdmin, onToast
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Wallet,
   Check,
@@ -41,61 +31,52 @@ const MUTED     = '#9C8577';
 const IVORY     = '#FAF8F5';
 const BORDER    = 'rgba(138,77,31,0.12)';
 
+// ── Query key factory ─────────────────────────────────────────────────────────
+const financeKeys = {
+  all:    () => ['finance'],
+  ledger: () => ['finance', 'ledger'],
+};
+
 export default function FinancePage({ onToast }) {
   const { hasPermission, hasAnyPermission, isAdmin } = usePermissions();
+  const queryClient = useQueryClient();
 
   const canView   = hasAnyPermission(['view_finance', 'manage_finance']) || isAdmin;
   const canManage = hasPermission('manage_finance') || isAdmin;
 
-  const [financeData,  setFinanceData]  = useState(null);
-  const [loading,      setLoading]      = useState(true);
-  const [error,        setError]        = useState(false);
-  const [payingAgentId, setPayingAgentId] = useState(null);
-
-  // ── Fetch Financial Ledger ──────────────────────────────────────────────────
-  const fetchFinanceData = useCallback(async () => {
-    setLoading(true);
-    setError(false);
-    try {
+  // ── useQuery: fetch finance ledger ────────────────────────────────────────
+  const {
+    data: financeData,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: financeKeys.ledger(),
+    queryFn: async () => {
       const res = await api.get('/dashboard/finance');
-      setFinanceData(res.data);
-    } catch (err) {
-      setError(true);
+      return res.data;
+    },
+    enabled: canView,
+    onError: (err) => {
       const msg = err.response?.data?.error ?? 'Failed to load financial records.';
       onToast?.({ type: 'error', message: `🔴 ${msg}` });
-    } finally {
-      setLoading(false);
-    }
-  }, [onToast]);
+    },
+  });
 
-  useEffect(() => {
-    if (canView) {
-      fetchFinanceData();
-    }
-  }, [canView, fetchFinanceData]);
-
-  // ── Settle Payout Action ────────────────────────────────────────────────────
-  async function handleMarkAsPaid(agent) {
-    if (!canManage) {
-      onToast?.({ type: 'error', message: '❌ You lack permission to authorize payouts.' });
-      return;
-    }
-
-    setPayingAgentId(agent.id);
-    try {
-      await api.patch(`/dashboard/finance/pay/${agent.id}`);
-      const res = await api.get('/dashboard/finance');
-      setFinanceData(res.data);
+  // ── useMutation: Mark as Paid ─────────────────────────────────────────────
+  const payMutation = useMutation({
+    mutationFn: (agent) => api.patch(`/dashboard/finance/pay/${agent.id}`),
+    onSuccess: (_, agent) => {
       onToast?.({ type: 'success', message: `✅ Payout for ${agent.name} marked as settled.` });
-    } catch (err) {
+      queryClient.invalidateQueries({ queryKey: financeKeys.all() });
+    },
+    onError: (err) => {
       const msg = err.response?.data?.error ?? 'Failed to process payout settlement.';
       onToast?.({ type: 'error', message: `❌ ${msg}` });
-    } finally {
-      setPayingAgentId(null);
-    }
-  }
+    },
+  });
 
-  // ── CSV Data Export ─────────────────────────────────────────────────────────
+  // ── CSV Data Export ───────────────────────────────────────────────────────
   function handleExportCSV() {
     const list = financeData?.agents ?? [];
     if (!list || list.length === 0) {
@@ -103,7 +84,6 @@ export default function FinancePage({ onToast }) {
       return;
     }
 
-    // CSV Header row
     const headers = [
       '"Agent Name"',
       '"Email"',
@@ -113,35 +93,27 @@ export default function FinancePage({ onToast }) {
       '"Payout Status"',
     ];
 
-    // RFC-4180 CSV escaping: double up internal double-quotes
     const escapeCsv = (val) => {
       if (val === null || val === undefined) return '';
       return String(val).replace(/"/g, '""');
     };
 
     const rows = list.map((agent) => {
-      const name = escapeCsv(agent.name || '');
+      const name  = escapeCsv(agent.name  || '');
       const email = escapeCsv(agent.email || '');
       const phone = escapeCsv(agent.phone || '');
-
-      // Raw numeric values without commas or currency labels
-      const rawReferrals = Number(String(agent.successful_referrals ?? 0).replace(/[^0-9]/g, '')) || 0;
-      const rawTotalEarned = Number(String(agent.total_earned ?? 0).replace(/[^0-9.]/g, '')) || 0;
-
-      const payoutStatus = escapeCsv(
+      const rawReferrals   = Number(String(agent.successful_referrals ?? 0).replace(/[^0-9]/g, ''))    || 0;
+      const rawTotalEarned = Number(String(agent.total_earned         ?? 0).replace(/[^0-9.]/g, '')) || 0;
+      const payoutStatus   = escapeCsv(
         agent.payout_status || (Number(agent.available_balance ?? 0) > 0 ? 'PENDING' : 'PAID')
       );
-
       return `"${name}","${email}","${phone}","${rawReferrals}","${rawTotalEarned}","${payoutStatus}"`;
     });
 
     const csvContent = [headers.join(','), ...rows].join('\r\n');
-
-    // Prepend UTF-8 BOM so Excel opens with proper character encoding
     const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
+    const url  = URL.createObjectURL(blob);
     const link = document.createElement('a');
-
     const today = new Date().toISOString().split('T')[0];
     link.setAttribute('href', url);
     link.setAttribute('download', `NIB_Finance_Payouts_${today}.csv`);
@@ -150,17 +122,17 @@ export default function FinancePage({ onToast }) {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-
     onToast?.({ type: 'success', message: 'Financial ledger exported to CSV successfully.' });
   }
 
-  // ── Guard ──────────────────────────────────────────────────────────────────
+  // ── Guard ─────────────────────────────────────────────────────────────────
   if (!canView) {
     return <AccessDenied onGoHome={() => useAppStore.getState().setActivePage('overview')} />;
   }
 
   const agentsList     = financeData?.agents ?? [];
   const totalLiability = financeData?.total_payout ?? financeData?.totalLiability ?? 0;
+  const payingAgentId  = payMutation.isPending ? payMutation.variables?.id : null;
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto" style={{ background: IVORY, minHeight: '100%' }}>
@@ -183,33 +155,30 @@ export default function FinancePage({ onToast }) {
             variant="outline"
             size="sm"
             onClick={handleExportCSV}
-            disabled={loading || agentsList.length === 0}
+            disabled={isLoading || agentsList.length === 0}
             className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition hover:bg-stone-50 disabled:opacity-50 cursor-pointer shadow-2xs"
-            style={{
-              borderColor: 'rgba(138,77,31,0.28)',
-              color: BRAND,
-              background: '#fff',
-            }}
+            style={{ borderColor: 'rgba(138,77,31,0.28)', color: BRAND, background: '#fff' }}
           >
             <Download size={14} style={{ color: BRAND }} />
             <span>Export CSV</span>
           </Button>
 
           <button
-            onClick={fetchFinanceData}
+            onClick={() => refetch()}
             title="Refresh Ledger"
-            disabled={loading}
+            disabled={isLoading}
             className="p-2 rounded-lg border transition hover:bg-stone-50 disabled:opacity-50 cursor-pointer"
             style={{ borderColor: BORDER, color: MUTED, background: '#fff' }}
           >
-            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+            <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
           </button>
+
           <span
             className="text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full border shadow-2xs"
             style={{
-              background: canManage ? 'rgba(138,77,31,0.10)' : 'rgba(156,133,119,0.12)',
-              borderColor: canManage ? 'rgba(138,77,31,0.25)' : 'rgba(156,133,119,0.25)',
-              color: canManage ? BRAND : MUTED,
+              background:   canManage ? 'rgba(138,77,31,0.10)' : 'rgba(156,133,119,0.12)',
+              borderColor:  canManage ? 'rgba(138,77,31,0.25)' : 'rgba(156,133,119,0.25)',
+              color:        canManage ? BRAND : MUTED,
             }}
           >
             {canManage ? '💼 Payout Authority' : '👁️ View Only'}
@@ -237,7 +206,7 @@ export default function FinancePage({ onToast }) {
               Total Outstanding Liability
             </p>
             <h3 className="text-3xl font-extrabold tracking-tight tabular-nums mt-0.5" style={{ color: CHOCOLATE }}>
-              {loading ? '—' : `${Number(totalLiability).toLocaleString()} ETB`}
+              {isLoading ? '—' : `${Number(totalLiability).toLocaleString()} ETB`}
             </h3>
             <p className="text-xs mt-0.5" style={{ color: MUTED }}>
               Cumulative referral rewards accrued across approved agents.
@@ -275,19 +244,19 @@ export default function FinancePage({ onToast }) {
           </span>
         </div>
 
-        {loading ? (
+        {isLoading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
             <Spinner size={28} style={{ color: BRAND }} />
             <p className="text-xs font-medium" style={{ color: MUTED }}>Synchronizing financial ledger…</p>
           </div>
-        ) : error ? (
+        ) : isError ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
             <ShieldAlert size={36} className="text-red-500" />
             <p className="text-sm font-semibold" style={{ color: CHOCOLATE }}>Failed to load financial records</p>
             <p className="text-xs max-w-sm" style={{ color: MUTED }}>
               Unable to reach the core referral finance service. Please try again.
             </p>
-            <Button onClick={fetchFinanceData} variant="outline" size="sm">
+            <Button onClick={() => refetch()} variant="outline" size="sm">
               Retry
             </Button>
           </div>
@@ -303,11 +272,7 @@ export default function FinancePage({ onToast }) {
               <thead>
                 <tr
                   className="border-b uppercase font-semibold tracking-wider text-[11px]"
-                  style={{
-                    background: '#FAF8F5',
-                    borderColor: BORDER,
-                    color: MUTED,
-                  }}
+                  style={{ background: '#FAF8F5', borderColor: BORDER, color: MUTED }}
                 >
                   <th className="py-3.5 px-6">Agent</th>
                   <th className="py-3.5 px-6">Referral Code</th>
@@ -321,42 +286,27 @@ export default function FinancePage({ onToast }) {
                 {agentsList.map((agent) => {
                   const hasBalance = Number(agent.available_balance ?? 0) > 0;
                   return (
-                    <tr
-                      key={agent.id}
-                      className="hover:bg-[#FAF8F5]/60 transition-colors"
-                    >
-                      {/* Agent Name + Contact */}
+                    <tr key={agent.id} className="hover:bg-[#FAF8F5]/60 transition-colors">
                       <td className="py-4 px-6">
-                        <p className="font-bold text-sm" style={{ color: CHOCOLATE }}>
-                          {agent.name}
-                        </p>
-                        <p className="text-[11px]" style={{ color: MUTED }}>
-                          {agent.phone || agent.email}
-                        </p>
+                        <p className="font-bold text-sm" style={{ color: CHOCOLATE }}>{agent.name}</p>
+                        <p className="text-[11px]" style={{ color: MUTED }}>{agent.phone || agent.email}</p>
                       </td>
 
-                      {/* Referral Code */}
                       <td className="py-4 px-6">
                         <span
                           className="font-mono text-xs font-semibold px-2.5 py-1 rounded-md border"
-                          style={{
-                            background: '#FAF8F5',
-                            borderColor: '#E5DED6',
-                            color: BRAND,
-                          }}
+                          style={{ background: '#FAF8F5', borderColor: '#E5DED6', color: BRAND }}
                         >
                           {agent.referral_code ?? '—'}
                         </span>
                       </td>
 
-                      {/* Successful Referrals */}
                       <td className="py-4 px-6 text-center">
                         <span className="font-bold text-sm tabular-nums" style={{ color: CHOCOLATE }}>
                           {agent.successful_referrals ?? 0}
                         </span>
                       </td>
 
-                      {/* Available Balance */}
                       <td className="py-4 px-6 text-right">
                         <span
                           className="font-bold text-sm tabular-nums"
@@ -366,21 +316,19 @@ export default function FinancePage({ onToast }) {
                         </span>
                       </td>
 
-                      {/* Total Paid */}
                       <td className="py-4 px-6 text-right">
                         <span className="font-semibold text-sm tabular-nums" style={{ color: MUTED }}>
                           {Number(agent.total_paid ?? 0).toLocaleString()} ETB
                         </span>
                       </td>
 
-                      {/* Action Button or Paid Badge */}
                       <td className="py-4 px-6 text-right">
                         {hasBalance ? (
                           canManage ? (
                             <Button
                               type="button"
                               disabled={payingAgentId === agent.id}
-                              onClick={() => handleMarkAsPaid(agent)}
+                              onClick={() => payMutation.mutate(agent)}
                               className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition shadow-2xs cursor-pointer hover:opacity-90 active:scale-95"
                               style={{ background: BRAND }}
                             >
@@ -412,4 +360,3 @@ export default function FinancePage({ onToast }) {
     </div>
   );
 }
-

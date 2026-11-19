@@ -7,10 +7,12 @@
  *   - Retry failed webhooks (re-evaluates rules and updates existing log)
  *   - Delete log confirmation modal
  *
+ * Data fetching: TanStack Query (useQuery + useMutation)
  * Props: user, isAdmin, onToast
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Terminal, Copy, Check, Trash2, History } from 'lucide-react';
 import api from '@/services/api';
 import usePermissions from '@/features/auth/usePermissions';
@@ -42,81 +44,169 @@ const STATUS_OPTIONS = [
 
 const LIMIT = 10;
 
+// ── Query key factory (keeps invalidation calls consistent) ──────────────────
+const logsKeys = {
+  all:    () => ['integrationLogs'],
+  list:   (page, status, search) => ['integrationLogs', page, status, search],
+};
+
 export default function IntegrationLogsPage({ user: _user, onToast }) {
   const { hasPermission } = usePermissions();
   const canManage = hasPermission('manage_logs');
-  const [data,       setData]       = useState([]);
-  const [meta,       setMeta]       = useState(null);
-  const [loading,    setLoading]    = useState(true);
-  const [status,     setStatus]     = useState('');
-  const [search,     setSearch]     = useState('');
-  const [page,       setPage]       = useState(1);
+  const queryClient = useQueryClient();
+
+  // ── Filter / pagination state (drives the query key) ─────────────────────
+  const [status, setStatus] = useState('');
+  const [search, setSearch] = useState('');
+  const [page,   setPage]   = useState(1);
   const debounceRef = useRef(null);
 
-  // Modal & action states
-  const [selectedLog,       setSelectedLog]       = useState(null);
-  const [isPayloadOpen,     setIsPayloadOpen]     = useState(false);
-  const [deleteTarget,      setDeleteTarget]      = useState(null);
-  const [deleting,          setDeleting]          = useState(false);
-  const [retryingId,        setRetryingId]        = useState(null);
-  const [copied,            setCopied]            = useState(false);
-  const [selectedIds,       setSelectedIds]       = useState([]);
-  const [isBulkDeleteOpen,  setIsBulkDeleteOpen]  = useState(false);
-  const [bulkDeleting,      setBulkDeleting]      = useState(false);
-  const [isClearOldOpen,    setIsClearOldOpen]    = useState(false);
-  const [clearingOld,       setClearingOld]       = useState(false);
+  // ── UI-only state (modals, selections, clipboard) ─────────────────────────
+  const [selectedLog,      setSelectedLog]      = useState(null);
+  const [isPayloadOpen,    setIsPayloadOpen]    = useState(false);
+  const [deleteTarget,     setDeleteTarget]     = useState(null);
+  const [copied,           setCopied]           = useState(false);
+  const [selectedIds,      setSelectedIds]      = useState([]);
+  const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+  const [isClearOldOpen,   setIsClearOldOpen]   = useState(false);
 
-  const fetchLogs = useCallback(async (pg, st, srch = '') => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page: pg, limit: LIMIT,
-        ...(st   ? { status: st }   : {}),
-        ...(srch ? { search: srch } : {}),
-      });
-      const { data: res } = await api.get(`/integration/logs?${params}`);
-
-      setData(res.logs ?? []);
+  // ── useQuery: fetch logs ──────────────────────────────────────────────────
+  const { data: queryData, isLoading, isError } = useQuery({
+    queryKey: logsKeys.list(page, status, search),
+    queryFn: async () => {
+      const params = {
+        page,
+        limit: LIMIT,
+        ...(status ? { status } : {}),
+        ...(search ? { search } : {}),
+      };
+      const { data: res } = await api.get('/integration/logs', { params });
+      // Normalise the response into a consistent shape
       const total    = res.total ?? res.logs?.length ?? 0;
       const resLimit = res.limit ?? LIMIT;
-      setMeta({
-        total,
-        page:       res.page ?? pg,
-        limit:      resLimit,
-        totalPages: Math.ceil(total / resLimit),
-      });
-    } catch {
+      return {
+        logs: res.logs ?? [],
+        meta: {
+          total,
+          page:       res.page ?? page,
+          limit:      resLimit,
+          totalPages: Math.ceil(total / resLimit),
+        },
+      };
+    },
+    onError: () => {
       onToast?.({ type: 'error', message: '🔴 Failed to load integration logs.' });
-    } finally {
-      setLoading(false);
-    }
-  }, [onToast]);
+    },
+  });
 
-  useEffect(() => {
-    fetchLogs(1, '', '');
-  }, [fetchLogs]);
+  const logs = queryData?.logs ?? [];
+  const meta = queryData?.meta ?? null;
 
+  // ── Invalidation helper ───────────────────────────────────────────────────
+  function invalidateLogs() {
+    queryClient.invalidateQueries({ queryKey: logsKeys.all() });
+  }
+
+  // ── useMutation: Retry webhook ────────────────────────────────────────────
+  const retryMutation = useMutation({
+    mutationFn: (log) => api.post(`/integration/logs/${log.id}/retry`),
+    onSuccess: (res, log) => {
+      onToast?.({
+        type: 'success',
+        message: res.data?.message || `✅ Webhook #${log.id} retried successfully. Referral qualified.`,
+      });
+      invalidateLogs();
+    },
+    onError: (err) => {
+      onToast?.({
+        type: 'error',
+        message: err.response?.data?.error || '⚠️ Retry failed: event did not qualify.',
+      });
+      // Still refresh so the status reflects any partial update
+      invalidateLogs();
+    },
+  });
+
+  // ── useMutation: Delete single log ────────────────────────────────────────
+  const deleteMutation = useMutation({
+    mutationFn: (log) => api.delete(`/integration/logs/${log.id}`),
+    onSuccess: (_, log) => {
+      onToast?.({
+        type: 'success',
+        message: `🗑️ Integration log #${log.id} deleted successfully.`,
+      });
+      setDeleteTarget(null);
+      invalidateLogs();
+    },
+    onError: (err) => {
+      onToast?.({
+        type: 'error',
+        message: err.response?.data?.error || 'Failed to delete integration log.',
+      });
+    },
+  });
+
+  // ── useMutation: Bulk delete ──────────────────────────────────────────────
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids) => api.delete('/integration/logs/bulk', { data: { ids } }),
+    onSuccess: (res) => {
+      const count = selectedIds.length;
+      onToast?.({
+        type: 'success',
+        message: `🗑️ ${res.data?.message || `${count} logs deleted successfully.`}`,
+      });
+      setSelectedIds([]);
+      setIsBulkDeleteOpen(false);
+      invalidateLogs();
+    },
+    onError: (err) => {
+      onToast?.({
+        type: 'error',
+        message: err.response?.data?.error || 'Failed to bulk delete integration logs.',
+      });
+    },
+  });
+
+  // ── useMutation: Clear old logs (retention) ───────────────────────────────
+  const clearOldMutation = useMutation({
+    mutationFn: () => api.delete('/integration/logs/clear-old', { data: { days: 30 } }),
+    onSuccess: (res) => {
+      onToast?.({
+        type: 'success',
+        message: `${res.data?.count ?? 0} logs older than 30 days were deleted.`,
+      });
+      setIsClearOldOpen(false);
+      setSelectedIds([]);
+      invalidateLogs();
+    },
+    onError: (err) => {
+      onToast?.({
+        type: 'error',
+        message: err.response?.data?.error || 'Failed to clear old integration logs.',
+      });
+    },
+  });
+
+  // ── Filter / pagination handlers ─────────────────────────────────────────
   function handleSearchChange(val) {
     setSearch(val);
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setPage(1);
-      fetchLogs(1, status, val);
+      setSearch(val);
     }, 300);
   }
 
   function handleStatusChange(val) {
     setStatus(val);
     setPage(1);
-    fetchLogs(1, val, search);
   }
 
   function handlePageChange(pg) {
     setPage(pg);
-    fetchLogs(pg, status, search);
   }
 
-  // ── Action: View Payload ──────────────────────────────────────────────────
+  // ── UI: View Payload ──────────────────────────────────────────────────────
   function handleViewPayload(log) {
     setSelectedLog(log);
     setCopied(false);
@@ -131,60 +221,13 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
     onToast?.({ type: 'info', message: '📋 Payload copied to clipboard.' });
   }
 
-  // ── Action: Retry Webhook ─────────────────────────────────────────────────
-  async function handleRetry(log) {
-    setRetryingId(log.id);
-    try {
-      const { data: res } = await api.post(`/integration/logs/${log.id}/retry`);
-      onToast?.({
-        type: 'success',
-        message: res.message || `✅ Webhook #${log.id} retried successfully. Referral qualified.`,
-      });
-      fetchLogs(page, status, search);
-    } catch (err) {
-      onToast?.({
-        type: 'error',
-        message: err.response?.data?.error || '⚠️ Retry failed: event did not qualify.',
-      });
-      fetchLogs(page, status, search);
-    } finally {
-      setRetryingId(null);
-    }
-  }
-
-  // ── Action: Delete Log ────────────────────────────────────────────────────
-  function handleDeleteRequest(log) {
-    setDeleteTarget(log);
-  }
-
-  async function handleDeleteConfirm() {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    try {
-      await api.delete(`/integration/logs/${deleteTarget.id}`);
-      onToast?.({
-        type: 'success',
-        message: `🗑️ Integration log #${deleteTarget.id} deleted successfully.`,
-      });
-      setDeleteTarget(null);
-      fetchLogs(page, status, search);
-    } catch (err) {
-      onToast?.({
-        type: 'error',
-        message: err.response?.data?.error || 'Failed to delete integration log.',
-      });
-    } finally {
-      setDeleting(false);
-    }
-  }
-
-  // ── Action: Selection for Bulk Operations ────────────────────────────────
+  // ── UI: Selection for Bulk Operations ────────────────────────────────────
   function handleSelectAll(checked) {
     if (checked) {
-      const pageIds = data.map((log) => log.id);
+      const pageIds = logs.map((log) => log.id);
       setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds])));
     } else {
-      const pageIds = new Set(data.map((log) => log.id));
+      const pageIds = new Set(logs.map((log) => log.id));
       setSelectedIds((prev) => prev.filter((id) => !pageIds.has(id)));
     }
   }
@@ -193,55 +236,13 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
     setSelectedIds((prev) => (checked ? [...prev, id] : prev.filter((item) => item !== id)));
   }
 
-  // ── Action: Bulk Delete Logs ──────────────────────────────────────────────
-  async function handleBulkDeleteConfirm() {
-    if (selectedIds.length === 0) return;
-    setBulkDeleting(true);
-    try {
-      const { data: res } = await api.delete('/integration/logs/bulk', {
-        data: { ids: selectedIds },
-      });
-      onToast?.({
-        type: 'success',
-        message: `🗑️ ${res.message || `${selectedIds.length} logs deleted successfully.`}`,
-      });
-      setSelectedIds([]);
-      setIsBulkDeleteOpen(false);
-      fetchLogs(page, status, search);
-    } catch (err) {
-      onToast?.({
-        type: 'error',
-        message: err.response?.data?.error || 'Failed to bulk delete integration logs.',
-      });
-    } finally {
-      setBulkDeleting(false);
-    }
-  }
+  // ── Derived loading/busy flags from mutations ─────────────────────────────
+  const retryingId   = retryMutation.isPending ? retryMutation.variables?.id : null;
+  const deleting     = deleteMutation.isPending;
+  const bulkDeleting = bulkDeleteMutation.isPending;
+  const clearingOld  = clearOldMutation.isPending;
 
-  // ── Action: Clear Old Logs (Retention) ────────────────────────────────────
-  async function handleClearOldConfirm() {
-    setClearingOld(true);
-    try {
-      const { data: res } = await api.delete('/integration/logs/clear-old', {
-        data: { days: 30 },
-      });
-      onToast?.({
-        type: 'success',
-        message: `${res.count ?? 0} logs older than 30 days were deleted.`,
-      });
-      setIsClearOldOpen(false);
-      setSelectedIds([]);
-      fetchLogs(page, status, search);
-    } catch (err) {
-      onToast?.({
-        type: 'error',
-        message: err.response?.data?.error || 'Failed to clear old integration logs.',
-      });
-    } finally {
-      setClearingOld(false);
-    }
-  }
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="p-6">
       <section
@@ -319,14 +320,21 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
           statusOptions={STATUS_OPTIONS}
         />
 
+        {/* Error banner */}
+        {isError && !isLoading && (
+          <div className="px-6 py-4 text-sm text-[#C0392B]">
+            Failed to load integration logs. Please try refreshing.
+          </div>
+        )}
+
         {/* Table */}
         <IntegrationLogsTable
-          logs={data}
-          loading={loading}
+          logs={logs}
+          loading={isLoading}
           canManage={canManage}
           onViewPayload={handleViewPayload}
-          onRetry={handleRetry}
-          onDeleteRequest={handleDeleteRequest}
+          onRetry={(log) => retryMutation.mutate(log)}
+          onDeleteRequest={(log) => setDeleteTarget(log)}
           retryingId={retryingId}
           selectedIds={selectedIds}
           onSelectAll={handleSelectAll}
@@ -334,12 +342,12 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
         />
 
         {/* Pagination */}
-        {!loading && data.length > 0 && (
-          <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={loading} />
+        {!isLoading && logs.length > 0 && (
+          <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
         )}
       </section>
 
-      {/* ── View Payload Modal ────────────────────────────────────────────── */}
+      {/* ── View Payload Modal ──────────────────────────────────────────────── */}
       <Dialog open={isPayloadOpen} onOpenChange={setIsPayloadOpen}>
         <DialogContent className="sm:max-w-xl max-h-[85vh] flex flex-col bg-white border border-[#E5DED6] shadow-xl p-0 overflow-hidden">
           <DialogHeader className="px-6 pt-6 pb-4 border-b border-[#E5DED6] bg-[#FAF8F5]">
@@ -440,7 +448,7 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
         </DialogContent>
       </Dialog>
 
-      {/* ── Delete Confirmation Modal ────────────────────────────────────── */}
+      {/* ── Delete Confirmation Modal ─────────────────────────────────────── */}
       <Dialog open={!!deleteTarget} onOpenChange={open => { if (!open) setDeleteTarget(null); }}>
         <DialogContent className="sm:max-w-md bg-white border border-[#E5DED6] shadow-xl">
           <DialogHeader>
@@ -483,7 +491,7 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
               variant="destructive"
               size="sm"
               disabled={deleting}
-              onClick={handleDeleteConfirm}
+              onClick={() => deleteMutation.mutate(deleteTarget)}
               className="bg-[#C0392B] hover:bg-[#A93226] text-white font-semibold"
             >
               {deleting ? 'Deleting…' : 'Delete Log'}
@@ -492,7 +500,7 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
         </DialogContent>
       </Dialog>
 
-      {/* ── Bulk Delete Confirmation Modal ───────────────────────────────── */}
+      {/* ── Bulk Delete Confirmation Modal ────────────────────────────────── */}
       <Dialog open={isBulkDeleteOpen} onOpenChange={setIsBulkDeleteOpen}>
         <DialogContent className="sm:max-w-md bg-white border border-[#E5DED6] shadow-xl">
           <DialogHeader>
@@ -521,7 +529,7 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
               variant="destructive"
               size="sm"
               disabled={bulkDeleting}
-              onClick={handleBulkDeleteConfirm}
+              onClick={() => bulkDeleteMutation.mutate(selectedIds)}
               className="bg-[#C0392B] hover:bg-[#A93226] text-white font-semibold"
             >
               {bulkDeleting ? 'Deleting…' : `Delete (${selectedIds.length})`}
@@ -530,7 +538,7 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
         </DialogContent>
       </Dialog>
 
-      {/* ── Clear Old Logs Confirmation Modal ────────────────────────────── */}
+      {/* ── Clear Old Logs Confirmation Modal ─────────────────────────────── */}
       <Dialog open={isClearOldOpen} onOpenChange={setIsClearOldOpen}>
         <DialogContent className="sm:max-w-md bg-white border border-[#E5DED6] shadow-xl">
           <DialogHeader>
@@ -559,7 +567,7 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
               variant="destructive"
               size="sm"
               disabled={clearingOld}
-              onClick={handleClearOldConfirm}
+              onClick={() => clearOldMutation.mutate()}
               className="bg-[#C0392B] hover:bg-[#A93226] text-white font-semibold"
             >
               {clearingOld ? 'Clearing…' : 'Clear Logs'}

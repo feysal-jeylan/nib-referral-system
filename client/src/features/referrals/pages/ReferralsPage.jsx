@@ -1,17 +1,14 @@
 /**
  * features/referrals/pages/ReferralsPage.jsx
  * ────────────────────────────────────────────
- * Referrals page with:
- *   - Status filtering & search with debounce + server-side pagination
- *   - Inline Approve / Reject for PENDING applications
- *   - Actions dropdown with:
- *       • View Details (Customer, Agent, Campaign, Code, Date, Transaction ID)
- *       • Delete (with 403 guard on SUCCESSFUL financial records)
- *
+ * Referrals page with status filtering, search, pagination, details modal,
+ * inline status updates, and delete confirmation.
+ * Data fetching: TanStack Query (useQuery + useMutation)
  * Props: user, isAdmin, onToast
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/services/api';
 import useAppStore from '@/store/useAppStore';
 import usePermissions from '@/features/auth/usePermissions';
@@ -35,6 +32,7 @@ import {
 const CHOCOLATE = '#3E2723';
 const MUTED     = '#9C8577';
 const BORDER    = 'rgba(138,77,31,0.10)';
+const LIMIT     = 10;
 
 const STATUS_OPTIONS = [
   { value: '',           label: 'All Statuses' },
@@ -43,90 +41,108 @@ const STATUS_OPTIONS = [
   { value: 'REJECTED',   label: 'Rejected'     },
 ];
 
+// ── Query key factory ────────────────────────────────────────────────────────
+const referralKeys = {
+  all:  () => ['referrals'],
+  list: (page, status, search) => ['referrals', page, status, search],
+};
+
 export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, onToast }) {
   const storeUser = useAppStore(s => s.user);
   const user = storeUser || propUser;
   const isAgent = Boolean(user?.agent_id);
   const { hasPermission } = usePermissions();
   const canManage = hasPermission('manage_referrals');
+  const queryClient = useQueryClient();
 
-  const [data,    setData]    = useState([]);
-  const [meta,    setMeta]    = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [status,  setStatus]  = useState('');
-  const [search,  setSearch]  = useState('');
-  const [page,    setPage]    = useState(1);
+  // ── Filter / pagination state ─────────────────────────────────────────────
+  const [status, setStatus] = useState('');
+  const [search, setSearch] = useState('');
+  const [page,   setPage]   = useState(1);
   const debounceRef = useRef(null);
-  const LIMIT = 10;
 
-  // Modal states
+  // ── UI-only state ─────────────────────────────────────────────────────────
   const [selectedReferral, setSelectedReferral] = useState(null);
   const [isDetailsOpen,    setIsDetailsOpen]    = useState(false);
   const [deleteTarget,     setDeleteTarget]     = useState(null);
-  const [deleting,         setDeleting]         = useState(false);
 
-  const fetchReferrals = useCallback(async (pg, st, srch = '') => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page: pg, limit: LIMIT,
-        ...(st   ? { status: st }   : {}),
-        ...(srch ? { search: srch } : {}),
-      });
-      const { data: res } = await api.get(`/referrals?${params}`);
-      setData(res.data ?? res.referrals ?? []);
-      setMeta(res.meta ?? null);
-    } catch {
+  // ── useQuery: fetch referrals ─────────────────────────────────────────────
+  const { data: queryData, isLoading } = useQuery({
+    queryKey: referralKeys.list(page, status, search),
+    queryFn: async () => {
+      const params = {
+        page, limit: LIMIT,
+        ...(status ? { status } : {}),
+        ...(search ? { search } : {}),
+      };
+      const { data: res } = await api.get('/referrals', { params });
+      return {
+        referrals: res.data ?? res.referrals ?? [],
+        meta:      res.meta ?? null,
+      };
+    },
+    onError: () => {
       onToast?.({ type: 'error', message: '🔴 Failed to load referrals.' });
-    } finally {
-      setLoading(false);
-    }
-  }, [onToast]);
+    },
+  });
 
-  useEffect(() => {
-    fetchReferrals(1, '', '');
-  }, [fetchReferrals]);
+  const referrals = queryData?.referrals ?? [];
+  const meta      = queryData?.meta      ?? null;
 
-  function handleSearchChange(val) {
-    setSearch(val);
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      setPage(1);
-      fetchReferrals(1, status, val);
-    }, 300);
+  // ── Invalidation helper ───────────────────────────────────────────────────
+  function invalidateReferrals() {
+    queryClient.invalidateQueries({ queryKey: referralKeys.all() });
   }
 
-  function handleStatusChange(val) {
-    setStatus(val);
-    setPage(1);
-    fetchReferrals(1, val, search);
-  }
-
-  function handlePageChange(pg) {
-    setPage(pg);
-    fetchReferrals(pg, status, search);
-  }
-
-  async function handleStatusChange_Referral(referralId, newStatus) {
-    try {
-      await api.patch(`/referrals/${referralId}/status`, { status: newStatus });
-      fetchReferrals(page, status, search);
+  // ── useMutation: Update referral status ───────────────────────────────────
+  const statusMutation = useMutation({
+    mutationFn: ({ referralId, newStatus }) =>
+      api.patch(`/referrals/${referralId}/status`, { status: newStatus }),
+    onSuccess: (_, { newStatus }) => {
       onToast?.({
         type: 'success',
         message: `✅ Referral ${newStatus === 'SUCCESSFUL' ? 'approved' : 'rejected'} successfully.`,
       });
-    } catch (err) {
+      invalidateReferrals();
+    },
+    onError: (err) => {
       onToast?.({ type: 'error', message: err.response?.data?.error ?? 'Status update failed.' });
-    }
+    },
+  });
+
+  // ── useMutation: Delete referral ──────────────────────────────────────────
+  const deleteMutation = useMutation({
+    mutationFn: (referral) => api.delete(`/referrals/${referral.id}`),
+    onSuccess: (_, referral) => {
+      onToast?.({ type: 'success', message: `🗑️ Referral #${referral.id} deleted successfully.` });
+      setDeleteTarget(null);
+      invalidateReferrals();
+    },
+    onError: (err) => {
+      const msg = err.response?.status === 403
+        ? 'Cannot delete successful financial records.'
+        : (err.response?.data?.error ?? 'Failed to delete referral.');
+      onToast?.({ type: 'error', message: msg });
+      setDeleteTarget(null);
+    },
+  });
+
+  // ── Filter / pagination handlers ─────────────────────────────────────────
+  function handleSearchChange(val) {
+    setSearch(val);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { setPage(1); setSearch(val); }, 300);
   }
 
-  // ── View Details Modal ────────────────────────────────────────────────────
+  function handleStatusChange(val) { setStatus(val); setPage(1); }
+  function handlePageChange(pg)    { setPage(pg); }
+
+  // ── UI handlers ───────────────────────────────────────────────────────────
   function handleViewDetails(referral) {
     setSelectedReferral(referral);
     setIsDetailsOpen(true);
   }
 
-  // ── Delete Action with Guard ──────────────────────────────────────────────
   function handleDeleteRequest(referral) {
     if (referral.status === 'SUCCESSFUL') {
       onToast?.({ type: 'error', message: 'Cannot delete successful financial records.' });
@@ -135,31 +151,11 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
     setDeleteTarget(referral);
   }
 
-  async function handleDeleteConfirm() {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    try {
-      await api.delete(`/referrals/${deleteTarget.id}`);
-      onToast?.({
-        type: 'success',
-        message: `🗑️ Referral #${deleteTarget.id} deleted successfully.`,
-      });
-      setDeleteTarget(null);
-      fetchReferrals(page, status, search);
-    } catch (err) {
-      const msg = err.response?.status === 403
-        ? 'Cannot delete successful financial records.'
-        : (err.response?.data?.error ?? 'Failed to delete referral.');
-      onToast?.({ type: 'error', message: msg });
-      setDeleteTarget(null);
-    } finally {
-      setDeleting(false);
-    }
-  }
+  const deleting = deleteMutation.isPending;
 
   return (
     <div className="p-6">
-      {/* ── View Details Modal ─────────────────────────────────────────────── */}
+      {/* ── View Details Modal ──────────────────────────────────────────────── */}
       <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
         <DialogContent className="max-w-md bg-white p-6 rounded-xl border border-border shadow-xl">
           <DialogHeader className="mb-3">
@@ -171,25 +167,18 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
 
           {selectedReferral && (
             <div className="space-y-3 py-2 text-sm">
-              {/* Customer Name */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Customer Name</span>
                 <span className="font-semibold text-text-1">{selectedReferral.customer_name || '—'}</span>
               </div>
-
-              {/* Customer Phone */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Customer Phone</span>
                 <span className="font-mono text-text-2">{selectedReferral.customer_phone || '—'}</span>
               </div>
-
-              {/* Agent Name */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Agent Name</span>
                 <span className="font-medium text-text-1">{selectedReferral.agent_name || '—'}</span>
               </div>
-
-              {/* Referral Code */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Referral Code</span>
                 {selectedReferral.referral_code ? (
@@ -200,14 +189,10 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
                   <span className="text-xs text-text-3">—</span>
                 )}
               </div>
-
-              {/* Campaign Name */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Campaign Name</span>
                 <span className="font-medium text-text-2">{selectedReferral.campaign_name || '—'}</span>
               </div>
-
-              {/* Campaign Code */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Campaign Code</span>
                 {selectedReferral.campaign_code ? (
@@ -218,28 +203,20 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
                   <span className="text-xs text-text-3">—</span>
                 )}
               </div>
-
-              {/* Status */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Status</span>
                 <StatusPill status={selectedReferral.status} />
               </div>
-
-              {/* Created Date */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Created Date</span>
                 <span className="font-medium text-text-2">
                   {selectedReferral.created_at ? new Date(selectedReferral.created_at).toLocaleString() : '—'}
                 </span>
               </div>
-
-              {/* Transaction ID */}
               <div className="flex justify-between items-center py-2">
                 <span className="text-xs font-semibold text-text-3 uppercase">Transaction ID</span>
                 {selectedReferral.transaction_id ? (
-                  <code className="font-mono text-xs text-text-1">
-                    {selectedReferral.transaction_id}
-                  </code>
+                  <code className="font-mono text-xs text-text-1">{selectedReferral.transaction_id}</code>
                 ) : (
                   <span className="text-xs text-text-3">—</span>
                 )}
@@ -259,13 +236,11 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
         </DialogContent>
       </Dialog>
 
-      {/* ── Delete Confirmation Dialog ───────────────────────────────────── */}
+      {/* ── Delete Confirmation Dialog ──────────────────────────────────────── */}
       <Dialog open={Boolean(deleteTarget)} onOpenChange={open => { if (!open && !deleting) setDeleteTarget(null); }}>
         <DialogContent className="max-w-sm bg-white p-6 rounded-xl border border-border shadow-xl">
           <DialogHeader>
-            <DialogTitle className="text-base font-bold text-[#3E2723]">
-              Delete Referral?
-            </DialogTitle>
+            <DialogTitle className="text-base font-bold text-[#3E2723]">Delete Referral?</DialogTitle>
             <DialogDescription className="text-xs text-[#9C8577]">
               Are you sure you want to delete referral #{deleteTarget?.id} for customer{' '}
               <span className="font-semibold text-[#1C0F05]">"{deleteTarget?.customer_name}"</span>?
@@ -284,7 +259,7 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
             <Button
               variant="destructive"
               disabled={deleting}
-              onClick={handleDeleteConfirm}
+              onClick={() => deleteMutation.mutate(deleteTarget)}
               className="bg-[#C0392B] hover:bg-[#a93226] text-white font-semibold"
             >
               {deleting && <Spinner small />}
@@ -294,7 +269,7 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
         </DialogContent>
       </Dialog>
 
-      {/* ── Main Section ─────────────────────────────────────────────────── */}
+      {/* ── Main Section ───────────────────────────────────────────────────── */}
       <section
         className="bg-white rounded-xl shadow-sm overflow-hidden"
         style={{ border: `1px solid ${BORDER}` }}
@@ -332,12 +307,12 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
         />
 
         {/* Table / states */}
-        {loading ? (
+        {isLoading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <Spinner />
             <p className="text-sm" style={{ color: MUTED }}>Loading referrals…</p>
           </div>
-        ) : data.length === 0 ? (
+        ) : referrals.length === 0 ? (
           <EmptyState
             icon="📋"
             title="No referrals found"
@@ -346,14 +321,14 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
         ) : (
           <>
             <ReferralTable
-              referrals={data}
+              referrals={referrals}
               loading={false}
-              onStatusChange={handleStatusChange_Referral}
+              onStatusChange={(referralId, newStatus) => statusMutation.mutate({ referralId, newStatus })}
               onViewDetails={handleViewDetails}
               onDeleteRequest={handleDeleteRequest}
               canManage={canManage}
             />
-            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={loading} />
+            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
           </>
         )}
       </section>

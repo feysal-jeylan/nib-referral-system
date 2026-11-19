@@ -15,7 +15,8 @@
  * Props: user, isAdmin, onToast
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Shield, Plus, RefreshCw, Trash2, Settings2, X, Check,
 } from 'lucide-react';
@@ -38,6 +39,11 @@ const CHOCOLATE = '#3E2723';
 const MUTED     = '#9C8577';
 const IVORY     = '#FAF8F5';
 const BORDER    = 'rgba(138,77,31,0.12)';
+
+// ── Query key factory ─────────────────────────────────────────────────────────
+const rolesKeys = {
+  all:  () => ['roles-data'],
+};
 
 // ── Permission module groupings ───────────────────────────────────────────────
 const MODULE_GROUPS = {
@@ -74,59 +80,96 @@ function SystemBadge({ isSystem }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function RolesPage({ onToast }) {
   const { hasPermission, hasAnyPermission } = usePermissions();
+  const queryClient = useQueryClient();
 
   const canView   = hasAnyPermission(['view_roles', 'manage_roles']);
   const canManage = hasPermission('manage_roles');
 
-  // ── Data ───────────────────────────────────────────────────────────────────
-  const [roles,       setRoles]       = useState([]);
-  const [permissions, setPermissions] = useState([]);
-  const [loading,     setLoading]     = useState(false);
-
   // ── Create modal ───────────────────────────────────────────────────────────
-  const [createOpen,     setCreateOpen]     = useState(false);
-  const [createForm,     setCreateForm]     = useState({ name: '', description: '' });
-  const [createPerms,    setCreatePerms]    = useState(new Set());
-  const [createError,    setCreateError]    = useState('');
-  const [createLoading,  setCreateLoading]  = useState(false);
+  const [createOpen,    setCreateOpen]    = useState(false);
+  const [createForm,    setCreateForm]    = useState({ name: '', description: '' });
+  const [createPerms,   setCreatePerms]   = useState(new Set());
+  const [createError,   setCreateError]   = useState('');
 
   // ── Edit modal ─────────────────────────────────────────────────────────────
-  const [editRole,       setEditRole]       = useState(null);
-  const [editPerms,      setEditPerms]      = useState([]);    // current assigned perms (array of perm objects)
-  const [editLoading,    setEditLoading]    = useState(false);
-  const [permOpLoading,  setPermOpLoading]  = useState(false);
+  const [editRole,      setEditRole]      = useState(null);
+  const [editPerms,     setEditPerms]     = useState([]);   // current assigned perm keys
+  const [editLoading,   setEditLoading]   = useState(false);
+  const [permOpLoading, setPermOpLoading] = useState(false);
 
   // ── Delete confirm ─────────────────────────────────────────────────────────
-  const [deleteRole,     setDeleteRole]     = useState(null);
-  const [deleteLoading,  setDeleteLoading]  = useState(false);
+  const [deleteRole, setDeleteRole] = useState(null);
 
-  // ── Fetch data ─────────────────────────────────────────────────────────────
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
+  // ── Invalidation helper ───────────────────────────────────────────────────
+  const invalidateRoles = () => queryClient.invalidateQueries({ queryKey: rolesKeys.all() });
+
+  // ── useQuery: roles + permissions catalog ─────────────────────────────────
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: rolesKeys.all(),
+    queryFn:  async () => {
       const [rolesRes, permsRes] = await Promise.all([
         rbacApi.getRoles(),
         rbacApi.getPermissions(),
       ]);
-      setRoles(rolesRes.data.data ?? []);
-      setPermissions(permsRes.data.data ?? []);
-    } catch {
-      onToast?.({ type: 'error', message: '🔴 Failed to load roles data.' });
-    } finally {
-      setLoading(false);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+      return {
+        roles:       rolesRes.data.data ?? [],
+        permissions: permsRes.data.data ?? [],
+      };
+    },
+    enabled: canView,
+  });
 
-  useEffect(() => {
-    if (canView) fetchData();
-  }, [canView, fetchData]);
+  const roles       = data?.roles       ?? [];
+  const permissions = data?.permissions ?? [];
+
+  // ── useMutation: create role ──────────────────────────────────────────────
+  const createMutation = useMutation({
+    mutationFn: async (payload) => {
+      const res     = await rbacApi.createRole(payload.meta);
+      const newRole = res.data.role;
+      // Assign selected permissions sequentially
+      for (const permKey of payload.perms) {
+        try { await rbacApi.addPermissionToRole(newRole.id, permKey); } catch {}
+      }
+      return newRole;
+    },
+    onSuccess: (newRole) => {
+      onToast?.({ type: 'success', message: `✅ Role "${newRole.name}" created.` });
+      setCreateOpen(false);
+      setCreateForm({ name: '', description: '' });
+      setCreatePerms(new Set());
+      invalidateRoles();
+    },
+    onError: (err) => {
+      const msg = err.response?.data?.error ?? 'Failed to create role.';
+      setCreateError(msg);
+    },
+  });
+
+  // ── useMutation: delete role ──────────────────────────────────────────────
+  const deleteMutation = useMutation({
+    mutationFn: (id) => rbacApi.deleteRole(id),
+    onSuccess: () => {
+      onToast?.({ type: 'success', message: `✅ Role "${deleteRole?.name}" deleted.` });
+      setDeleteRole(null);
+      invalidateRoles();
+    },
+    onError: (err) => {
+      const msg = err.response?.data?.error ?? 'Failed to delete role.';
+      onToast?.({ type: 'error', message: `❌ ${msg}` });
+    },
+  });
 
   // ── Open edit — load role's current permissions ────────────────────────────
   async function openEdit(role) {
     setEditRole(role);
     setEditLoading(true);
     try {
-      // Normalize role.permissions to an array of permission key strings
       const permKeys = (role.permissions ?? []).map(p => typeof p === 'string' ? p : p.key);
       setEditPerms(permKeys);
     } finally {
@@ -134,43 +177,24 @@ export default function RolesPage({ onToast }) {
     }
   }
 
-  // ── Create role ────────────────────────────────────────────────────────────
-  async function handleCreate(e) {
+  // ── Create role handler ────────────────────────────────────────────────────
+  function handleCreate(e) {
     e.preventDefault();
     setCreateError('');
     if (!createForm.name.trim()) {
       setCreateError('Role name is required.');
       return;
     }
-    setCreateLoading(true);
-    try {
-      const res = await rbacApi.createRole({
+    createMutation.mutate({
+      meta: {
         name:        createForm.name.trim(),
         description: createForm.description.trim() || null,
-      });
-      const newRole = res.data.role;
-
-      // Assign selected permissions
-      for (const permKey of createPerms) {
-        try {
-          await rbacApi.addPermissionToRole(newRole.id, permKey);
-        } catch {}
-      }
-
-      onToast?.({ type: 'success', message: `✅ Role "${newRole.name}" created.` });
-      setCreateOpen(false);
-      setCreateForm({ name: '', description: '' });
-      setCreatePerms(new Set());
-      fetchData();
-    } catch (err) {
-      const msg = err.response?.data?.error ?? 'Failed to create role.';
-      setCreateError(msg);
-    } finally {
-      setCreateLoading(false);
-    }
+      },
+      perms: Array.from(createPerms),
+    });
   }
 
-  // ── Add permission to role ─────────────────────────────────────────────────
+  // ── Add permission to role (local async — updates editPerms optimistically) ─
   async function handleAddPerm(permKey) {
     if (!editRole || permOpLoading) return;
     setPermOpLoading(true);
@@ -178,7 +202,7 @@ export default function RolesPage({ onToast }) {
       await rbacApi.addPermissionToRole(editRole.id, permKey);
       setEditPerms(prev => [...prev, permKey]);
       onToast?.({ type: 'success', message: `✅ Permission "${permKey}" added.` });
-      fetchData();
+      invalidateRoles();
     } catch (err) {
       const msg = err.response?.data?.error ?? 'Failed to add permission.';
       onToast?.({ type: 'error', message: `❌ ${msg}` });
@@ -195,29 +219,12 @@ export default function RolesPage({ onToast }) {
       await rbacApi.removePermissionFromRole(editRole.id, permKey);
       setEditPerms(prev => prev.filter(p => p !== permKey));
       onToast?.({ type: 'success', message: `✅ Permission "${permKey}" removed.` });
-      fetchData();
+      invalidateRoles();
     } catch (err) {
       const msg = err.response?.data?.error ?? 'Failed to remove permission.';
       onToast?.({ type: 'error', message: `❌ ${msg}` });
     } finally {
       setPermOpLoading(false);
-    }
-  }
-
-  // ── Delete role ────────────────────────────────────────────────────────────
-  async function handleDelete() {
-    if (!deleteRole) return;
-    setDeleteLoading(true);
-    try {
-      await rbacApi.deleteRole(deleteRole.id);
-      onToast?.({ type: 'success', message: `✅ Role "${deleteRole.name}" deleted.` });
-      setDeleteRole(null);
-      fetchData();
-    } catch (err) {
-      const msg = err.response?.data?.error ?? 'Failed to delete role.';
-      onToast?.({ type: 'error', message: `❌ ${msg}` });
-    } finally {
-      setDeleteLoading(false);
     }
   }
 
@@ -298,7 +305,7 @@ export default function RolesPage({ onToast }) {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={fetchData}
+            onClick={() => refetch()}
             title="Refresh"
             className="p-2 rounded-lg border transition"
             style={{ borderColor: BORDER, color: MUTED, background: '#fff' }}
@@ -318,10 +325,12 @@ export default function RolesPage({ onToast }) {
       </div>
 
       {/* Roles grid */}
-      {loading ? (
+      {isLoading ? (
         <div className="flex items-center justify-center py-20">
           <Spinner size={28} style={{ color: BRAND }} />
         </div>
+      ) : isError ? (
+        <EmptyState icon={Shield} title="Failed to load roles" description="An error occurred. Try refreshing." />
       ) : roles.length === 0 ? (
         <EmptyState icon={Shield} title="No roles found" description="Create your first role above." />
       ) : (
@@ -452,11 +461,11 @@ export default function RolesPage({ onToast }) {
               <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
               <Button
                 type="submit"
-                disabled={createLoading}
+                disabled={createMutation.isPending}
                 className="text-white font-semibold"
                 style={{ background: BRAND }}
               >
-                {createLoading ? <Spinner size={16} /> : 'Create Role'}
+                {createMutation.isPending ? <Spinner size={16} /> : 'Create Role'}
               </Button>
             </DialogFooter>
           </form>
@@ -518,12 +527,12 @@ export default function RolesPage({ onToast }) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteRole(null)}>Cancel</Button>
             <Button
-              onClick={handleDelete}
-              disabled={deleteLoading}
+              onClick={() => deleteMutation.mutate(deleteRole?.id)}
+              disabled={deleteMutation.isPending}
               className="text-white font-semibold"
               style={{ background: '#b91c1c' }}
             >
-              {deleteLoading ? <Spinner size={15} /> : 'Delete Role'}
+              {deleteMutation.isPending ? <Spinner size={15} /> : 'Delete Role'}
             </Button>
           </DialogFooter>
         </DialogContent>

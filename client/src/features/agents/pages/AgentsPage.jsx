@@ -12,10 +12,12 @@
  *       • Suspend / Activate Agent (PATCH /suspend or /activate)
  *       • Delete Agent (Confirmation modal with 409 referral protection)
  *
+ * Data fetching: TanStack Query (useQuery + useMutation)
  * Props: user, isAdmin, onToast
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, MoreVertical } from 'lucide-react';
 import api from '@/services/api';
 import useAppStore from '@/store/useAppStore';
@@ -49,6 +51,7 @@ const CHOCOLATE = '#3E2723';
 const MUTED     = '#9C8577';
 const BORDER    = 'rgba(138,77,31,0.10)';
 const IVORY     = '#FAF8F5';
+const LIMIT     = 10;
 
 const STATUS_OPTIONS = [
   { value: '',          label: 'All Statuses' },
@@ -58,186 +61,192 @@ const STATUS_OPTIONS = [
   { value: 'REJECTED',  label: 'Rejected'     },
 ];
 
+// ── Query key factory ────────────────────────────────────────────────────────
+const agentKeys = {
+  all:  () => ['agents'],
+  list: (page, status, search) => ['agents', page, status, search],
+};
+
 export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToast }) {
   const storeUser = useAppStore(s => s.user);
   const user = storeUser || propUser;
-  const { hasPermission, isAdmin: contextIsAdmin } = usePermissions();
+  const { hasPermission } = usePermissions();
+  const queryClient = useQueryClient();
 
-  const isAgent = Boolean(user?.agent_id);
+  const isAgent   = Boolean(user?.agent_id);
   const canManage = hasPermission('manage_agents');
 
-  const [data,      setData]      = useState([]);
-  const [meta,      setMeta]      = useState(null);
-  const [loading,   setLoading]   = useState(true);
-  const [actioning, setActioning] = useState(new Set());
+  // ── Filter / pagination state (drives the query key) ─────────────────────
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [page,   setPage]   = useState(1);
+  const debounceRef = useRef(null);
 
-  // Modal states
+  // ── UI-only state ─────────────────────────────────────────────────────────
+  const [actioning,      setActioning]      = useState(new Set());
   const [isFormOpen,     setIsFormOpen]     = useState(false);
   const [isDetailsOpen,  setIsDetailsOpen]  = useState(false);
   const [selectedAgent,  setSelectedAgent]  = useState(null);
   const [isEditOpen,     setIsEditOpen]     = useState(false);
   const [agentToEdit,    setAgentToEdit]    = useState(null);
   const [deleteTarget,   setDeleteTarget]   = useState(null);
-  const [deleting,       setDeleting]       = useState(false);
 
-  // Filters
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('');
-  const [page,   setPage]   = useState(1);
-  const LIMIT = 10;
-
-  // Debounce ref
-  const debounceRef = useRef(null);
-
-  // ── Fetch ─────────────────────────────────────────────────────────────────
-  const fetchAgents = useCallback(async (pg, srch, st) => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page:  pg,
+  // ── useQuery: fetch agents ────────────────────────────────────────────────
+  const { data: queryData, isLoading, isError } = useQuery({
+    queryKey: agentKeys.list(page, status, search),
+    queryFn: async () => {
+      const params = {
+        page,
         limit: LIMIT,
-        ...(srch ? { search: srch } : {}),
-        ...(st   ? { status: st   } : {}),
-      });
-      const { data: res } = await api.get(`/agents?${params}`);
+        ...(search ? { search } : {}),
+        ...(status ? { status } : {}),
+      };
+      const { data: res } = await api.get('/agents', { params });
       const rows = Array.isArray(res) ? res : (res.data ?? []);
-      setData(rows);
-      setMeta(res.meta ?? null);
-    } catch {
+      return {
+        agents: rows,
+        meta:   res.meta ?? null,
+      };
+    },
+    onError: () => {
       onToast?.({ type: 'error', message: '🔴 Failed to load agents.' });
-    } finally {
-      setLoading(false);
-    }
-  }, [onToast]);
+    },
+  });
 
-  // Initial load
-  useEffect(() => {
-    fetchAgents(1, '', '');
-  }, [fetchAgents]);
+  const agents = queryData?.agents ?? [];
+  const meta   = queryData?.meta   ?? null;
 
-  // Search debounce (300 ms)
+  // ── Invalidation helper ───────────────────────────────────────────────────
+  function invalidateAgents() {
+    queryClient.invalidateQueries({ queryKey: agentKeys.all() });
+  }
+
+  // ── useMutation: Approve ─────────────────────────────────────────────────
+  const approveMutation = useMutation({
+    mutationFn: ({ id }) => api.patch(`/agents/${id}/approve`),
+    onMutate:   ({ id }) => setActioning(prev => new Set(prev).add(id)),
+    onSuccess:  (res, { id, name }) => {
+      onToast?.({
+        type: 'success',
+        message: `✅ "${name}" approved — Code: ${res.data?.referral_code}`,
+      });
+      invalidateAgents();
+    },
+    onError:    (err) => {
+      onToast?.({ type: 'error', message: err.response?.data?.error ?? 'Approval failed.' });
+    },
+    onSettled:  (_, __, { id }) => {
+      setActioning(prev => { const s = new Set(prev); s.delete(id); return s; });
+    },
+  });
+
+  // ── useMutation: Reject ──────────────────────────────────────────────────
+  const rejectMutation = useMutation({
+    mutationFn: ({ id }) => api.patch(`/agents/${id}/reject`),
+    onMutate:   ({ id }) => setActioning(prev => new Set(prev).add(id)),
+    onSuccess:  (_, { name }) => {
+      onToast?.({ type: 'success', message: `Application from "${name}" has been rejected.` });
+      invalidateAgents();
+    },
+    onError:    (err) => {
+      onToast?.({ type: 'error', message: err.response?.data?.error ?? 'Rejection failed.' });
+    },
+    onSettled:  (_, __, { id }) => {
+      setActioning(prev => { const s = new Set(prev); s.delete(id); return s; });
+    },
+  });
+
+  // ── useMutation: Suspend / Activate (toggle) ─────────────────────────────
+  const toggleSuspendMutation = useMutation({
+    mutationFn: (agent) => {
+      const endpoint = agent.status === 'APPROVED'
+        ? `/agents/${agent.id}/suspend`
+        : `/agents/${agent.id}/activate`;
+      return api.patch(endpoint);
+    },
+    onMutate:   (agent) => setActioning(prev => new Set(prev).add(agent.id)),
+    onSuccess:  (_, agent) => {
+      const actionName = agent.status === 'APPROVED' ? 'suspended' : 'activated';
+      onToast?.({ type: 'success', message: `✅ Agent "${agent.name}" has been ${actionName}.` });
+      invalidateAgents();
+    },
+    onError:    (err, agent) => {
+      const verb = agent.status === 'APPROVED' ? 'suspend' : 'activate';
+      onToast?.({
+        type: 'error',
+        message: err.response?.data?.error ?? `Failed to ${verb} agent.`,
+      });
+    },
+    onSettled:  (_, __, agent) => {
+      setActioning(prev => { const s = new Set(prev); s.delete(agent.id); return s; });
+    },
+  });
+
+  // ── useMutation: Delete ───────────────────────────────────────────────────
+  const deleteMutation = useMutation({
+    mutationFn: (agent) => api.delete(`/agents/${agent.id}`),
+    onSuccess:  (_, agent) => {
+      onToast?.({ type: 'success', message: `🗑️ Agent "${agent.name}" deleted successfully.` });
+      setDeleteTarget(null);
+      invalidateAgents();
+    },
+    onError:    (err) => {
+      const msg = err.response?.status === 409
+        ? 'Cannot delete agent with existing referrals'
+        : (err.response?.data?.error ?? 'Failed to delete agent.');
+      onToast?.({ type: 'error', message: msg });
+      setDeleteTarget(null);
+    },
+  });
+
+  // ── Filter / pagination handlers ─────────────────────────────────────────
   function handleSearchChange(val) {
     setSearch(val);
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setPage(1);
-      fetchAgents(1, val, status);
+      setSearch(val);
     }, 300);
   }
 
   function handleStatusChange(val) {
     setStatus(val);
     setPage(1);
-    fetchAgents(1, search, val);
   }
 
   function handlePageChange(pg) {
     setPage(pg);
-    fetchAgents(pg, search, status);
   }
 
-  // ── Approve / Reject ──────────────────────────────────────────────────────
-  async function handleApprove(id, name) {
-    setActioning(prev => new Set(prev).add(id));
-    try {
-      const { data: res } = await api.patch(`/agents/${id}/approve`);
-      fetchAgents(page, search, status);
-      onToast?.({ type: 'success', message: `✅ "${name}" approved — Code: ${res.referral_code}` });
-    } catch (err) {
-      onToast?.({ type: 'error', message: err.response?.data?.error ?? 'Approval failed.' });
-    } finally {
-      setActioning(prev => { const s = new Set(prev); s.delete(id); return s; });
-    }
-  }
-
-  async function handleReject(id, name) {
-    setActioning(prev => new Set(prev).add(id));
-    try {
-      await api.patch(`/agents/${id}/reject`);
-      fetchAgents(page, search, status);
-      onToast?.({ type: 'success', message: `Application from "${name}" has been rejected.` });
-    } catch (err) {
-      onToast?.({ type: 'error', message: err.response?.data?.error ?? 'Rejection failed.' });
-    } finally {
-      setActioning(prev => { const s = new Set(prev); s.delete(id); return s; });
-    }
-  }
-
+  // ── Create / Edit success handlers ───────────────────────────────────────
   function handleAgentCreated() {
-    fetchAgents(1, search, status);
     setPage(1);
+    invalidateAgents();
   }
 
-  // ── Action 1: View Details ────────────────────────────────────────────────
+  function handleEditSuccess() {
+    invalidateAgents();
+  }
+
+  // ── UI: View / Edit actions ───────────────────────────────────────────────
   function handleViewDetails(agent) {
     setSelectedAgent(agent);
     setIsDetailsOpen(true);
   }
 
-  // ── Action 2: Edit Profile ────────────────────────────────────────────────
   function handleEditProfile(agent) {
     setAgentToEdit(agent);
     setIsEditOpen(true);
   }
 
-  function handleEditSuccess() {
-    fetchAgents(page, search, status);
-  }
+  // ── Derived flags ─────────────────────────────────────────────────────────
+  const deleting = deleteMutation.isPending;
 
-  // ── Action 3: Suspend / Activate ──────────────────────────────────────────
-  async function handleToggleSuspend(agent) {
-    const isApproved = agent.status === 'APPROVED';
-    const endpoint   = isApproved ? `/agents/${agent.id}/suspend` : `/agents/${agent.id}/activate`;
-    const actionName = isApproved ? 'suspended' : 'activated';
-    setActioning(prev => new Set(prev).add(agent.id));
-    try {
-      await api.patch(endpoint);
-      fetchAgents(page, search, status);
-      onToast?.({
-        type: 'success',
-        message: `✅ Agent "${agent.name}" has been ${actionName}.`,
-      });
-    } catch (err) {
-      onToast?.({
-        type: 'error',
-        message: err.response?.data?.error ?? `Failed to ${isApproved ? 'suspend' : 'activate'} agent.`,
-      });
-    } finally {
-      setActioning(prev => { const s = new Set(prev); s.delete(agent.id); return s; });
-    }
-  }
-
-  // ── Action 4: Delete Agent (with 409 referral guard) ───────────────────────
-  function handleDeleteRequest(agent) {
-    setDeleteTarget(agent);
-  }
-
-  async function handleDeleteConfirm() {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    try {
-      await api.delete(`/agents/${deleteTarget.id}`);
-      onToast?.({
-        type: 'success',
-        message: `🗑️ Agent "${deleteTarget.name}" deleted successfully.`,
-      });
-      setDeleteTarget(null);
-      fetchAgents(page, search, status);
-    } catch (err) {
-      const msg = err.response?.status === 409
-        ? 'Cannot delete agent with existing referrals'
-        : (err.response?.data?.error ?? 'Failed to delete agent.');
-      onToast?.({ type: 'error', message: msg });
-      setDeleteTarget(null);
-    } finally {
-      setDeleting(false);
-    }
-  }
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="p-6 space-y-6">
 
-      {/* ── 1. Page Header with "+ Register Agent" CTA ────────────────────── */}
+      {/* ── 1. Page Header with "+ Register Agent" CTA ──────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight" style={{ color: CHOCOLATE }}>
@@ -258,7 +267,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
         )}
       </div>
 
-      {/* ── 2. Modal Dialog for AgentForm ─────────────────────────────────── */}
+      {/* ── 2. Modal Dialog for AgentForm ───────────────────────────────── */}
       {canManage && (
         <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
           <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto bg-white p-6 rounded-xl border border-border shadow-xl">
@@ -278,7 +287,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
         </Dialog>
       )}
 
-      {/* ── 3. Edit Agent Modal ───────────────────────────────────────────── */}
+      {/* ── 3. Edit Agent Modal ──────────────────────────────────────────── */}
       {canManage && (
         <EditAgentModal
           agent={agentToEdit}
@@ -289,8 +298,11 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
         />
       )}
 
-      {/* ── 4. Delete Confirmation Dialog ─────────────────────────────────── */}
-      <Dialog open={Boolean(deleteTarget)} onOpenChange={open => { if (!open && !deleting) setDeleteTarget(null); }}>
+      {/* ── 4. Delete Confirmation Dialog ───────────────────────────────── */}
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={open => { if (!open && !deleting) setDeleteTarget(null); }}
+      >
         <DialogContent className="max-w-sm bg-white p-6 rounded-xl border border-[#E5DED6] shadow-xl">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-[#3E2723]">
@@ -313,7 +325,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
             <Button
               variant="destructive"
               disabled={deleting}
-              onClick={handleDeleteConfirm}
+              onClick={() => deleteMutation.mutate(deleteTarget)}
               className="bg-[#C0392B] hover:bg-[#a93226] text-white font-semibold"
             >
               {deleting && <Spinner small />}
@@ -335,31 +347,22 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
 
           {selectedAgent && (
             <div className="space-y-3 py-2 text-sm">
-              {/* Name */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Name</span>
                 <span className="font-semibold text-text-1">{selectedAgent.name}</span>
               </div>
-
-              {/* Phone */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Phone</span>
                 <span className="font-mono text-text-2">{selectedAgent.phone || '—'}</span>
               </div>
-
-              {/* Email */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Email</span>
                 <span className="text-text-2">{selectedAgent.email || '—'}</span>
               </div>
-
-              {/* Status */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Status</span>
                 <AgentStatusPill status={selectedAgent.status} />
               </div>
-
-              {/* Referral Code */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Referral Code</span>
                 {selectedAgent.referral_code ? (
@@ -370,32 +373,24 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
                   <span className="text-xs text-text-3">—</span>
                 )}
               </div>
-
-              {/* Date Joined */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Date Joined</span>
                 <span className="font-medium text-text-2">
                   {selectedAgent.created_at ? new Date(selectedAgent.created_at).toLocaleDateString() : '—'}
                 </span>
               </div>
-
-              {/* Total Referrals */}
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-xs font-semibold text-text-3 uppercase">Total Referrals</span>
                 <span className="font-semibold text-text-1">
                   {selectedAgent.total_referrals ?? selectedAgent.successful_referrals ?? 0}
                 </span>
               </div>
-
-              {/* Successful Referrals */}
               {selectedAgent.successful_referrals !== undefined && (
                 <div className="flex justify-between items-center py-2 border-b border-border">
                   <span className="text-xs font-semibold text-text-3 uppercase">Successful Referrals</span>
                   <span className="font-semibold text-text-1">{selectedAgent.successful_referrals}</span>
                 </div>
               )}
-
-              {/* Reward Tier */}
               {selectedAgent.current_reward && (
                 <div className="flex justify-between items-center py-2">
                   <span className="text-xs font-semibold text-text-3 uppercase">Reward Tier</span>
@@ -417,7 +412,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
         </DialogContent>
       </Dialog>
 
-      {/* ── 6. Agent Table Card ───────────────────────────────────────────── */}
+      {/* ── 6. Agent Table Card ─────────────────────────────────────────── */}
       <section
         className="bg-white rounded-xl shadow-sm overflow-hidden"
         style={{ border: `1px solid ${BORDER}` }}
@@ -459,13 +454,20 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
           />
         )}
 
+        {/* Error banner */}
+        {isError && !isLoading && (
+          <div className="px-6 py-4 text-sm text-[#C0392B]">
+            Failed to load agents. Please try refreshing.
+          </div>
+        )}
+
         {/* Table */}
-        {loading ? (
+        {isLoading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <Spinner />
             <p className="text-sm" style={{ color: MUTED }}>Loading agents…</p>
           </div>
-        ) : data.length === 0 ? (
+        ) : agents.length === 0 ? (
           <EmptyState
             icon="🏦"
             title="No agents found"
@@ -494,7 +496,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
                   </tr>
                 </thead>
                 <tbody>
-                  {data.map((a, i) => {
+                  {agents.map((a, i) => {
                     const busy = actioning.has(a.id);
                     return (
                       <tr
@@ -546,7 +548,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
                                 <div className="flex items-center gap-1.5 mr-1">
                                   <button
                                     disabled={busy}
-                                    onClick={() => handleApprove(a.id, a.name)}
+                                    onClick={() => approveMutation.mutate({ id: a.id, name: a.name })}
                                     className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
                                     style={{ background: 'rgba(46,125,50,0.10)', color: '#2E7D32', border: '1px solid rgba(46,125,50,0.25)' }}
                                     title="Approve agent"
@@ -555,7 +557,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
                                   </button>
                                   <button
                                     disabled={busy}
-                                    onClick={() => handleReject(a.id, a.name)}
+                                    onClick={() => rejectMutation.mutate({ id: a.id, name: a.name })}
                                     className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
                                     style={{ background: 'rgba(192,57,43,0.08)', color: '#C0392B', border: '1px solid rgba(192,57,43,0.25)' }}
                                     title="Reject agent"
@@ -592,7 +594,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
 
                                   {a.status === 'APPROVED' && (
                                     <DropdownMenuItem
-                                      onClick={() => handleToggleSuspend(a)}
+                                      onClick={() => toggleSuspendMutation.mutate(a)}
                                       className="cursor-pointer text-[#7A2518] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#7A2518]"
                                     >
                                       Suspend Agent
@@ -601,7 +603,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
 
                                   {a.status === 'SUSPENDED' && (
                                     <DropdownMenuItem
-                                      onClick={() => handleToggleSuspend(a)}
+                                      onClick={() => toggleSuspendMutation.mutate(a)}
                                       className="cursor-pointer text-[#1A5C34] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#1A5C34]"
                                     >
                                       Activate Agent
@@ -610,7 +612,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
 
                                   <DropdownMenuItem
                                     variant="destructive"
-                                    onClick={() => handleDeleteRequest(a)}
+                                    onClick={() => setDeleteTarget(a)}
                                     className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
                                   >
                                     Delete Agent
@@ -626,7 +628,7 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
                 </tbody>
               </table>
             </div>
-            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={loading} />
+            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
           </>
         )}
       </section>
