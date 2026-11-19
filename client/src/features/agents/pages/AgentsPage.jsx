@@ -27,6 +27,7 @@ import AgentForm           from '@/features/agents/AgentForm';
 import EditAgentModal      from '@/features/agents/EditAgentModal';
 import TableFilters        from '@/components/common/TableFilters';
 import DataTablePagination from '@/components/common/DataTablePagination';
+import DataTableLayout     from '@/components/common/DataTableLayout';
 import Spinner             from '@/components/ui/Spinner';
 import EmptyState          from '@/components/ui/EmptyState';
 import { RewardBadge, AgentStatusPill } from '@/components/ui/Badge';
@@ -415,225 +416,190 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
       </Dialog>
 
       {/* ── 6. Agent Table Card ─────────────────────────────────────────── */}
-      <section
-        className="bg-white rounded-xl shadow-sm overflow-hidden"
-        style={{ border: `1px solid ${BORDER}` }}
-      >
-        {/* Card header */}
-        <div
-          className="flex items-center justify-between px-6 py-4"
-          style={{ borderBottom: `1px solid ${BORDER}` }}
-        >
-          <div>
-            <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>
-              {!isAgent ? 'All Agents' : 'My Profile'}
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-              {!isAgent
-                ? 'Search, filter, and manage all registered referral agents.'
-                : 'Your agent profile and referral activity.'}
-            </p>
-          </div>
-          {meta && (
-            <span
-              className="text-xs font-semibold px-2.5 py-1 rounded-full"
-              style={{ background: IVORY, color: MUTED }}
-            >
-              {meta.total} agent{meta.total !== 1 ? 's' : ''}
-            </span>
-          )}
-        </div>
-
-        {/* Filters */}
-        {!isAgent && (
-          <TableFilters
-            search={search}
-            onSearchChange={handleSearchChange}
-            searchPlaceholder="Search by name, phone, email or code…"
-            statusValue={status}
-            onStatusChange={handleStatusChange}
-            statusOptions={STATUS_OPTIONS}
-          />
-        )}
-
-        {/* Error banner */}
-        {isError && !isLoading && (
-          <div className="px-6 py-4 text-sm text-[#C0392B]">
-            Failed to load agents. Please try refreshing.
-          </div>
-        )}
-
-        {/* Table */}
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-16">
-            <Spinner />
-            <p className="text-sm" style={{ color: MUTED }}>Loading agents…</p>
-          </div>
-        ) : agents.length === 0 ? (
+      <DataTableLayout
+        cardTitle={!isAgent ? 'All Agents' : 'My Profile'}
+        cardSubtitle={
+          !isAgent
+            ? 'Search, filter, and manage all registered referral agents.'
+            : 'Your agent profile and referral activity.'
+        }
+        totalRecords={meta?.total}
+        recordLabel="agent"
+        filters={
+          !isAgent ? (
+            <TableFilters
+              search={search}
+              onSearchChange={handleSearchChange}
+              searchPlaceholder="Search by name, phone, email or code…"
+              statusValue={status}
+              onStatusChange={handleStatusChange}
+              statusOptions={STATUS_OPTIONS}
+            />
+          ) : null
+        }
+        isLoading={isLoading}
+        loadingText="Loading agents…"
+        isEmpty={!isError && agents.length === 0}
+        emptyState={
           <EmptyState
             icon="🏦"
             title="No agents found"
             sub={search || status ? 'Try clearing the filters.' : 'Click "+ Register Agent" above to register your first agent.'}
           />
-        ) : (
-          <>
-            <div className="overflow-x-auto w-full">
-              <table className="min-w-[800px] w-full text-sm border-collapse" aria-label="Agent list">
-                <thead>
-                  <tr style={{ background: IVORY, borderBottom: `1px solid ${BORDER}` }}>
-                    {['#', 'Name', 'Referral Code', 'Referrals', 'Reward Tier', 'Status',
-                      ...(canManage ? ['Actions'] : [])
-                    ].map(h => (
-                      <th
-                        key={h}
-                        scope="col"
-                        className={`px-6 py-3 text-[11px] font-semibold uppercase tracking-wider ${
-                          h === 'Actions' ? 'text-right' : 'text-left'
-                        }`}
-                        style={{ color: MUTED }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {agents.map((a, i) => {
-                    const busy = actioning.has(a.id);
-                    return (
-                      <tr
-                        key={a.id}
-                        className="transition-colors duration-100"
-                        style={{ borderBottom: `1px solid ${BORDER}` }}
-                        onMouseEnter={e => { e.currentTarget.style.background = IVORY; }}
-                        onMouseLeave={e => { e.currentTarget.style.background = ''; }}
-                      >
-                        <td className="px-6 py-4 text-xs tabular-nums" style={{ color: MUTED }}>
-                          {(page - 1) * LIMIT + i + 1}
-                        </td>
-
-                        <td className="px-6 py-4 font-medium" style={{ color: CHOCOLATE }}>
-                          {a.name}
-                        </td>
-
-                        <td className="px-6 py-4">
-                          {a.referral_code ? (
-                            <code
-                              className="font-mono text-xs px-2 py-0.5 rounded"
-                              style={{ background: 'rgba(138,77,31,0.08)', color: BRAND }}
-                            >
-                              {a.referral_code}
-                            </code>
-                          ) : (
-                            <span className="text-xs" style={{ color: MUTED }}>—</span>
-                          )}
-                        </td>
-
-                        <td className="px-6 py-4">
-                          <span
-                            className="inline-flex items-center justify-center min-w-[28px] h-7 rounded-full text-xs font-bold px-2"
-                            style={{ background: 'rgba(212,175,55,0.15)', color: '#7C5900' }}
-                            title="Successful referrals"
-                          >
-                            {a.successful_referrals ?? 0}
-                          </span>
-                        </td>
-
-                        <td className="px-6 py-4"><RewardBadge tier={a.current_reward} /></td>
-
-                        <td className="px-6 py-4"><AgentStatusPill status={a.status} /></td>
-
-                        {canManage && (
-                          <td className="px-6 py-4">
-                            <div className="flex items-center justify-end gap-2">
-                              {a.status === 'PENDING' && (
-                                <div className="flex items-center gap-1.5 mr-1">
-                                  <button
-                                    disabled={busy}
-                                    onClick={() => approveMutation.mutate({ id: a.id, name: a.name })}
-                                    className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
-                                    style={{ background: 'rgba(46,125,50,0.10)', color: '#2E7D32', border: '1px solid rgba(46,125,50,0.25)' }}
-                                    title="Approve agent"
-                                  >
-                                    {busy ? <Spinner small /> : '✓ Approve'}
-                                  </button>
-                                  <button
-                                    disabled={busy}
-                                    onClick={() => rejectMutation.mutate({ id: a.id, name: a.name })}
-                                    className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
-                                    style={{ background: 'rgba(192,57,43,0.08)', color: '#C0392B', border: '1px solid rgba(192,57,43,0.25)' }}
-                                    title="Reject agent"
-                                  >
-                                    {busy ? <Spinner small /> : '✕ Reject'}
-                                  </button>
-                                </div>
-                              )}
-
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-[#FAF8F5] rounded-md"
-                                    aria-label={`Actions for ${a.name}`}
-                                  >
-                                    <MoreVertical className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
-                                  <DropdownMenuItem
-                                    onClick={() => handleViewDetails(a)}
-                                    className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
-                                  >
-                                    View Details
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => handleEditProfile(a)}
-                                    className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
-                                  >
-                                    Edit Profile
-                                  </DropdownMenuItem>
-
-                                  {a.status === 'APPROVED' && (
-                                    <DropdownMenuItem
-                                      onClick={() => toggleSuspendMutation.mutate(a)}
-                                      className="cursor-pointer text-[#7A2518] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#7A2518]"
-                                    >
-                                      Suspend Agent
-                                    </DropdownMenuItem>
-                                  )}
-
-                                  {a.status === 'SUSPENDED' && (
-                                    <DropdownMenuItem
-                                      onClick={() => toggleSuspendMutation.mutate(a)}
-                                      className="cursor-pointer text-[#1A5C34] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#1A5C34]"
-                                    >
-                                      Activate Agent
-                                    </DropdownMenuItem>
-                                  )}
-
-                                  <DropdownMenuItem
-                                    variant="destructive"
-                                    onClick={() => setDeleteTarget(a)}
-                                    className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
-                                  >
-                                    Delete Agent
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
-          </>
+        }
+        columns={[
+          { key: '#',       header: '#',            align: 'left'  },
+          { key: 'name',    header: 'Name',          align: 'left'  },
+          { key: 'code',    header: 'Referral Code', align: 'left'  },
+          { key: 'refs',    header: 'Referrals',     align: 'left'  },
+          { key: 'tier',    header: 'Reward Tier',   align: 'left'  },
+          { key: 'status',  header: 'Status',        align: 'left'  },
+          { key: 'actions', header: 'Actions',       align: 'right', hidden: !canManage },
+        ]}
+        tableMinWidth="800px"
+        ariaLabel="Agent list"
+        pagination={
+          <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
+        }
+      >
+        {/* Error banner */}
+        {isError && !isLoading && (
+          <tr>
+            <td colSpan={canManage ? 7 : 6} className="px-6 py-4 text-sm text-[#C0392B]">
+              Failed to load agents. Please try refreshing.
+            </td>
+          </tr>
         )}
-      </section>
+        {agents.map((a, i) => {
+          const busy = actioning.has(a.id);
+          return (
+            <tr
+              key={a.id}
+              className="transition-colors duration-100"
+              style={{ borderBottom: `1px solid ${BORDER}` }}
+              onMouseEnter={e => { e.currentTarget.style.background = IVORY; }}
+              onMouseLeave={e => { e.currentTarget.style.background = ''; }}
+            >
+              <td className="px-6 py-4 text-xs tabular-nums" style={{ color: MUTED }}>
+                {(page - 1) * LIMIT + i + 1}
+              </td>
+
+              <td className="px-6 py-4 font-medium" style={{ color: CHOCOLATE }}>
+                {a.name}
+              </td>
+
+              <td className="px-6 py-4">
+                {a.referral_code ? (
+                  <code
+                    className="font-mono text-xs px-2 py-0.5 rounded"
+                    style={{ background: 'rgba(138,77,31,0.08)', color: BRAND }}
+                  >
+                    {a.referral_code}
+                  </code>
+                ) : (
+                  <span className="text-xs" style={{ color: MUTED }}>—</span>
+                )}
+              </td>
+
+              <td className="px-6 py-4">
+                <span
+                  className="inline-flex items-center justify-center min-w-[28px] h-7 rounded-full text-xs font-bold px-2"
+                  style={{ background: 'rgba(212,175,55,0.15)', color: '#7C5900' }}
+                  title="Successful referrals"
+                >
+                  {a.successful_referrals ?? 0}
+                </span>
+              </td>
+
+              <td className="px-6 py-4"><RewardBadge tier={a.current_reward} /></td>
+
+              <td className="px-6 py-4"><AgentStatusPill status={a.status} /></td>
+
+              {canManage && (
+                <td className="px-6 py-4">
+                  <div className="flex items-center justify-end gap-2">
+                    {a.status === 'PENDING' && (
+                      <div className="flex items-center gap-1.5 mr-1">
+                        <button
+                          disabled={busy}
+                          onClick={() => approveMutation.mutate({ id: a.id, name: a.name })}
+                          className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
+                          style={{ background: 'rgba(46,125,50,0.10)', color: '#2E7D32', border: '1px solid rgba(46,125,50,0.25)' }}
+                          title="Approve agent"
+                        >
+                          {busy ? <Spinner small /> : '✓ Approve'}
+                        </button>
+                        <button
+                          disabled={busy}
+                          onClick={() => rejectMutation.mutate({ id: a.id, name: a.name })}
+                          className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
+                          style={{ background: 'rgba(192,57,43,0.08)', color: '#C0392B', border: '1px solid rgba(192,57,43,0.25)' }}
+                          title="Reject agent"
+                        >
+                          {busy ? <Spinner small /> : '✕ Reject'}
+                        </button>
+                      </div>
+                    )}
+
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-[#FAF8F5] rounded-md"
+                          aria-label={`Actions for ${a.name}`}
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
+                        <DropdownMenuItem
+                          onClick={() => handleViewDetails(a)}
+                          className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
+                        >
+                          View Details
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => handleEditProfile(a)}
+                          className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
+                        >
+                          Edit Profile
+                        </DropdownMenuItem>
+
+                        {a.status === 'APPROVED' && (
+                          <DropdownMenuItem
+                            onClick={() => toggleSuspendMutation.mutate(a)}
+                            className="cursor-pointer text-[#7A2518] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#7A2518]"
+                          >
+                            Suspend Agent
+                          </DropdownMenuItem>
+                        )}
+
+                        {a.status === 'SUSPENDED' && (
+                          <DropdownMenuItem
+                            onClick={() => toggleSuspendMutation.mutate(a)}
+                            className="cursor-pointer text-[#1A5C34] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#1A5C34]"
+                          >
+                            Activate Agent
+                          </DropdownMenuItem>
+                        )}
+
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setDeleteTarget(a)}
+                          className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
+                        >
+                          Delete Agent
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </td>
+              )}
+            </tr>
+          );
+        })}
+      </DataTableLayout>
     </div>
   );
 }

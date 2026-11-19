@@ -18,6 +18,7 @@ import { OPERATOR_SYMBOL } from '@/features/campaigns/constants';
 import { CampaignStatusPill } from '@/components/ui/Badge';
 import TableFilters        from '@/components/common/TableFilters';
 import DataTablePagination from '@/components/common/DataTablePagination';
+import DataTableLayout     from '@/components/common/DataTableLayout';
 import Spinner    from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
 import { Button } from '@/components/ui/button';
@@ -452,130 +453,108 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
       </div>
 
       {/* ── 2. Campaign Table Section ─────────────────────────────────────── */}
-      <section
-        className="bg-white rounded-xl shadow-sm overflow-hidden"
-        style={{ border: `1px solid ${BORDER}` }}
-      >
-        <div
-          className="flex items-center justify-between px-6 py-4"
-          style={{ borderBottom: `1px solid ${BORDER}` }}
-        >
-          <div>
-            <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>
-              {isAgent ? 'Available Campaigns' : 'All Campaigns'}
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-              {isAgent
-                ? 'Campaigns currently open for referrals.'
-                : 'Overview of active and draft campaigns configured in the system.'}
-            </p>
-          </div>
-          {meta && (
-            <span className="text-xs font-semibold px-2.5 py-1 rounded-full" style={{ background: IVORY, color: MUTED }}>
-              {meta.total} campaign{meta.total !== 1 ? 's' : ''}
-            </span>
-          )}
-        </div>
-
-        <TableFilters
-          search={search}
-          onSearchChange={handleSearchChange}
-          searchPlaceholder="Search by name or campaign code…"
-          statusValue={isAgent ? '' : status}
-          onStatusChange={handleStatusChange}
-          statusOptions={isAgent ? undefined : STATUS_OPTIONS}
-        />
-
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-16">
-            <Spinner />
-            <p className="text-sm" style={{ color: MUTED }}>Loading campaigns…</p>
-          </div>
-        ) : campaigns.length === 0 ? (
+      <DataTableLayout
+        cardTitle={isAgent ? 'Available Campaigns' : 'All Campaigns'}
+        cardSubtitle={
+          isAgent
+            ? 'Campaigns currently open for referrals.'
+            : 'Overview of active and draft campaigns configured in the system.'
+        }
+        totalRecords={meta?.total}
+        recordLabel="campaign"
+        filters={
+          <TableFilters
+            search={search}
+            onSearchChange={handleSearchChange}
+            searchPlaceholder="Search by name or campaign code…"
+            statusValue={isAgent ? '' : status}
+            onStatusChange={handleStatusChange}
+            statusOptions={isAgent ? undefined : STATUS_OPTIONS}
+          />
+        }
+        isLoading={isLoading}
+        loadingText="Loading campaigns…"
+        isEmpty={campaigns.length === 0}
+        emptyState={
           <EmptyState
             icon="📋"
             title="No campaigns found"
             sub={search || status ? 'Try clearing the filters.' : 'Click "+ New Campaign" above to create your first campaign.'}
           />
-        ) : (
-          <>
-            <div className="overflow-x-auto w-full">
-              <table className="min-w-[700px] w-full text-sm border-collapse" aria-label="Campaign list">
-                <thead>
-                  <tr style={{ background: IVORY, borderBottom: `1px solid ${BORDER}` }}>
-                    {['#','Name','Code','Dates','Reward','Status', ...(isAgent ? [] : ['Actions'])].map(h => (
-                      <th key={h} scope="col"
-                        className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider"
-                        style={{ color: MUTED }}
-                      >{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {campaigns.map((c, i) => (
-                    <tr
-                      key={c.id}
-                      className="transition-colors duration-100"
-                      style={{ borderBottom: `1px solid ${BORDER}` }}
-                      onMouseEnter={e => { e.currentTarget.style.background = IVORY; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = ''; }}
-                    >
-                      <td className="px-5 py-3.5 text-xs tabular-nums" style={{ color: MUTED }}>
-                        {(page - 1) * LIMIT + i + 1}
-                      </td>
-                      <td className="px-5 py-3.5 font-medium max-w-[220px]" style={{ color: CHOCOLATE }}>
-                        {c.parent_id ? (
-                          <div className="ml-4">
-                            <span className="truncate block">{c.name}</span>
-                            <span className="text-[10px] font-normal mt-0.5 block" style={{ color: MUTED }}>
-                              ↳ Child of {c.parent?.name ?? `#${c.parent_id}`}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="truncate block">{c.name}</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-3.5">
-                        {c.campaign_code
-                          ? <code className="font-mono text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(138,77,31,0.08)', color: BRAND }}>{c.campaign_code}</code>
-                          : <span className="text-xs" style={{ color: MUTED }}>—</span>
-                        }
-                      </td>
-                      <td className="px-5 py-3.5 text-xs whitespace-nowrap" style={{ color: MUTED }}>
-                        {new Date(c.start_date).toLocaleDateString()} → {new Date(c.end_date).toLocaleDateString()}
-                      </td>
-                      <td className="px-5 py-3.5 text-xs" style={{ color: CHOCOLATE }}>
-                        {c.reward_type} {c.reward_value}
-                      </td>
-                      <td className="px-5 py-3.5">
-                        <CampaignStatusPill status={c.status} />
-                      </td>
-                      {!isAgent && (
-                        <td className="px-5 py-3.5">
-                          <button
-                            onClick={() => setViewTarget(c)}
-                            className="text-xs font-semibold px-3 py-1.5 rounded transition-all"
-                            style={{
-                              border: `1px solid rgba(138,77,31,0.25)`,
-                              color: BRAND,
-                              background: 'transparent',
-                            }}
-                            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(138,77,31,0.07)'; }}
-                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                          >
-                            View Details
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
-          </>
-        )}
-      </section>
+        }
+        columns={[
+          { key: '#',       header: '#',       align: 'left' },
+          { key: 'name',    header: 'Name',    align: 'left' },
+          { key: 'code',    header: 'Code',    align: 'left' },
+          { key: 'dates',   header: 'Dates',   align: 'left' },
+          { key: 'reward',  header: 'Reward',  align: 'left' },
+          { key: 'status',  header: 'Status',  align: 'left' },
+          { key: 'actions', header: 'Actions', align: 'left', hidden: isAgent },
+        ]}
+        tableMinWidth="700px"
+        ariaLabel="Campaign list"
+        pagination={
+          <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
+        }
+      >
+        {campaigns.map((c, i) => (
+          <tr
+            key={c.id}
+            className="transition-colors duration-100"
+            style={{ borderBottom: `1px solid ${BORDER}` }}
+            onMouseEnter={e => { e.currentTarget.style.background = IVORY; }}
+            onMouseLeave={e => { e.currentTarget.style.background = ''; }}
+          >
+            <td className="px-5 py-3.5 text-xs tabular-nums" style={{ color: MUTED }}>
+              {(page - 1) * LIMIT + i + 1}
+            </td>
+            <td className="px-5 py-3.5 font-medium max-w-[220px]" style={{ color: CHOCOLATE }}>
+              {c.parent_id ? (
+                <div className="ml-4">
+                  <span className="truncate block">{c.name}</span>
+                  <span className="text-[10px] font-normal mt-0.5 block" style={{ color: MUTED }}>
+                    ↳ Child of {c.parent?.name ?? `#${c.parent_id}`}
+                  </span>
+                </div>
+              ) : (
+                <span className="truncate block">{c.name}</span>
+              )}
+            </td>
+            <td className="px-5 py-3.5">
+              {c.campaign_code
+                ? <code className="font-mono text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(138,77,31,0.08)', color: BRAND }}>{c.campaign_code}</code>
+                : <span className="text-xs" style={{ color: MUTED }}>—</span>
+              }
+            </td>
+            <td className="px-5 py-3.5 text-xs whitespace-nowrap" style={{ color: MUTED }}>
+              {new Date(c.start_date).toLocaleDateString()} → {new Date(c.end_date).toLocaleDateString()}
+            </td>
+            <td className="px-5 py-3.5 text-xs" style={{ color: CHOCOLATE }}>
+              {c.reward_type} {c.reward_value}
+            </td>
+            <td className="px-5 py-3.5">
+              <CampaignStatusPill status={c.status} />
+            </td>
+            {!isAgent && (
+              <td className="px-5 py-3.5">
+                <button
+                  onClick={() => setViewTarget(c)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded transition-all"
+                  style={{
+                    border: `1px solid rgba(138,77,31,0.25)`,
+                    color: BRAND,
+                    background: 'transparent',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(138,77,31,0.07)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  View Details
+                </button>
+              </td>
+            )}
+          </tr>
+        ))}
+      </DataTableLayout>
 
       {/* ── 3. Create Campaign Dialog ─────────────────────────────────────── */}
       {!isAgent && (

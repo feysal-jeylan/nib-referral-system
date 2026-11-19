@@ -46,14 +46,19 @@ async function listAgents(req, res, next) {
     const VALID_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED'];
     const safeStatus = VALID_STATUSES.includes(status) ? status : '';
 
-    // Ownership scoping: Super Admins, Admin users, or users with manage_agents permission
-    // must always see all agents (role: 'ADMIN'). Only an Agent user (with agent_id and without manage_agents)
-    // is scoped to their own record.
-    const isAdmin = req.userRoles?.includes('ADMIN') ||
-                    req.user?.role === 'ADMIN' ||
-                    req.userPermissions?.has('manage_agents') ||
-                    !req.user.agent_id;
-    const effectiveRole = isAdmin ? 'ADMIN' : 'AGENT';
+    // Ownership scoping:
+    // An agent account (role AGENT or user with agent_id without administrative manage_agents)
+    // is strictly scoped to their own record.
+    // Unrestricted visibility requires ADMIN role, manage_agents permission, or non-agent staff with view_agents.
+    const isAgent = req.userRoles?.includes('AGENT') ||
+                    req.user?.role === 'AGENT' ||
+                    Boolean(req.user?.agent_id);
+    const canManage = req.userPermissions?.has('manage_agents') ||
+                      req.userRoles?.includes('ADMIN') ||
+                      req.user?.role === 'ADMIN';
+
+    // If the caller is an agent and does not have administrative manage_agents authority, force AGENT scoping
+    const effectiveRole = (isAgent && !canManage) ? 'AGENT' : 'ADMIN';
     const result = await svc.listAgents(effectiveRole, req.user.agent_id, {
       page, limit, search, status: safeStatus,
     });

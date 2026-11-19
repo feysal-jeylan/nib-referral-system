@@ -62,14 +62,14 @@ const BORDER_CLR = 'rgba(138,77,31,0.12)';
 // agentLabel: alternate label for agent-role users
 const NAV_CONFIG = [
   { key: 'overview',  label: 'Overview',         agentLabel: 'My Dashboard', Icon: LayoutDashboard, permissions: ['view_dashboard'] },
-  { key: 'agents',    label: 'Agents',            Icon: Users,                permissions: ['view_agents',    'manage_agents']    },
-  { key: 'campaigns', label: 'Campaigns',         Icon: Megaphone,            permissions: ['view_campaigns', 'manage_campaigns'] },
+  { key: 'agents',    label: 'Agents',           agentLabel: 'My Profile',   Icon: Users,           permissions: ['view_agents',    'manage_agents']    },
+  { key: 'campaigns', label: 'Campaigns',                                     Icon: Megaphone,       permissions: ['view_campaigns', 'manage_campaigns'] },
   { key: 'referrals', label: 'Referrals',         agentLabel: 'My Referrals', Icon: FileText,        permissions: ['view_referrals', 'manage_referrals'] },
-  { key: 'finance',   label: 'Finance',           Icon: Wallet,               permissions: ['view_finance',   'manage_finance']   },
-  { key: 'logs',      label: 'Integration Logs',  Icon: Terminal,             permissions: ['view_logs',      'manage_logs']      },
-  { key: 'users',     label: 'User Management',   Icon: UserCog,              permissions: ['view_users',     'manage_users']     },
-  { key: 'roles',     label: 'Role Management',   Icon: Shield,               permissions: ['view_roles',     'manage_roles']     },
-  { key: 'settings',  label: 'Settings',          Icon: Settings,             permissions: null                                   },
+  { key: 'finance',   label: 'Finance',                                       Icon: Wallet,          permissions: ['view_finance',   'manage_finance']   },
+  { key: 'logs',      label: 'Integration Logs',                              Icon: Terminal,        permissions: ['view_logs',      'manage_logs']      },
+  { key: 'users',     label: 'User Management',                               Icon: UserCog,         permissions: ['view_users',     'manage_users']     },
+  { key: 'roles',     label: 'Role Management',                               Icon: Shield,          permissions: ['view_roles',     'manage_roles']     },
+  { key: 'settings',  label: 'Settings',                                      Icon: Settings,        permissions: null                                   },
 ];
 
 // ── NavItem Component ─────────────────────────────────────────────────────────

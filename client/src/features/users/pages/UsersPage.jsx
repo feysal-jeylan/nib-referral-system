@@ -27,6 +27,7 @@ import { Input }    from '@/components/ui/input';
 import Spinner      from '@/components/ui/Spinner';
 import EmptyState   from '@/components/ui/EmptyState';
 import DataTablePagination from '@/components/common/DataTablePagination';
+import DataTableLayout     from '@/components/common/DataTableLayout';
 import {
   Dialog, DialogContent, DialogHeader,
   DialogTitle, DialogFooter,
@@ -363,171 +364,158 @@ export default function UsersPage({ onToast }) {
       </div>
 
       {/* Table */}
-      <div
-        className="bg-white rounded-xl shadow-sm overflow-hidden"
-        style={{ border: `1px solid ${BORDER}` }}
-      >
-        {isLoading ? (
-          <div className="flex items-center justify-center py-20">
-            <Spinner size={28} style={{ color: BRAND }} />
-          </div>
-        ) : isError ? (
-          <EmptyState
-            icon={UserCog}
-            title="Failed to load users"
-            description="An error occurred. Try refreshing."
-          />
-        ) : users.length === 0 ? (
-          <EmptyState
-            icon={UserCog}
-            title="No users found"
-            description={search ? 'Try a different search term.' : 'No users in the system yet.'}
-          />
-        ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${BORDER}`, background: '#FDFBF9' }}>
-                    {['Username', 'Email', 'Roles', 'Status', 'Created', 'Actions'].map(h => (
-                      <th
-                        key={h}
-                        className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider"
-                        style={{ color: MUTED }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map((u, i) => (
-                    <tr
-                      key={u.id}
-                      style={{
-                        borderBottom: i < users.length - 1 ? `1px solid ${BORDER}` : 'none',
-                        background: u.is_suspended ? 'rgba(220,38,38,0.02)' : 'transparent',
-                      }}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <div
-                            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-                            style={{ background: BRAND }}
-                          >
-                            {u.username.charAt(0).toUpperCase()}
-                          </div>
-                          <span className="font-medium" style={{ color: CHOCOLATE }}>
-                            {u.username}
-                            {u.id === currentUser?.id && (
-                              <span className="ml-1.5 text-[10px]" style={{ color: MUTED }}>(you)</span>
-                            )}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3" style={{ color: MUTED }}>
-                        {u.email || <span style={{ color: '#ccc' }}>—</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-1">
-                          {u.roles?.length > 0
-                            ? u.roles.map(r => (
-                                <Pill key={r.id}>{r.name}</Pill>
-                              ))
-                            : <span style={{ color: '#ccc', fontSize: 11 }}>None</span>
-                          }
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <SuspendedPill suspended={u.is_suspended} />
-                      </td>
-                      <td className="px-4 py-3 text-xs" style={{ color: MUTED }}>
-                        {new Date(u.created_at).toLocaleDateString()}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          {canManage && (() => {
-                            // Determine if the target user is an Admin account
-                            const isTargetAdmin =
-                              u.roles?.some(r => r.name === 'ADMIN') ||
-                              u.role === 'ADMIN';
-                            // Non-admins cannot act on Admin accounts
-                            const canActOnTarget = isAdmin || !isTargetAdmin;
-                            return (
-                              <>
-                                <button
-                                  onClick={() => openEdit(u)}
-                                  className="px-2.5 py-1.5 rounded text-xs font-medium border transition"
-                                  style={{ borderColor: BORDER, color: BRAND, background: '#fff' }}
-                                  title="Manage Roles"
-                                >
-                                  Roles
-                                </button>
-
-                                {canActOnTarget && (
-                                  <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-[#FAF8F5] rounded-md"
-                                        aria-label={`Actions for ${u.username}`}
-                                      >
-                                        <MoreVertical className="h-4 w-4" />
-                                      </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
-                                      {u.id !== currentUser?.id && (
-                                        <DropdownMenuItem
-                                          onClick={() => setConfirmUser({ user: u, action: u.is_suspended ? 'activate' : 'suspend' })}
-                                          className={u.is_suspended
-                                            ? "cursor-pointer text-[#15803d] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#15803d]"
-                                            : "cursor-pointer text-[#b91c1c] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#b91c1c]"
-                                          }
-                                        >
-                                          {u.is_suspended ? 'Activate Account' : 'Suspend Account'}
-                                        </DropdownMenuItem>
-                                      )}
-
-                                      <DropdownMenuItem
-                                        onClick={() => {
-                                          onToast?.({ type: 'success', message: 'Password reset email sent.' });
-                                        }}
-                                        className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
-                                      >
-                                        Reset Password
-                                      </DropdownMenuItem>
-
-                                      {u.id !== currentUser?.id && (
-                                        <DropdownMenuItem
-                                          variant="destructive"
-                                          onClick={() => setDeleteUserTarget(u)}
-                                          className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
-                                        >
-                                          Delete User
-                                        </DropdownMenuItem>
-                                      )}
-                                    </DropdownMenuContent>
-                                  </DropdownMenu>
-                                )}
-                              </>
-                            );
-                          })()}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <DataTablePagination
-              meta={meta}
-              onPageChange={(p) => setPage(p)}
-              loading={isLoading}
+      <DataTableLayout
+        isLoading={isLoading}
+        loadingText="Loading users…"
+        isEmpty={isError || users.length === 0}
+        emptyState={
+          isError ? (
+            <EmptyState
+              icon={UserCog}
+              title="Failed to load users"
+              description="An error occurred. Try refreshing."
             />
-          </>
-        )}
-      </div>
+          ) : (
+            <EmptyState
+              icon={UserCog}
+              title="No users found"
+              description={search ? 'Try a different search term.' : 'No users in the system yet.'}
+            />
+          )
+        }
+        columns={[
+          { key: 'username', header: 'Username', align: 'left' },
+          { key: 'email',    header: 'Email',    align: 'left' },
+          { key: 'roles',    header: 'Roles',    align: 'left' },
+          { key: 'status',   header: 'Status',   align: 'left' },
+          { key: 'created',  header: 'Created',  align: 'left' },
+          { key: 'actions',  header: 'Actions',  align: 'left' },
+        ]}
+        pagination={
+          <DataTablePagination
+            meta={meta}
+            onPageChange={(p) => setPage(p)}
+            loading={isLoading}
+          />
+        }
+      >
+        {users.map((u, i) => (
+          <tr
+            key={u.id}
+            style={{
+              borderBottom: i < users.length - 1 ? `1px solid ${BORDER}` : 'none',
+              background: u.is_suspended ? 'rgba(220,38,38,0.02)' : 'transparent',
+            }}
+          >
+            <td className="px-4 py-3">
+              <div className="flex items-center gap-2">
+                <div
+                  className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                  style={{ background: BRAND }}
+                >
+                  {u.username.charAt(0).toUpperCase()}
+                </div>
+                <span className="font-medium" style={{ color: CHOCOLATE }}>
+                  {u.username}
+                  {u.id === currentUser?.id && (
+                    <span className="ml-1.5 text-[10px]" style={{ color: MUTED }}>(you)</span>
+                  )}
+                </span>
+              </div>
+            </td>
+            <td className="px-4 py-3" style={{ color: MUTED }}>
+              {u.email || <span style={{ color: '#ccc' }}>—</span>}
+            </td>
+            <td className="px-4 py-3">
+              <div className="flex flex-wrap gap-1">
+                {u.roles?.length > 0
+                  ? u.roles.map(r => (
+                      <Pill key={r.id}>{r.name}</Pill>
+                    ))
+                  : <span style={{ color: '#ccc', fontSize: 11 }}>None</span>
+                }
+              </div>
+            </td>
+            <td className="px-4 py-3">
+              <SuspendedPill suspended={u.is_suspended} />
+            </td>
+            <td className="px-4 py-3 text-xs" style={{ color: MUTED }}>
+              {new Date(u.created_at).toLocaleDateString()}
+            </td>
+            <td className="px-4 py-3">
+              <div className="flex items-center gap-1.5">
+                {canManage && (() => {
+                  // Determine if the target user is an Admin account
+                  const isTargetAdmin =
+                    u.roles?.some(r => r.name === 'ADMIN') ||
+                    u.role === 'ADMIN';
+                  // Non-admins cannot act on Admin accounts
+                  const canActOnTarget = isAdmin || !isTargetAdmin;
+                  return (
+                    <>
+                      <button
+                        onClick={() => openEdit(u)}
+                        className="px-2.5 py-1.5 rounded text-xs font-medium border transition"
+                        style={{ borderColor: BORDER, color: BRAND, background: '#fff' }}
+                        title="Manage Roles"
+                      >
+                        Roles
+                      </button>
+
+                      {canActOnTarget && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 text-text-3 hover:text-text-1 hover:bg-[#FAF8F5] rounded-md"
+                              aria-label={`Actions for ${u.username}`}
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-44 bg-white border border-[#E5DED6] shadow-md z-50">
+                            {u.id !== currentUser?.id && (
+                              <DropdownMenuItem
+                                onClick={() => setConfirmUser({ user: u, action: u.is_suspended ? 'activate' : 'suspend' })}
+                                className={u.is_suspended
+                                  ? "cursor-pointer text-[#15803d] hover:bg-[#F2FAF4] focus:bg-[#F2FAF4] focus:text-[#15803d]"
+                                  : "cursor-pointer text-[#b91c1c] hover:bg-[#FDF3F0] focus:bg-[#FDF3F0] focus:text-[#b91c1c]"
+                                }
+                              >
+                                {u.is_suspended ? 'Activate Account' : 'Suspend Account'}
+                              </DropdownMenuItem>
+                            )}
+
+                            <DropdownMenuItem
+                              onClick={() => {
+                                onToast?.({ type: 'success', message: 'Password reset email sent.' });
+                              }}
+                              className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
+                            >
+                              Reset Password
+                            </DropdownMenuItem>
+
+                            {u.id !== currentUser?.id && (
+                              <DropdownMenuItem
+                                variant="destructive"
+                                onClick={() => setDeleteUserTarget(u)}
+                                className="cursor-pointer text-[#C0392B] focus:text-[#C0392B] focus:bg-destructive/10"
+                              >
+                                Delete User
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            </td>
+          </tr>
+        ))}
+      </DataTableLayout>
 
       {/* ── Create User Modal ───────────────────────────────────────────────── */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

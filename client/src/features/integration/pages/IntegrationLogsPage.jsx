@@ -20,6 +20,8 @@ import usePermissions from '@/features/auth/usePermissions';
 import IntegrationLogsTable from '@/features/integration/IntegrationLogsTable';
 import DataTablePagination  from '@/components/common/DataTablePagination';
 import TableFilters         from '@/components/common/TableFilters';
+import DataTableLayout      from '@/components/common/DataTableLayout';
+import EmptyState           from '@/components/ui/EmptyState';
 import { IntegrationStatusPill } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -30,10 +32,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-
-const CHOCOLATE = '#3E2723';
-const MUTED     = '#9C8577';
-const BORDER    = 'rgba(138,77,31,0.10)';
 
 const STATUS_OPTIONS = [
   { value: '',          label: 'All Statuses' },
@@ -245,92 +243,83 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="p-6">
-      <section
-        className="bg-white rounded-xl shadow-sm overflow-hidden"
-        style={{ border: `1px solid ${BORDER}` }}
-      >
-        {/* Header */}
-        <div
-          className="flex flex-col sm:flex-row sm:items-center justify-between px-6 py-4 gap-3"
-          style={{ borderBottom: `1px solid ${BORDER}` }}
-        >
-          <div>
-            <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>
-              Integration Logs
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-              Temenos webhook events received by the Core Banking integration.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {canManage && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={selectedIds.length === 0}
-                  onClick={() => setIsBulkDeleteOpen(true)}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{
-                    borderColor: selectedIds.length > 0 ? '#C0392B' : 'rgba(138,77,31,0.2)',
-                    color: selectedIds.length > 0 ? '#C0392B' : MUTED,
-                    background: selectedIds.length > 0 ? '#FEF2F2' : '#fff',
-                  }}
-                >
-                  <Trash2 size={14} className={selectedIds.length > 0 ? 'text-[#C0392B]' : ''} />
-                  <span>Delete Selected ({selectedIds.length})</span>
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsClearOldOpen(true)}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition shadow-2xs cursor-pointer hover:bg-stone-50"
-                  style={{
-                    borderColor: 'rgba(138,77,31,0.28)',
-                    color: '#8A4D1F',
-                    background: '#fff',
-                  }}
-                >
-                  <History size={14} style={{ color: '#8A4D1F' }} />
-                  <span>Clear 30+ Days</span>
-                </Button>
-              </>
-            )}
-
-            {meta && (
-              <span
-                className="text-xs font-semibold px-2.5 py-1 rounded-full"
-                style={{ background: '#FAF8F5', color: MUTED }}
+      <DataTableLayout
+        cardTitle="Integration Logs"
+        cardSubtitle="Temenos webhook events received by the Core Banking integration."
+        totalRecords={meta?.total}
+        recordLabel="event"
+        cardActions={
+          canManage ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={selectedIds.length === 0}
+                onClick={() => setIsBulkDeleteOpen(true)}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{
+                  borderColor: selectedIds.length > 0 ? '#C0392B' : 'rgba(138,77,31,0.2)',
+                  color: selectedIds.length > 0 ? '#C0392B' : '#9C8577',
+                  background: selectedIds.length > 0 ? '#FEF2F2' : '#fff',
+                }}
               >
-                {meta.total} event{meta.total !== 1 ? 's' : ''}
-              </span>
-            )}
-          </div>
-        </div>
+                <Trash2 size={14} className={selectedIds.length > 0 ? 'text-[#C0392B]' : ''} />
+                <span>Delete Selected ({selectedIds.length})</span>
+              </Button>
 
-        {/* Filters */}
-        <TableFilters
-          search={search}
-          onSearchChange={handleSearchChange}
-          searchPlaceholder="Search by Transaction ID, Customer Name, or Error…"
-          statusValue={status}
-          onStatusChange={handleStatusChange}
-          statusOptions={STATUS_OPTIONS}
-        />
-
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsClearOldOpen(true)}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition shadow-2xs cursor-pointer hover:bg-stone-50"
+                style={{
+                  borderColor: 'rgba(138,77,31,0.28)',
+                  color: '#8A4D1F',
+                  background: '#fff',
+                }}
+              >
+                <History size={14} style={{ color: '#8A4D1F' }} />
+                <span>Clear 30+ Days</span>
+              </Button>
+            </>
+          ) : null
+        }
+        filters={
+          <TableFilters
+            search={search}
+            onSearchChange={handleSearchChange}
+            searchPlaceholder="Search by Transaction ID, Customer Name, or Error…"
+            statusValue={status}
+            onStatusChange={handleStatusChange}
+            statusOptions={STATUS_OPTIONS}
+          />
+        }
+        isLoading={isLoading}
+        loadingText="Loading integration logs…"
+        isEmpty={!isError && !isLoading && logs.length === 0}
+        emptyState={
+          <EmptyState
+            icon="📡"
+            title="No integration logs found"
+            sub={status || search ? 'Try clearing the filters.' : 'Webhook events from Temenos will appear here.'}
+          />
+        }
+        pagination={
+          !isLoading && logs.length > 0 ? (
+            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
+          ) : null
+        }
+      >
         {/* Error banner */}
         {isError && !isLoading && (
           <div className="px-6 py-4 text-sm text-[#C0392B]">
             Failed to load integration logs. Please try refreshing.
           </div>
         )}
-
-        {/* Table */}
+        {/* IntegrationLogsTable owns its own thead/tbody — no columns prop passed */}
         <IntegrationLogsTable
           logs={logs}
-          loading={isLoading}
+          loading={false}
           canManage={canManage}
           onViewPayload={handleViewPayload}
           onRetry={(log) => retryMutation.mutate(log)}
@@ -340,12 +329,7 @@ export default function IntegrationLogsPage({ user: _user, onToast }) {
           onSelectAll={handleSelectAll}
           onSelectOne={handleSelectOne}
         />
-
-        {/* Pagination */}
-        {!isLoading && logs.length > 0 && (
-          <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
-        )}
-      </section>
+      </DataTableLayout>
 
       {/* ── View Payload Modal ──────────────────────────────────────────────── */}
       <Dialog open={isPayloadOpen} onOpenChange={setIsPayloadOpen}>

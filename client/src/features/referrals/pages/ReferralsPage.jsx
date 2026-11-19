@@ -16,7 +16,7 @@ import usePermissions from '@/features/auth/usePermissions';
 import ReferralTable       from '@/features/referrals/ReferralTable';
 import TableFilters        from '@/components/common/TableFilters';
 import DataTablePagination from '@/components/common/DataTablePagination';
-import Spinner             from '@/components/ui/Spinner';
+import DataTableLayout     from '@/components/common/DataTableLayout';
 import EmptyState          from '@/components/ui/EmptyState';
 import { StatusPill }      from '@/components/ui/Badge';
 import { Button }          from '@/components/ui/button';
@@ -29,10 +29,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 
-const CHOCOLATE = '#3E2723';
-const MUTED     = '#9C8577';
-const BORDER    = 'rgba(138,77,31,0.10)';
-const LIMIT     = 10;
+const LIMIT = 10;
 
 const STATUS_OPTIONS = [
   { value: '',           label: 'All Statuses' },
@@ -270,68 +267,55 @@ export default function ReferralsPage({ user: propUser, isAdmin: propIsAdmin, on
       </Dialog>
 
       {/* ── Main Section ───────────────────────────────────────────────────── */}
-      <section
-        className="bg-white rounded-xl shadow-sm overflow-hidden"
-        style={{ border: `1px solid ${BORDER}` }}
-      >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-6 py-4"
-          style={{ borderBottom: `1px solid ${BORDER}` }}
-        >
-          <div>
-            <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>
-              {!isAgent ? 'All Referrals' : 'My Referrals'}
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-              {!isAgent
-                ? 'All referrals submitted through the Core Banking integration.'
-                : 'Customers you have referred through Temenos.'}
-            </p>
-          </div>
-          {meta && (
-            <span className="text-xs font-semibold px-2.5 py-1 rounded-full" style={{ background: '#FAF8F5', color: MUTED }}>
-              {meta.total} referral{meta.total !== 1 ? 's' : ''}
-            </span>
-          )}
-        </div>
-
-        {/* Filters */}
-        <TableFilters
-          search={search}
-          onSearchChange={handleSearchChange}
-          searchPlaceholder="Search referrals by customer, phone, code or campaign…"
-          statusValue={status}
-          onStatusChange={handleStatusChange}
-          statusOptions={STATUS_OPTIONS}
-        />
-
-        {/* Table / states */}
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-16">
-            <Spinner />
-            <p className="text-sm" style={{ color: MUTED }}>Loading referrals…</p>
-          </div>
-        ) : referrals.length === 0 ? (
+      <DataTableLayout
+        cardTitle={!isAgent ? 'All Referrals' : 'My Referrals'}
+        cardSubtitle={
+          !isAgent
+            ? 'All referrals submitted through the Core Banking integration.'
+            : 'Customers you have referred through Temenos.'
+        }
+        totalRecords={meta?.total}
+        recordLabel="referral"
+        filters={
+          <TableFilters
+            search={search}
+            onSearchChange={handleSearchChange}
+            searchPlaceholder="Search referrals by customer, phone, code or campaign…"
+            statusValue={status}
+            onStatusChange={handleStatusChange}
+            statusOptions={STATUS_OPTIONS}
+          />
+        }
+        isLoading={isLoading}
+        loadingText="Loading referrals…"
+        isEmpty={referrals.length === 0}
+        emptyState={
           <EmptyState
             icon="📋"
             title="No referrals found"
-            sub={status ? 'Try clearing the status filter.' : (!isAgent ? 'Referrals appear here once Temenos sends a webhook.' : 'No referrals registered under your code yet.')}
+            sub={
+              status
+                ? 'Try clearing the status filter.'
+                : !isAgent
+                  ? 'Referrals appear here once Temenos sends a webhook.'
+                  : 'No referrals registered under your code yet.'
+            }
           />
-        ) : (
-          <>
-            <ReferralTable
-              referrals={referrals}
-              loading={false}
-              onStatusChange={(referralId, newStatus) => statusMutation.mutate({ referralId, newStatus })}
-              onViewDetails={handleViewDetails}
-              onDeleteRequest={handleDeleteRequest}
-              canManage={canManage}
-            />
-            <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
-          </>
-        )}
-      </section>
+        }
+        pagination={
+          <DataTablePagination meta={meta} onPageChange={handlePageChange} loading={isLoading} />
+        }
+      >
+        {/* ReferralTable owns its own thead/tbody — no columns prop needed */}
+        <ReferralTable
+          referrals={referrals}
+          loading={false}
+          onStatusChange={(referralId, newStatus) => statusMutation.mutate({ referralId, newStatus })}
+          onViewDetails={handleViewDetails}
+          onDeleteRequest={handleDeleteRequest}
+          canManage={canManage}
+        />
+      </DataTableLayout>
     </div>
   );
 }

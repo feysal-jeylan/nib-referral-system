@@ -20,6 +20,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import api from '@/services/api';
 import useAppStore from '@/store/useAppStore';
+import { queryClient } from '@/lib/queryClient';
 
 const AuthContext = createContext({
   loading:            true,
@@ -54,23 +55,28 @@ export function AuthProvider({ children }) {
 
   // ── 'auth:unauthorized' event — fired by api.js on mid-session 401 ──────
   useEffect(() => {
-    function handleSessionExpiry() { clearUser(); }
+    function handleSessionExpiry() {
+      queryClient.clear();
+      clearUser();
+    }
     window.addEventListener('auth:unauthorized', handleSessionExpiry);
     return () => window.removeEventListener('auth:unauthorized', handleSessionExpiry);
   }, [clearUser]);
 
   // ── login(userData) — called by Login.jsx after successful POST /auth/login
   const login = useCallback((userData) => {
+    queryClient.clear();
     setUser(userData);
   }, [setUser]);
 
-  // ── logout() — clears HttpOnly cookie then wipes Zustand ────────────────
+  // ── logout() — clears HttpOnly cookie then wipes Zustand & query cache ───
   const logout = useCallback(async () => {
     try {
       await api.post('/auth/logout');
     } catch {
       // Network failure — still clear local state
     } finally {
+      queryClient.clear();
       clearUser();
     }
   }, [clearUser]);
