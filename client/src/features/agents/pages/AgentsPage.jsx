@@ -250,10 +250,12 @@ export default function AgentsPage({ user: propUser, isAdmin: propIsAdmin, onToa
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight" style={{ color: CHOCOLATE }}>
-            Agent Management
+            {isAgent ? 'My Profile' : 'Agent Management'}
           </h1>
           <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-            Search, filter, and manage all registered referral agents.
+            {isAgent
+              ? 'Your agent profile and referral performance.'
+              : 'Search, filter, and manage all registered referral agents.'}
           </p>
         </div>
         {canManage && (

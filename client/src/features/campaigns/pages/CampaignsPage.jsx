@@ -11,6 +11,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import api from '@/services/api';
 import usePermissions from '@/features/auth/usePermissions';
+import useAppStore from '@/store/useAppStore';
 
 import CampaignForm from '@/features/campaigns/CampaignForm';
 import { OPERATOR_SYMBOL } from '@/features/campaigns/constants';
@@ -331,6 +332,11 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
   const canManage = hasPermission('manage_campaigns');
   const queryClient = useQueryClient();
 
+  // Determine if the current user is an Agent (has an agent account linked)
+  const storeUser = useAppStore(s => s.user);
+  const currentUser = storeUser || user;
+  const isAgent = Boolean(currentUser?.agent_id);
+
   // ── Filter / pagination state ─────────────────────────────────────────────
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
@@ -425,14 +431,16 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight" style={{ color: CHOCOLATE }}>
-            Campaign Management
+            {isAgent ? 'Active Campaigns' : 'Campaign Management'}
           </h1>
           <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-            Configure and oversee referral qualification campaigns, reward tiers, and rule logic.
+            {isAgent
+              ? 'View the active campaigns you can refer customers to.'
+              : 'Configure and oversee referral qualification campaigns, reward tiers, and rule logic.'}
           </p>
         </div>
 
-        {canManage && (
+        {canManage && !isAgent && (
           <Button
             onClick={() => setIsFormOpen(true)}
             className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white font-semibold text-sm px-4 py-2.5 rounded-lg shadow-sm transition-all"
@@ -453,9 +461,13 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
           style={{ borderBottom: `1px solid ${BORDER}` }}
         >
           <div>
-            <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>All Campaigns</h2>
+            <h2 className="font-bold text-sm" style={{ color: CHOCOLATE }}>
+              {isAgent ? 'Available Campaigns' : 'All Campaigns'}
+            </h2>
             <p className="text-xs mt-0.5" style={{ color: MUTED }}>
-              Overview of active and draft campaigns configured in the system.
+              {isAgent
+                ? 'Campaigns currently open for referrals.'
+                : 'Overview of active and draft campaigns configured in the system.'}
             </p>
           </div>
           {meta && (
@@ -469,9 +481,9 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
           search={search}
           onSearchChange={handleSearchChange}
           searchPlaceholder="Search by name or campaign code…"
-          statusValue={status}
+          statusValue={isAgent ? '' : status}
           onStatusChange={handleStatusChange}
-          statusOptions={STATUS_OPTIONS}
+          statusOptions={isAgent ? undefined : STATUS_OPTIONS}
         />
 
         {isLoading ? (
@@ -491,7 +503,7 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
               <table className="min-w-[700px] w-full text-sm border-collapse" aria-label="Campaign list">
                 <thead>
                   <tr style={{ background: IVORY, borderBottom: `1px solid ${BORDER}` }}>
-                    {['#','Name','Code','Dates','Reward','Status','Actions'].map(h => (
+                    {['#','Name','Code','Dates','Reward','Status', ...(isAgent ? [] : ['Actions'])].map(h => (
                       <th key={h} scope="col"
                         className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider"
                         style={{ color: MUTED }}
@@ -538,21 +550,23 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
                       <td className="px-5 py-3.5">
                         <CampaignStatusPill status={c.status} />
                       </td>
-                      <td className="px-5 py-3.5">
-                        <button
-                          onClick={() => setViewTarget(c)}
-                          className="text-xs font-semibold px-3 py-1.5 rounded transition-all"
-                          style={{
-                            border: `1px solid rgba(138,77,31,0.25)`,
-                            color: BRAND,
-                            background: 'transparent',
-                          }}
-                          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(138,77,31,0.07)'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                        >
-                          View Details
-                        </button>
-                      </td>
+                      {!isAgent && (
+                        <td className="px-5 py-3.5">
+                          <button
+                            onClick={() => setViewTarget(c)}
+                            className="text-xs font-semibold px-3 py-1.5 rounded transition-all"
+                            style={{
+                              border: `1px solid rgba(138,77,31,0.25)`,
+                              color: BRAND,
+                              background: 'transparent',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(138,77,31,0.07)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                          >
+                            View Details
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -564,52 +578,58 @@ export default function CampaignsPage({ user, isAdmin, onToast }) {
       </section>
 
       {/* ── 3. Create Campaign Dialog ─────────────────────────────────────── */}
-      <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-bg border border-border rounded-xl p-0 sm:max-w-4xl">
-          <DialogHeader className="px-6 pt-6 pb-4 border-b border-border bg-surface sticky top-0 z-10">
-            <DialogTitle className="text-lg font-bold" style={{ color: CHOCOLATE }}>
-              Create New Campaign
-            </DialogTitle>
-            <DialogDescription className="text-xs" style={{ color: MUTED }}>
-              Define campaign parameters, rewards, and referral qualification rules.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="p-6">
-            <CampaignForm
-              key={isFormOpen ? 'open' : 'closed'}
-              onCreated={invalidateCampaigns}
-              onSuccess={() => setIsFormOpen(false)}
-              onToast={onToast}
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
+      {!isAgent && (
+        <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-bg border border-border rounded-xl p-0 sm:max-w-4xl">
+            <DialogHeader className="px-6 pt-6 pb-4 border-b border-border bg-surface sticky top-0 z-10">
+              <DialogTitle className="text-lg font-bold" style={{ color: CHOCOLATE }}>
+                Create New Campaign
+              </DialogTitle>
+              <DialogDescription className="text-xs" style={{ color: MUTED }}>
+                Define campaign parameters, rewards, and referral qualification rules.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="p-6">
+              <CampaignForm
+                key={isFormOpen ? 'open' : 'closed'}
+                onCreated={invalidateCampaigns}
+                onSuccess={() => setIsFormOpen(false)}
+                onToast={onToast}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* ── 4. Action Dialogs ─────────────────────────────────────────────── */}
-      <DetailsDialog
-        campaign={viewTarget}
-        open={!!viewTarget}
-        onClose={() => setViewTarget(null)}
-        onDelete={handleDeleteRequest}
-        onEdit={handleEditRequest}
-        onActivate={(id, name) => activateMutation.mutate({ id, name })}
-        actioning={actioning}
-        canManage={canManage}
-      />
-      <DeleteDialog
-        open={!!deleteTarget}
-        campaignName={deleteTarget?.name ?? ''}
-        onConfirm={() => deleteMutation.mutate({ id: deleteTarget.id, name: deleteTarget.name })}
-        onCancel={() => setDeleteTarget(null)}
-        loading={deleting}
-      />
-      <EditDialog
-        campaign={editTarget}
-        open={!!editTarget}
-        onClose={() => setEditTarget(null)}
-        onSaved={invalidateCampaigns}
-        onToast={onToast}
-      />
+      {!isAgent && (
+        <>
+          <DetailsDialog
+            campaign={viewTarget}
+            open={!!viewTarget}
+            onClose={() => setViewTarget(null)}
+            onDelete={handleDeleteRequest}
+            onEdit={handleEditRequest}
+            onActivate={(id, name) => activateMutation.mutate({ id, name })}
+            actioning={actioning}
+            canManage={canManage}
+          />
+          <DeleteDialog
+            open={!!deleteTarget}
+            campaignName={deleteTarget?.name ?? ''}
+            onConfirm={() => deleteMutation.mutate({ id: deleteTarget.id, name: deleteTarget.name })}
+            onCancel={() => setDeleteTarget(null)}
+            loading={deleting}
+          />
+          <EditDialog
+            campaign={editTarget}
+            open={!!editTarget}
+            onClose={() => setEditTarget(null)}
+            onSaved={invalidateCampaigns}
+            onToast={onToast}
+          />
+        </>
+      )}
     </div>
   );
 }

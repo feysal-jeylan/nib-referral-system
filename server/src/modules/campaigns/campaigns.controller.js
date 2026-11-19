@@ -255,7 +255,12 @@ async function listCampaigns(req, res, next) {
     const VALID_STATUSES = ['DRAFT', 'ACTIVE'];
     const safeStatus = VALID_STATUSES.includes(status) ? status : '';
 
-    const result = await svc.listCampaigns(page, limit, { search, status: safeStatus });
+    // Agents only see ACTIVE campaigns — override any client-supplied status filter.
+    // Detection: req.user.agent_id is populated by authenticateToken for agent accounts.
+    const isAgent = Boolean(req.user?.agent_id);
+    const effectiveStatus = isAgent ? 'ACTIVE' : safeStatus;
+
+    const result = await svc.listCampaigns(page, limit, { search, status: effectiveStatus });
     return res.status(200).json(result);
   } catch (err) {
     console.error('[GET /api/campaigns] Prisma error:', err.message);
