@@ -1,0 +1,290 @@
+warning: in the working copy of 'server/src/modules/users/users.service.js', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/server/src/modules/users/users.service.js b/server/src/modules/users/users.service.js[m
+[1mindex 40a563e..844b539 100644[m
+[1m--- a/server/src/modules/users/users.service.js[m
+[1m+++ b/server/src/modules/users/users.service.js[m
+[36m@@ -6,6 +6,14 @@[m
+  *[m
+  * Suspension is backed by the linked Agent status ('SUSPENDED' vs 'APPROVED'),[m
+  * matching the system authorization architecture (auth.js).[m
+[32m+[m[32m *[m
+[32m+[m[32m * Changelog:[m
+[32m+[m[32m *   - listUsers: added role and status filter support.[m
+[32m+[m[32m *   - shapeUser: normalized legacy role display (non-mutating fallback).[m
+[32m+[m[32m *   - deleteUser: enforced Admin-only permanent deletion policy.[m
+[32m+[m[32m *   - deleteUser: added referral dependency safeguard for agent-linked users.[m
+[32m+[m[32m *   - deleteUser: enriched audit log details.[m
+[32m+[m[32m *   - suspendUser/activateUser: enriched audit log with targetUserId and previousStatus.[m
+  */[m
+ [m
+ 'use strict';[m
+[36m@@ -48,21 +56,92 @@[m [mfunction guardAdminTarget(targetUser, actor = {}) {[m
+ }[m
+ [m
+ /**[m
+[31m- * List all users with their roles — paginated.[m
+[31m- * @param {object} opts  { page, limit, search }[m
+[32m+[m[32m * Shape a raw Prisma user record into the standard API response object.[m
+[32m+[m[32m * Normalizes relational roles and falls back to the legacy `role` column value[m
+[32m+[m[32m * WITHOUT fabricating a real role object — the fallback is flagged as `isLegacy: true`[m
+[32m+[m[32m * so the frontend can render it as an informational badge without treating it as[m
+[32m+[m[32m * a real RBAC Role record (no fake id, no DB mutation).[m
+[32m+[m[32m *[m
+[32m+[m[32m * @param {object} u - Raw Prisma user with userRoles and agent includes.[m
+[32m+[m[32m * @returns {object} Shaped user record.[m
+[32m+[m[32m */[m
+[32m+[m[32mfunction shapeUser(u) {[m
+[32m+[m[32m  // Prefer relational RBAC roles.  If none exist, fall back to the legacy column.[m
+[32m+[m[32m  const relationalRoles = u.userRoles.map(ur => ur.role);[m
+[32m+[m[32m  const displayRoles = relationalRoles.length > 0[m
+[32m+[m[32m    ? relationalRoles[m
+[32m+[m[32m    : u.role[m
+[32m+[m[32m      ? [{ id: null, name: u.role, isSystem: false, isLegacy: true }][m
+[32m+[m[32m      : [];[m
+[32m+[m
+[32m+[m[32m  return {[m
+[32m+[m[32m    id:           u.id,[m
+[32m+[m[32m    username:     u.username,[m
+[32m+[m[32m    email:        u.email,[m
+[32m+[m[32m    role:         u.role,          // keep legacy field for backend compatibility[m
+[32m+[m[32m    status:       u.status,[m
+[32m+[m[32m    is_suspended: u.status === 'SUSPENDED' || (u.agent ? u.agent.status === 'SUSPENDED' : false),[m
+[32m+[m[32m    created_at:   u.created_at,[m
+[32m+[m[32m    agent_id:     u.agent?.id ?? null,   // expose for deletion safeguard awareness[m
+[32m+[m[32m    roles:        displayRoles,[m
+[32m+[m[32m  };[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32m/**[m
+[32m+[m[32m * List all users with their roles — paginated, searchable, filterable by role and status.[m
+[32m+[m[32m * @param {object} opts  { page, limit, search, role, status }[m
+  * @returns {{ users, meta }}[m
+  */[m
+[31m-async function listUsers({ page = 1, limit = 20, search = '' } = {}) {[m
+[32m+[m[32masync function listUsers({ page = 1, limit = 20, search = '', role = '', status = '' } = {}) {[m
+   const skip = (page - 1) * limit;[m
+ [m
+[31m-  const where = search[m
+[31m-    ? {[m
+[31m-        OR: [[m
+[31m-          { username: { contains: search, mode: 'insensitive' } },[m
+[31m-          { email:    { contains: search, mode: 'insensitive' } },[m
+[31m-        ],[m
+[31m-      }[m
+[31m-    : {};[m
+[32m+[m[32m  // Build where clause incrementally using AND conditions[m
+[32m+[m[32m  const andConditions = [];[m
+[32m+[m
+[32m+[m[32m  // Text search: username or email[m
+[32m+[m[32m  if (search) {[m
+[32m+[m[32m    andConditions.push({[m
+[32m+[m[32m      OR: [[m
+[32m+[m[32m        { username: { contains: search, mode: 'insensitive' } },[m
+[32m+[m[32m        { email:    { contains: search, mode: 'insensitive' } },[m
+[32m+[m[32m      ],[m
+[32m+[m[32m    });[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // Status filter: matches User.status directly.[m
+[32m+[m[32m  // is_suspended is derived (includes agent.status) but we filter on User.status[m
+[32m+[m[32m  // since that is the authoritative column.  Frontend labels map 1:1:[m
+[32m+[m[32m  //   Active   → User.status = 'ACTIVE'[m
+[32m+[m[32m  //   Suspended → User.status = 'SUSPENDED'  (agent sync is done on write)[m
+[32m+[m[32m  if (status === 'ACTIVE') {[m
+[32m+[m[32m    andConditions.push({ status: 'ACTIVE' });[m
+[32m+[m[32m  } else if (status === 'SUSPENDED') {[m
+[32m+[m[32m    andConditions.push({ status: 'SUSPENDED' });[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // Role filter: check relational user_roles first, then fall back to legacy column.[m
+[32m+[m[32m  if (role) {[m
+[32m+[m[32m    andConditions.push({[m
+[32m+[m[32m      OR: [[m
+[32m+[m[32m        {[m
+[32m+[m[32m          userRoles: {[m
+[32m+[m[32m            some: {[m
+[32m+[m[32m              role: { name: { equals: role, mode: 'insensitive' } },[m
+[32m+[m[32m            },[m
+[32m+[m[32m          },[m
+[32m+[m[32m        },[m
+[32m+[m[32m        {[m
+[32m+[m[32m          // Only match legacy column when the user has NO relational roles assigned[m
+[32m+[m[32m          AND: [[m
+[32m+[m[32m            { userRoles: { none: {} } },[m
+[32m+[m[32m            { role: { equals: role, mode: 'insensitive' } },[m
+[32m+[m[32m          ],[m
+[32m+[m[32m        },[m
+[32m+[m[32m      ],[m
+[32m+[m[32m    });[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  const where = andConditions.length > 0 ? { AND: andConditions } : {};[m
+ [m
+   const [total, users] = await Promise.all([[m
+     prisma.user.count({ where }),[m
+[36m@@ -92,20 +171,8 @@[m [masync function listUsers({ page = 1, limit = 20, search = '' } = {}) {[m
+     }),[m
+   ]);[m
+ [m
+[31m-  // Flatten userRoles → roles[], derive is_suspended from user.status (or linked agent status)[m
+[31m-  const shaped = users.map(u => ({[m
+[31m-    id:           u.id,[m
+[31m-    username:     u.username,[m
+[31m-    email:        u.email,[m
+[31m-    role:         u.role,[m
+[31m-    status:       u.status,[m
+[31m-    is_suspended: u.status === 'SUSPENDED' || (u.agent ? u.agent.status === 'SUSPENDED' : false),[m
+[31m-    created_at:   u.created_at,[m
+[31m-    roles:        u.userRoles.map(ur => ur.role),[m
+[31m-  }));[m
+[31m-[m
+   return {[m
+[31m-    users: shaped,[m
+[32m+[m[32m    users: users.map(shapeUser),[m
+     meta: {[m
+       total,[m
+       page,[m
+[36m@@ -139,16 +206,7 @@[m [masync function getUserById(userId) {[m
+     },[m
+   });[m
+   if (!u) return null;[m
+[31m-  return {[m
+[31m-    id:           u.id,[m
+[31m-    username:     u.username,[m
+[31m-    email:        u.email,[m
+[31m-    role:         u.role,[m
+[31m-    status:       u.status,[m
+[31m-    is_suspended: u.status === 'SUSPENDED' || (u.agent ? u.agent.status === 'SUSPENDED' : false),[m
+[31m-    created_at:   u.created_at,[m
+[31m-    roles:        u.userRoles.map(ur => ur.role),[m
+[31m-  };[m
+[32m+[m[32m  return shapeUser(u);[m
+ }[m
+ [m
+ /**[m
+[36m@@ -324,7 +382,11 @@[m [masync function suspendUser(userId, actor = {}) {[m
+     action: 'USER_SUSPENDED',[m
+     entity: 'USER',[m
+     entityId: String(userId),[m
+[31m-    details: { targetUsername: user.username },[m
+[32m+[m[32m    details: {[m
+[32m+[m[32m      targetUserId:   userId,[m
+[32m+[m[32m      targetUsername: user.username,[m
+[32m+[m[32m      previousStatus: user.status,[m
+[32m+[m[32m    },[m
+     ipAddress: actor.ipAddress || null,[m
+   });[m
+ [m
+[36m@@ -363,7 +425,11 @@[m [masync function activateUser(userId, actor = {}) {[m
+     action: 'USER_ACTIVATED',[m
+     entity: 'USER',[m
+     entityId: String(userId),[m
+[31m-    details: { targetUsername: user.username },[m
+[32m+[m[32m    details: {[m
+[32m+[m[32m      targetUserId:   userId,[m
+[32m+[m[32m      targetUsername: user.username,[m
+[32m+[m[32m      previousStatus: user.status,[m
+[32m+[m[32m    },[m
+     ipAddress: actor.ipAddress || null,[m
+   });[m
+ [m
+[36m@@ -371,7 +437,17 @@[m [masync function activateUser(userId, actor = {}) {[m
+ }[m
+ [m
+ /**[m
+[31m- * Delete a user account, ensuring they are not the last active administrator.[m
+[32m+[m[32m * Delete a user account permanently.[m
+[32m+[m[32m *[m
+[32m+[m[32m * Policy rules enforced here (service-layer security boundary):[m
+[32m+[m[32m *   1. Only verified Admins may permanently delete any user.[m
+[32m+[m[32m *   2. Only Admins can delete Admin accounts (guardAdminTarget).[m
+[32m+[m[32m *   3. Cannot delete the last remaining Admin.[m
+[32m+[m[32m *   4. Cannot delete a user whose linked Agent has existing referrals — doing so[m
+[32m+[m[32m *      would orphan active business records. Recommend suspension instead.[m
+[32m+[m[32m *   5. Audit log captures the target identity BEFORE deletion so the record[m
+[32m+[m[32m *      is not lost when the User row is removed (AuditLog.userId → SetNull).[m
+[32m+[m[32m *[m
+  * @param {number} userId[m
+  * @param {object} actor  { actorId, actorIsAdmin, ipAddress }[m
+  */[m
+[36m@@ -379,13 +455,24 @@[m [masync function deleteUser(userId, actor = {}) {[m
+   const user = await fetchUserWithRoles(userId);[m
+   if (!user) return null;[m
+ [m
+[31m-  // Guard: only Admins can delete Admin accounts[m
+[32m+[m[32m  // ── Policy 1: Permanent deletion is an Admin-only operation ──────────────────[m
+[32m+[m[32m  if (!actor.actorIsAdmin) {[m
+[32m+[m[32m    const err = new Error([m
+[32m+[m[32m      'Only system administrators are authorised to permanently delete user accounts. ' +[m
+[32m+[m[32m      'Delegated managers may suspend accounts instead.'[m
+[32m+[m[32m    );[m
+[32m+[m[32m    err.status = 403;[m
+[32m+[m[32m    err.code   = 'ADMIN_ONLY_OPERATION';[m
+[32m+[m[32m    throw err;[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // ── Policy 2: Only Admins can touch Admin accounts ────────────────────────────[m
+   guardAdminTarget(user, actor);[m
+ [m
+[31m-  // Guard: cannot delete the last Admin[m
+[32m+[m[32m  // ── Policy 3: Cannot delete the last active Admin ─────────────────────────────[m
+   if (rbacSvc.isUserAdmin(user)) {[m
+     await prisma.$transaction(async (tx) => {[m
+[31m-      // Lock all admin rows to prevent concurrent deletes racing past this check[m
+[32m+[m[32m      // Row-level lock to prevent concurrent deletes racing past this check[m
+       await tx.$queryRaw`[m
+         SELECT id FROM users[m
+         WHERE status = 'ACTIVE'[m
+[36m@@ -417,25 +504,48 @@[m [masync function deleteUser(userId, actor = {}) {[m
+         throw err;[m
+       }[m
+ [m
+[31m-      // Remove linked userRoles within transaction[m
+[32m+[m[32m      // Remove linked userRoles within transaction, then delete user[m
+       await tx.userRole.deleteMany({ where: { userId } });[m
+       await tx.user.delete({ where: { id: userId } });[m
+     });[m
+   } else {[m
+[31m-    // Non-admin delete — no lock needed[m
+[32m+[m[32m    // ── Policy 4: Block deletion if linked Agent has referral records ─────────[m
+[32m+[m[32m    if (user.agent_id) {[m
+[32m+[m[32m      const referralCount = await prisma.referral.count({[m
+[32m+[m[32m        where: { agent_id: user.agent_id },[m
+[32m+[m[32m      });[m
+[32m+[m[32m      if (referralCount > 0) {[m
+[32m+[m[32m        const err = new Error([m
+[32m+[m[32m          `Cannot permanently delete this user: the linked Agent account has ${referralCount} ` +[m
+[32m+[m[32m          `existing referral record(s). Deleting the login account would orphan active business ` +[m
+[32m+[m[32m          `records. Please suspend the account instead.`[m
+[32m+[m[32m        );[m
+[32m+[m[32m        err.status = 409;[m
+[32m+[m[32m        err.code   = 'AGENT_HAS_REFERRALS';[m
+[32m+[m[32m        throw err;[m
+[32m+[m[32m      }[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    // Safe: no agent referral dependency — delete user roles then user[m
+     await prisma.userRole.deleteMany({ where: { userId } });[m
+     await prisma.user.delete({ where: { id: userId } });[m
+   }[m
+ [m
+[31m-  // Audit (outside transaction — auditService uses global prisma client)[m
+[32m+[m[32m  // ── Policy 5: Audit AFTER deletion (AuditLog.userId becomes null via SetNull) ─[m
+[32m+[m[32m  // We capture all identifying details upfront from the in-memory `user` object[m
+[32m+[m[32m  // so the audit record is complete even though the User row no longer exists.[m
+   await logAuditEvent({[m
+     userId: actor.actorId || null,[m
+     action: 'USER_DELETED',[m
+     entity: 'USER',[m
+     entityId: String(userId),[m
+     details: {[m
+[32m+[m[32m      deletedUserId:   userId,[m
+       deletedUsername: user.username,[m
+[31m-      roles: user.userRoles.map(ur => ur.role?.name).filter(Boolean),[m
+[32m+[m[32m      deletedEmail:    user.email || null,[m
+[32m+[m[32m      hadLinkedAgent:  !!user.agent_id,[m
+[32m+[m[32m      agentId:         user.agent_id || null,[m
+[32m+[m[32m      roles:           user.userRoles.map(ur => ur.role?.name).filter(Boolean),[m
+     },[m
+     ipAddress: actor.ipAddress || null,[m
+   });[m

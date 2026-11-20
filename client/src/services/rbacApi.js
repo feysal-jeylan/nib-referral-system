@@ -46,9 +46,9 @@ export const rbacApi = {
 
 // ── Users module ──────────────────────────────────────────────────────────────
 export const usersApi = {
-  /** GET /api/users?page=&limit=&search= — requires view_users */
-  listUsers: ({ page = 1, limit = 20, search = '' } = {}) =>
-    api.get('/users', { params: { page, limit, search } }),
+  /** GET /api/users?page=&limit=&search=&role=&status= — requires view_users */
+  listUsers: ({ page = 1, limit = 20, search = '', role = '', status = '' } = {}) =>
+    api.get('/users', { params: { page, limit, search, role, status } }),
 
   /** POST /api/users — requires manage_users */
   createUser: ({ username, email, password, roleName }) =>

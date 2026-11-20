@@ -528,17 +528,24 @@ function isUserAdmin(user) {
 
 /**
  * Determines whether the acting request user is a system administrator.
- * Uses req.userRoles (resolved fresh from DB by auth.js) as the authoritative source,
- * with req.user.role as a legacy fallback.
  *
- * @param {object} req - Express request with req.userRoles and req.user
+ * Uses req.userRoles exclusively — the array is resolved fresh from the database
+ * on every request by resolveUserRolesAndPermissions() inside auth.js, which
+ * already applies the legacy-role fallback for accounts without relational roles.
+ * Trusting req.user.role (a JWT claim) is therefore both redundant and potentially
+ * stale, so it is intentionally omitted here.
+ *
+ * Returns false safely when req or req.userRoles is missing or malformed.
+ *
+ * @param {object} req - Express request with req.userRoles resolved by auth middleware
  * @returns {boolean}
  */
 function isRequestUserAdmin(req) {
   if (!req) return false;
-  const byRoles = Array.isArray(req.userRoles) && req.userRoles.includes('ADMIN');
-  const byLegacy = req.user?.role === 'ADMIN';
-  return byRoles || byLegacy;
+  // req.userRoles is set by authenticateToken → resolveUserRolesAndPermissions.
+  // It already incorporates the legacy role column fallback, so no additional
+  // JWT claim check is needed or appropriate here.
+  return Array.isArray(req.userRoles) && req.userRoles.includes('ADMIN');
 }
 
 module.exports = {

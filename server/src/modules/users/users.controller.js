@@ -21,7 +21,16 @@ async function listUsers(req, res, next) {
     const limit  = Math.min(parseInt(req.query.limit, 10) || 20, 100);
     const search = req.query.search?.trim() || '';
 
-    const result = await usersSvc.listUsers({ page, limit, search });
+    // Role filter: must be a non-empty string; validated as a simple label —
+    // the service performs a case-insensitive match against the RBAC role name.
+    const role = req.query.role?.trim() || '';
+
+    // Status filter: only 'ACTIVE' and 'SUSPENDED' are valid User.status values.
+    const rawStatus = req.query.status?.trim().toUpperCase() || '';
+    const VALID_USER_STATUSES = ['ACTIVE', 'SUSPENDED'];
+    const status = VALID_USER_STATUSES.includes(rawStatus) ? rawStatus : '';
+
+    const result = await usersSvc.listUsers({ page, limit, search, role, status });
     return res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -218,11 +227,17 @@ async function deleteUser(req, res, next) {
     if (!deleted) return res.status(404).json({ error: 'User not found.', code: 'USER_NOT_FOUND' });
     return res.status(200).json({ message: 'User deleted successfully.' });
   } catch (err) {
+    if (err.code === 'ADMIN_ONLY_OPERATION') {
+      return res.status(403).json({ error: err.message, code: err.code });
+    }
     if (err.code === 'ADMIN_ACTION_FORBIDDEN') {
       return res.status(403).json({ error: err.message, code: err.code });
     }
     if (err.code === 'LAST_ADMIN_PROTECTED' || err.code === 'LAST_ADMIN') {
       return res.status(400).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'AGENT_HAS_REFERRALS') {
+      return res.status(409).json({ error: err.message, code: err.code });
     }
     next(err);
   }

@@ -19,7 +19,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  UserCog, Plus, Search, RefreshCw, X, MoreVertical,
+  UserCog, Plus, Search, RefreshCw, X, MoreVertical, ChevronDown,
 } from 'lucide-react';
 import { usersApi, rbacApi } from '@/services/rbacApi';
 import { Button }   from '@/components/ui/button';
@@ -51,9 +51,9 @@ const BORDER    = 'rgba(138,77,31,0.12)';
 
 // ── Query key factory ─────────────────────────────────────────────────────────
 const userKeys = {
-  all:   ()             => ['users'],
-  list:  (page, search) => ['users', page, search],
-  roles: ()             => ['roles'],
+  all:   ()                              => ['users'],
+  list:  (page, search, role, status)   => ['users', page, search, role, status],
+  roles: ()                             => ['roles'],
 };
 
 // ── Pill helper ───────────────────────────────────────────────────────────────
@@ -88,6 +88,8 @@ export default function UsersPage({ onToast }) {
   const [page,        setPage]        = useState(1);
   const [search,      setSearch]      = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [roleFilter,  setRoleFilter]  = useState('');   // '' = All Roles
+  const [statusFilter,setStatusFilter]= useState('');   // '' = All Statuses
   const debounceRef = useRef(null);
 
   // ── Modals ────────────────────────────────────────────────────────────────
@@ -119,6 +121,9 @@ export default function UsersPage({ onToast }) {
     return () => clearTimeout(debounceRef.current);
   }, [searchInput]);
 
+  // ── Reset page when role or status filter changes ─────────────────────────
+  useEffect(() => { setPage(1); }, [roleFilter, statusFilter]);
+
   // ── useQuery: users list ──────────────────────────────────────────────────
   const {
     data,
@@ -126,9 +131,9 @@ export default function UsersPage({ onToast }) {
     isError,
     refetch,
   } = useQuery({
-    queryKey: userKeys.list(page, search),
+    queryKey: userKeys.list(page, search, roleFilter, statusFilter),
     queryFn:  async () => {
-      const res = await usersApi.listUsers({ page, limit: 20, search });
+      const res = await usersApi.listUsers({ page, limit: 20, search, role: roleFilter, status: statusFilter });
       return res.data;
     },
     enabled: canView,
@@ -204,8 +209,13 @@ export default function UsersPage({ onToast }) {
       invalidateUsers();
     },
     onError: (err) => {
-      const msg = err.response?.data?.error ?? 'Failed to delete user.';
-      onToast?.({ type: 'error', message: `❌ ${msg}` });
+      const code = err.response?.data?.code;
+      const msg  = err.response?.data?.error ?? 'Failed to delete user.';
+      if (code === 'AGENT_HAS_REFERRALS' || code === 'ADMIN_ONLY_OPERATION') {
+        onToast?.({ type: 'error', message: `❌ ${msg}` });
+      } else {
+        onToast?.({ type: 'error', message: `❌ ${msg}` });
+      }
       setDeleteUserTarget(null);
     },
   });
@@ -352,15 +362,57 @@ export default function UsersPage({ onToast }) {
         </div>
       </div>
 
-      {/* Search bar */}
-      <div className="relative max-w-sm">
-        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: MUTED }} />
-        <Input
-          className="pl-9 text-sm"
-          placeholder="Search users…"
-          value={searchInput}
-          onChange={e => setSearchInput(e.target.value)}
-        />
+      {/* Search + Filters bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Search */}
+        <div className="relative">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: MUTED }} />
+          <Input
+            className="pl-9 text-sm w-56"
+            placeholder="Search users…"
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+          />
+        </div>
+
+        {/* Role Filter */}
+        <select
+          className="border rounded-lg px-3 py-2 text-sm outline-none"
+          style={{ borderColor: BORDER, color: CHOCOLATE, background: '#fff' }}
+          value={roleFilter}
+          onChange={e => setRoleFilter(e.target.value)}
+          aria-label="Filter by role"
+        >
+          <option value="">All Roles</option>
+          {allRoles.map(r => (
+            <option key={r.id} value={r.name}>{r.name}</option>
+          ))}
+        </select>
+
+        {/* Status Filter */}
+        <select
+          className="border rounded-lg px-3 py-2 text-sm outline-none"
+          style={{ borderColor: BORDER, color: CHOCOLATE, background: '#fff' }}
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+          aria-label="Filter by status"
+        >
+          <option value="">All Statuses</option>
+          <option value="ACTIVE">Active</option>
+          <option value="SUSPENDED">Suspended</option>
+        </select>
+
+        {/* Clear filters — only shown when any filter is active */}
+        {(roleFilter || statusFilter || searchInput) && (
+          <button
+            onClick={() => { setRoleFilter(''); setStatusFilter(''); setSearchInput(''); }}
+            className="flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg border transition"
+            style={{ borderColor: BORDER, color: MUTED, background: '#fff' }}
+            title="Clear all filters"
+          >
+            <X size={12} /> Clear
+          </button>
+        )}
       </div>
 
       {/* Table */}
@@ -429,8 +481,15 @@ export default function UsersPage({ onToast }) {
             <td className="px-4 py-3">
               <div className="flex flex-wrap gap-1">
                 {u.roles?.length > 0
-                  ? u.roles.map(r => (
-                      <Pill key={r.id}>{r.name}</Pill>
+                  ? u.roles.map((r, idx) => (
+                      <Pill
+                        key={r.id ?? `legacy-${idx}`}
+                        color={r.isLegacy ? '#6B5B4E' : MUTED}
+                        bg={r.isLegacy ? 'rgba(107,91,78,0.08)' : 'rgba(138,77,31,0.08)'}
+                        border={r.isLegacy ? 'rgba(107,91,78,0.20)' : BORDER}
+                      >
+                        {r.name}
+                      </Pill>
                     ))
                   : <span style={{ color: '#ccc', fontSize: 11 }}>None</span>
                 }
@@ -487,16 +546,19 @@ export default function UsersPage({ onToast }) {
                               </DropdownMenuItem>
                             )}
 
-                            <DropdownMenuItem
-                              onClick={() => {
-                                onToast?.({ type: 'success', message: 'Password reset email sent.' });
-                              }}
-                              className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
-                            >
-                              Reset Password
-                            </DropdownMenuItem>
-
                             {u.id !== currentUser?.id && (
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  onToast?.({ type: 'success', message: 'Password reset email sent.' });
+                                }}
+                                className="cursor-pointer text-[#3E2723] hover:bg-[#FAF8F5] focus:bg-[#F5EDE6] focus:text-[#3E2723]"
+                              >
+                                Reset Password
+                              </DropdownMenuItem>
+                            )}
+
+                            {/* Permanent deletion: Admin only — backend enforces this too */}
+                            {isAdmin && u.id !== currentUser?.id && (
                               <DropdownMenuItem
                                 variant="destructive"
                                 onClick={() => setDeleteUserTarget(u)}

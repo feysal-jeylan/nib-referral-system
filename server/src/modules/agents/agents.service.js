@@ -11,6 +11,7 @@ const crypto  = require('crypto');
 const bcrypt  = require('bcrypt');
 const prisma  = require('@/config/db');
 const { sendActivationEmail } = require('@/services/emailService');
+const { logAuditEvent }       = require('@/services/auditService');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function generateReferralCode() {
@@ -140,6 +141,21 @@ async function createApprovedAgent({ name, phone, email }) {
   // Send the activation email (never expose rawToken to the Admin response)
   await sendActivationEmail(email, name, rawToken);
 
+  // Audit: a login account was created as part of direct agent creation
+  await logAuditEvent({
+    userId:   null,   // system-initiated; no request actor context available here
+    action:   'USER_CREATED',
+    entity:   'USER',
+    entityId: null,   // User id not returned from transaction above — log by agent
+    details: {
+      triggeredBy:  'createApprovedAgent',
+      agentId:      newAgent.id,
+      agentEmail:   email,
+      agentName:    name,
+      loginUsername: email,
+    },
+  });
+
   return { agent: newAgent, email };
 }
 
@@ -178,6 +194,21 @@ async function approveAgent(agentId, agentEmail, agentName, existingCode) {
 
   // Send activation email — Admin NEVER sees the rawToken
   await sendActivationEmail(agentEmail, agentName, rawToken);
+
+  // Audit: a login account was created as part of agent approval
+  await logAuditEvent({
+    userId:  null,   // actor context not passed into this service layer; audited by caller
+    action:  'USER_CREATED',
+    entity:  'USER',
+    entityId: null,
+    details: {
+      triggeredBy:  'approveAgent',
+      agentId:      agentId,
+      agentEmail:   agentEmail,
+      agentName:    agentName,
+      loginUsername: agentEmail,
+    },
+  });
 
   return { agent: updated };
 }

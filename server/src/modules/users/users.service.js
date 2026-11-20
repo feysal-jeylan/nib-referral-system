@@ -6,6 +6,14 @@
  *
  * Suspension is backed by the linked Agent status ('SUSPENDED' vs 'APPROVED'),
  * matching the system authorization architecture (auth.js).
+ *
+ * Changelog:
+ *   - listUsers: added role and status filter support.
+ *   - shapeUser: normalized legacy role display (non-mutating fallback).
+ *   - deleteUser: enforced Admin-only permanent deletion policy.
+ *   - deleteUser: added referral dependency safeguard for agent-linked users.
+ *   - deleteUser: enriched audit log details.
+ *   - suspendUser/activateUser: enriched audit log with targetUserId and previousStatus.
  */
 
 'use strict';
@@ -48,21 +56,92 @@ function guardAdminTarget(targetUser, actor = {}) {
 }
 
 /**
- * List all users with their roles — paginated.
- * @param {object} opts  { page, limit, search }
+ * Shape a raw Prisma user record into the standard API response object.
+ * Normalizes relational roles and falls back to the legacy `role` column value
+ * WITHOUT fabricating a real role object — the fallback is flagged as `isLegacy: true`
+ * so the frontend can render it as an informational badge without treating it as
+ * a real RBAC Role record (no fake id, no DB mutation).
+ *
+ * @param {object} u - Raw Prisma user with userRoles and agent includes.
+ * @returns {object} Shaped user record.
+ */
+function shapeUser(u) {
+  // Prefer relational RBAC roles.  If none exist, fall back to the legacy column.
+  const relationalRoles = u.userRoles.map(ur => ur.role);
+  const displayRoles = relationalRoles.length > 0
+    ? relationalRoles
+    : u.role
+      ? [{ id: null, name: u.role, isSystem: false, isLegacy: true }]
+      : [];
+
+  return {
+    id:           u.id,
+    username:     u.username,
+    email:        u.email,
+    role:         u.role,          // keep legacy field for backend compatibility
+    status:       u.status,
+    is_suspended: u.status === 'SUSPENDED' || (u.agent ? u.agent.status === 'SUSPENDED' : false),
+    created_at:   u.created_at,
+    agent_id:     u.agent?.id ?? null,   // expose for deletion safeguard awareness
+    roles:        displayRoles,
+  };
+}
+
+/**
+ * List all users with their roles — paginated, searchable, filterable by role and status.
+ * @param {object} opts  { page, limit, search, role, status }
  * @returns {{ users, meta }}
  */
-async function listUsers({ page = 1, limit = 20, search = '' } = {}) {
+async function listUsers({ page = 1, limit = 20, search = '', role = '', status = '' } = {}) {
   const skip = (page - 1) * limit;
 
-  const where = search
-    ? {
-        OR: [
-          { username: { contains: search, mode: 'insensitive' } },
-          { email:    { contains: search, mode: 'insensitive' } },
-        ],
-      }
-    : {};
+  // Build where clause incrementally using AND conditions
+  const andConditions = [];
+
+  // Text search: username or email
+  if (search) {
+    andConditions.push({
+      OR: [
+        { username: { contains: search, mode: 'insensitive' } },
+        { email:    { contains: search, mode: 'insensitive' } },
+      ],
+    });
+  }
+
+  // Status filter: matches User.status directly.
+  // is_suspended is derived (includes agent.status) but we filter on User.status
+  // since that is the authoritative column.  Frontend labels map 1:1:
+  //   Active   → User.status = 'ACTIVE'
+  //   Suspended → User.status = 'SUSPENDED'  (agent sync is done on write)
+  if (status === 'ACTIVE') {
+    andConditions.push({ status: 'ACTIVE' });
+  } else if (status === 'SUSPENDED') {
+    andConditions.push({ status: 'SUSPENDED' });
+  }
+
+  // Role filter: check relational user_roles first, then fall back to legacy column.
+  if (role) {
+    andConditions.push({
+      OR: [
+        {
+          userRoles: {
+            some: {
+              role: { name: { equals: role, mode: 'insensitive' } },
+            },
+          },
+        },
+        {
+          // Only match legacy column when the user has NO relational roles assigned
+          AND: [
+            { userRoles: { none: {} } },
+            { role: { equals: role, mode: 'insensitive' } },
+          ],
+        },
+      ],
+    });
+  }
+
+  const where = andConditions.length > 0 ? { AND: andConditions } : {};
 
   const [total, users] = await Promise.all([
     prisma.user.count({ where }),
@@ -92,20 +171,8 @@ async function listUsers({ page = 1, limit = 20, search = '' } = {}) {
     }),
   ]);
 
-  // Flatten userRoles → roles[], derive is_suspended from user.status (or linked agent status)
-  const shaped = users.map(u => ({
-    id:           u.id,
-    username:     u.username,
-    email:        u.email,
-    role:         u.role,
-    status:       u.status,
-    is_suspended: u.status === 'SUSPENDED' || (u.agent ? u.agent.status === 'SUSPENDED' : false),
-    created_at:   u.created_at,
-    roles:        u.userRoles.map(ur => ur.role),
-  }));
-
   return {
-    users: shaped,
+    users: users.map(shapeUser),
     meta: {
       total,
       page,
@@ -139,16 +206,7 @@ async function getUserById(userId) {
     },
   });
   if (!u) return null;
-  return {
-    id:           u.id,
-    username:     u.username,
-    email:        u.email,
-    role:         u.role,
-    status:       u.status,
-    is_suspended: u.status === 'SUSPENDED' || (u.agent ? u.agent.status === 'SUSPENDED' : false),
-    created_at:   u.created_at,
-    roles:        u.userRoles.map(ur => ur.role),
-  };
+  return shapeUser(u);
 }
 
 /**
@@ -284,24 +342,43 @@ async function suspendUser(userId, actor = {}) {
 
   // Guard: cannot suspend the last active Admin
   if (rbacSvc.isUserAdmin(user)) {
-    const activeAdminCount = await prisma.$queryRaw`
-      SELECT COUNT(*)::int AS cnt FROM users
-      WHERE status = 'ACTIVE'
-        AND (
-          role = 'ADMIN'
-          OR id IN (
-            SELECT ur.user_id FROM user_roles ur
-            JOIN roles r ON ur.role_id = r.id
-            WHERE r.name = 'ADMIN'
+    // Use a transaction with a row-level lock so concurrent suspension requests
+    // cannot both pass the count check and both succeed, leaving 0 active Admins.
+    await prisma.$transaction(async (tx) => {
+      // Lock all ACTIVE Admin rows first
+      await tx.$queryRaw`
+        SELECT id FROM users
+        WHERE status = 'ACTIVE'
+          AND (
+            role = 'ADMIN'
+            OR id IN (
+              SELECT ur.user_id FROM user_roles ur
+              JOIN roles r ON ur.role_id = r.id
+              WHERE r.name = 'ADMIN'
+            )
           )
-        )
-    `;
-    if (activeAdminCount[0]?.cnt <= 1) {
-      const err = new Error('Cannot suspend the last active administrator.');
-      err.status = 400;
-      err.code = 'LAST_ADMIN_PROTECTED';
-      throw err;
-    }
+        FOR UPDATE
+      `;
+
+      const result = await tx.$queryRaw`
+        SELECT COUNT(*)::int AS cnt FROM users
+        WHERE status = 'ACTIVE'
+          AND (
+            role = 'ADMIN'
+            OR id IN (
+              SELECT ur.user_id FROM user_roles ur
+              JOIN roles r ON ur.role_id = r.id
+              WHERE r.name = 'ADMIN'
+            )
+          )
+      `;
+      if ((result[0]?.cnt ?? 0) <= 1) {
+        const err = new Error('Cannot suspend the last active administrator.');
+        err.status = 400;
+        err.code = 'LAST_ADMIN_PROTECTED';
+        throw err;
+      }
+    });
   }
 
   // 1. Update user.status = 'SUSPENDED'
@@ -324,7 +401,11 @@ async function suspendUser(userId, actor = {}) {
     action: 'USER_SUSPENDED',
     entity: 'USER',
     entityId: String(userId),
-    details: { targetUsername: user.username },
+    details: {
+      targetUserId:   userId,
+      targetUsername: user.username,
+      previousStatus: user.status,
+    },
     ipAddress: actor.ipAddress || null,
   });
 
@@ -363,7 +444,11 @@ async function activateUser(userId, actor = {}) {
     action: 'USER_ACTIVATED',
     entity: 'USER',
     entityId: String(userId),
-    details: { targetUsername: user.username },
+    details: {
+      targetUserId:   userId,
+      targetUsername: user.username,
+      previousStatus: user.status,
+    },
     ipAddress: actor.ipAddress || null,
   });
 
@@ -371,7 +456,17 @@ async function activateUser(userId, actor = {}) {
 }
 
 /**
- * Delete a user account, ensuring they are not the last active administrator.
+ * Delete a user account permanently.
+ *
+ * Policy rules enforced here (service-layer security boundary):
+ *   1. Only verified Admins may permanently delete any user.
+ *   2. Only Admins can delete Admin accounts (guardAdminTarget).
+ *   3. Cannot delete a user whose linked Agent has existing referrals — doing so
+ *      would orphan active business records (applies to ALL users, including Admins).
+ *   4. Cannot delete the last remaining ACTIVE Admin.
+ *   5. Audit log captures the target identity BEFORE deletion so the record
+ *      is not lost when the User row is removed (AuditLog.userId → SetNull).
+ *
  * @param {number} userId
  * @param {object} actor  { actorId, actorIsAdmin, ipAddress }
  */
@@ -379,13 +474,46 @@ async function deleteUser(userId, actor = {}) {
   const user = await fetchUserWithRoles(userId);
   if (!user) return null;
 
-  // Guard: only Admins can delete Admin accounts
+  // ── Policy 1: Permanent deletion is an Admin-only operation ──────────────────
+  if (!actor.actorIsAdmin) {
+    const err = new Error(
+      'Only system administrators are authorised to permanently delete user accounts. ' +
+      'Delegated managers may suspend accounts instead.'
+    );
+    err.status = 403;
+    err.code   = 'ADMIN_ONLY_OPERATION';
+    throw err;
+  }
+
+  // ── Policy 2: Only Admins can touch Admin accounts ────────────────────────────
   guardAdminTarget(user, actor);
 
-  // Guard: cannot delete the last Admin
+  // ── Policy 3: Block deletion if linked Agent has referral records ─────────────
+  // This check applies to ALL users (including Admins) who have a linked Agent.
+  // Previously this was inside the non-Admin branch only — that was a gap.
+  if (user.agent_id) {
+    const referralCount = await prisma.referral.count({
+      where: { agent_id: user.agent_id },
+    });
+    if (referralCount > 0) {
+      const err = new Error(
+        `Cannot permanently delete this user: the linked Agent account has ${referralCount} ` +
+        `existing referral record(s). Deleting the login account would orphan active business ` +
+        `records. Please suspend the account instead.`
+      );
+      err.status = 409;
+      err.code   = 'AGENT_HAS_REFERRALS';
+      throw err;
+    }
+  }
+
+  // ── Policy 4: Cannot delete the last ACTIVE Admin ─────────────────────────────
   if (rbacSvc.isUserAdmin(user)) {
     await prisma.$transaction(async (tx) => {
-      // Lock all admin rows to prevent concurrent deletes racing past this check
+      // Row-level lock on ALL ACTIVE Admin rows.
+      // Both the lock and the count query use the same ACTIVE filter to ensure
+      // consistency: the system must retain at least one ACTIVE administrator,
+      // not merely one admin row of any status.
       await tx.$queryRaw`
         SELECT id FROM users
         WHERE status = 'ACTIVE'
@@ -402,40 +530,49 @@ async function deleteUser(userId, actor = {}) {
 
       const result = await tx.$queryRaw`
         SELECT COUNT(*)::int AS cnt FROM users
-        WHERE role = 'ADMIN'
-           OR id IN (
-             SELECT ur.user_id FROM user_roles ur
-             JOIN roles r ON ur.role_id = r.id
-             WHERE r.name = 'ADMIN'
-           )
+        WHERE status = 'ACTIVE'
+          AND (
+            role = 'ADMIN'
+            OR id IN (
+              SELECT ur.user_id FROM user_roles ur
+              JOIN roles r ON ur.role_id = r.id
+              WHERE r.name = 'ADMIN'
+            )
+          )
       `;
-      const adminCount = result[0]?.cnt ?? 0;
-      if (adminCount <= 1) {
-        const err = new Error('Cannot delete the last remaining administrator.');
+      const activeAdminCount = result[0]?.cnt ?? 0;
+      if (activeAdminCount <= 1) {
+        const err = new Error('Cannot delete the last remaining active administrator.');
         err.status = 400;
         err.code = 'LAST_ADMIN_PROTECTED';
         throw err;
       }
 
-      // Remove linked userRoles within transaction
+      // Remove linked userRoles within transaction, then delete user
       await tx.userRole.deleteMany({ where: { userId } });
       await tx.user.delete({ where: { id: userId } });
     });
   } else {
-    // Non-admin delete — no lock needed
+    // Non-Admin user — no lock needed (we already checked agent dependencies above)
     await prisma.userRole.deleteMany({ where: { userId } });
     await prisma.user.delete({ where: { id: userId } });
   }
 
-  // Audit (outside transaction — auditService uses global prisma client)
+  // ── Policy 5: Audit AFTER deletion (AuditLog.userId becomes null via SetNull) ─
+  // All identifying details are captured from the in-memory `user` object before
+  // deletion so the audit record is complete even though the User row is gone.
   await logAuditEvent({
     userId: actor.actorId || null,
     action: 'USER_DELETED',
     entity: 'USER',
     entityId: String(userId),
     details: {
+      deletedUserId:   userId,
       deletedUsername: user.username,
-      roles: user.userRoles.map(ur => ur.role?.name).filter(Boolean),
+      deletedEmail:    user.email || null,
+      hadLinkedAgent:  !!user.agent_id,
+      agentId:         user.agent_id || null,
+      roles:           user.userRoles.map(ur => ur.role?.name).filter(Boolean),
     },
     ipAddress: actor.ipAddress || null,
   });

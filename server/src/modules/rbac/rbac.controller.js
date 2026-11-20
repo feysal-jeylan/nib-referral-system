@@ -296,15 +296,28 @@ async function removeRoleFromUser(req, res, next) {
     }
 
     if (roleBeingRemoved?.name === 'ADMIN') {
-      const adminRole = await prisma.role.findUnique({ where: { name: 'ADMIN' } });
-      if (adminRole) {
-        const adminCount = await prisma.userRole.count({ where: { roleId: adminRole.id } });
-        if (adminCount <= 1) {
-          return res.status(403).json({
-            error: 'Cannot remove the last ADMIN role assignment. At least one ADMIN must remain.',
-            code: 'LAST_ADMIN_PROTECTED',
-          });
-        }
+      // Count how many DISTINCT ACTIVE users currently hold the ADMIN role
+      // (via relational user_roles or legacy role column).
+      // We must keep at least one ACTIVE Admin — suspended Admins do not count.
+      const result = await prisma.$queryRaw`
+        SELECT COUNT(DISTINCT u.id)::int AS cnt
+        FROM users u
+        WHERE u.status = 'ACTIVE'
+          AND (
+            u.role = 'ADMIN'
+            OR u.id IN (
+              SELECT ur.user_id FROM user_roles ur
+              JOIN roles r ON ur.role_id = r.id
+              WHERE r.name = 'ADMIN'
+            )
+          )
+      `;
+      const activeAdminCount = result[0]?.cnt ?? 0;
+      if (activeAdminCount <= 1) {
+        return res.status(403).json({
+          error: 'Cannot remove the last ADMIN role assignment. At least one active ADMIN must remain.',
+          code: 'LAST_ADMIN_PROTECTED',
+        });
       }
     }
 
